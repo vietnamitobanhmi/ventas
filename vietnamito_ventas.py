@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client
 
 st.set_page_config(
@@ -25,6 +25,11 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 DIAS = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
 DIAS_ORDER = [0, 1, 2, 3, 4, 5, 6]
 COLORS = ["#378ADD", "#5DCAA5", "#D85A30", "#7F77DD", "#BA7517", "#D4537E", "#639922"]
+WEEK_COLORS = [
+    "#E63946","#F4A261","#2A9D8F","#457B9D","#9B2226",
+    "#6A4C93","#1982C4","#8AC926","#FF595E","#6A994E",
+    "#BC6C25","#4CC9F0","#F72585","#3A0CA3","#4361EE",
+]
 
 @st.cache_resource
 def get_supabase():
@@ -95,6 +100,34 @@ def calcular_heatmap(df):
     avg.columns = ["dow", "hora", "avg"]
     return avg
 
+def get_week_label(fecha):
+    # Lunes de la semana ISO
+    d = pd.Timestamp(fecha)
+    lunes = d - timedelta(days=d.weekday())
+    domingo = lunes + timedelta(days=6)
+    return f"{lunes.strftime('%d/%m')} – {domingo.strftime('%d/%m')}"
+
+def calcular_por_semana(df):
+    df2 = df.copy()
+    df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
+    df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
+    df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
+
+    # Para cada semana y dow, suma de ventas de ese día
+    # Un día puede tener múltiples franjas, sumamos todo
+    dia_totales = df2.groupby(["semana", "fecha", "dow"])["valor"].sum().reset_index()
+    semana_dow = dia_totales.groupby(["semana", "dow"])["valor"].mean().reset_index()
+
+    # Etiquetas legibles
+    semana_labels = {}
+    for s in semana_dow["semana"].unique():
+        lunes = pd.Timestamp(s)
+        domingo = lunes + timedelta(days=6)
+        semana_labels[s] = f"{lunes.strftime('%d/%m')} – {domingo.strftime('%d/%m/%y')}"
+
+    semana_dow["label"] = semana_dow["semana"].map(semana_labels)
+    return semana_dow, semana_labels
+
 def render_dashboard(df):
     fecha_min = df["fecha"].min()
     fecha_max = df["fecha"].max()
@@ -112,7 +145,12 @@ def render_dashboard(df):
 
     st.divider()
 
-    tab1, tab2, tab3 = st.tabs(["📅 Por día de semana", "🕐 Por franja horaria", "🌡️ Mapa de calor"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📅 Por día de semana",
+        "🕐 Por franja horaria",
+        "🌡️ Mapa de calor",
+        "📈 Por semana"
+    ])
 
     with tab1:
         avg_dow = calcular_promedios_dia(df)
@@ -123,7 +161,7 @@ def render_dashboard(df):
             text=[f"€{v:.0f}" for v in values], textposition="outside",
         ))
         fig.update_layout(
-            title="Venta media por día de la semana (€)", yaxis_title="€ promedio",
+            title="Venta media por día de la semana (€, IVA incl.)", yaxis_title="€ promedio",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
             xaxis=dict(showgrid=False), showlegend=False, height=400, margin=dict(t=50, b=20),
@@ -141,7 +179,7 @@ def render_dashboard(df):
             text=[f"€{v:.0f}" for v in vals], textposition="outside",
         ))
         fig2.update_layout(
-            title="Venta media por franja horaria (€)", yaxis_title="€ promedio", xaxis_title="Hora",
+            title="Venta media por franja horaria (€, IVA incl.)", yaxis_title="€ promedio", xaxis_title="Hora",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
             xaxis=dict(showgrid=False), showlegend=False, height=400, margin=dict(t=50, b=20),
@@ -160,15 +198,64 @@ def render_dashboard(df):
             aspect="auto", text_auto=".0f", labels={"color": "€ promedio"},
         )
         fig3.update_layout(
-            title="Venta media por día y franja horaria (€)",
+            title="Venta media por día y franja horaria (€, IVA incl.)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             height=350, margin=dict(t=50, b=20), xaxis_title="Hora", yaxis_title="",
         )
         fig3.update_traces(textfont_size=11)
         st.plotly_chart(fig3, use_container_width=True)
 
+    with tab4:
+        semana_dow, semana_labels = calcular_por_semana(df)
+        semanas_sorted = sorted(semana_labels.keys())
+        labels_sorted = [semana_labels[s] for s in semanas_sorted]
+
+        st.markdown("**Selecciona las semanas a mostrar:**")
+        cols = st.columns(min(len(semanas_sorted), 4))
+        seleccionadas = []
+        for i, (s, lbl) in enumerate(zip(semanas_sorted, labels_sorted)):
+            col = cols[i % len(cols)]
+            checked = col.checkbox(lbl, value=True, key=f"semana_{s}")
+            if checked:
+                seleccionadas.append(s)
+
+        if not seleccionadas:
+            st.warning("Selecciona al menos una semana.")
+        else:
+            fig4 = go.Figure()
+            dias_labels = [DIAS[d] for d in DIAS_ORDER]
+
+            for i, s in enumerate(semanas_sorted):
+                if s not in seleccionadas:
+                    continue
+                color = WEEK_COLORS[i % len(WEEK_COLORS)]
+                datos = semana_dow[semana_dow["semana"] == s].set_index("dow")
+                vals = [round(datos.loc[d, "valor"], 2) if d in datos.index else None for d in DIAS_ORDER]
+                fig4.add_trace(go.Scatter(
+                    x=dias_labels,
+                    y=vals,
+                    mode="lines+markers",
+                    name=semana_labels[s],
+                    line=dict(color=color, width=2),
+                    marker=dict(size=7, color=color),
+                    connectgaps=False,
+                ))
+
+            fig4.update_layout(
+                title="Ventas por día de semana — comparativa semanal (€, IVA incl.)",
+                yaxis_title="€ ventas",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
+                height=480,
+                margin=dict(t=50, b=120),
+            )
+            st.plotly_chart(fig4, use_container_width=True)
+
     st.divider()
-    st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f}")
+    st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
 
 # ── UI principal ──────────────────────────────────────────────
 st.title("☕ Vietnamito — Dashboard de Ventas")
