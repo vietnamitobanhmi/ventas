@@ -254,25 +254,29 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig4, use_container_width=True)
 
-            # Evolución total por semana
-            totales_semana = semana_dow.groupby("semana")["valor"].sum().reset_index()
-            totales_semana = totales_semana[totales_semana["semana"].isin(semanas_sorted)]
-            totales_semana["label"] = totales_semana["semana"].map(semana_labels)
-            totales_semana = totales_semana.sort_values("semana")
+            # Evolución promedio por día trabajado
+            avg_semana = semana_dow.groupby("semana").agg(
+                total=("valor", "sum"),
+                dias=("dow", "count")
+            ).reset_index()
+            avg_semana["avg_dia"] = (avg_semana["total"] / avg_semana["dias"]).round(2)
+            avg_semana = avg_semana[avg_semana["semana"].isin(semanas_sorted)]
+            avg_semana["label"] = avg_semana["semana"].map(semana_labels)
+            avg_semana = avg_semana.sort_values("semana")
 
             fig5 = go.Figure(go.Scatter(
-                x=totales_semana["label"],
-                y=totales_semana["valor"].round(2),
+                x=avg_semana["label"],
+                y=avg_semana["avg_dia"],
                 mode="lines+markers+text",
                 line=dict(color="#5DCAA5", width=2),
                 marker=dict(size=8, color="#5DCAA5"),
-                text=[f"€{v:.0f}" for v in totales_semana["valor"]],
+                text=[f"€{v:.0f}" for v in avg_semana["avg_dia"]],
                 textposition="top center",
                 textfont=dict(size=11),
             ))
             fig5.update_layout(
-                title="Evolución de ventas totales por semana (€, IVA incl.)",
-                yaxis_title="€ total semana",
+                title="Evolución del promedio de ventas por día trabajado (€, IVA incl.)",
+                yaxis_title="€ promedio/día",
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
