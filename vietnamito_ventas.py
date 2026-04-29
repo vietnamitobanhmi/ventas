@@ -254,6 +254,35 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig4, use_container_width=True)
 
+            # Evolución total por semana
+            totales_semana = semana_dow.groupby("semana")["valor"].sum().reset_index()
+            totales_semana = totales_semana[totales_semana["semana"].isin(semanas_sorted)]
+            totales_semana["label"] = totales_semana["semana"].map(semana_labels)
+            totales_semana = totales_semana.sort_values("semana")
+
+            fig5 = go.Figure(go.Scatter(
+                x=totales_semana["label"],
+                y=totales_semana["valor"].round(2),
+                mode="lines+markers+text",
+                line=dict(color="#5DCAA5", width=2),
+                marker=dict(size=8, color="#5DCAA5"),
+                text=[f"€{v:.0f}" for v in totales_semana["valor"]],
+                textposition="top center",
+                textfont=dict(size=11),
+            ))
+            fig5.update_layout(
+                title="Evolución de ventas totales por semana (€, IVA incl.)",
+                yaxis_title="€ total semana",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False, tickangle=-30),
+                showlegend=False,
+                height=350,
+                margin=dict(t=50, b=80),
+            )
+            st.plotly_chart(fig5, use_container_width=True)
+
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
 
