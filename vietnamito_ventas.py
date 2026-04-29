@@ -254,29 +254,33 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig4, use_container_width=True)
 
-            # Evolución promedio por día trabajado
-            avg_semana = semana_dow.groupby("semana").agg(
+            # Evolución promedio por franja horaria trabajada
+            df2 = df.copy()
+            df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
+            df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
+            df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
+            avg_semana = df2.groupby("semana").agg(
                 total=("valor", "sum"),
-                dias=("dow", "count")
+                franjas=("valor", "count")
             ).reset_index()
-            avg_semana["avg_dia"] = (avg_semana["total"] / avg_semana["dias"]).round(2)
+            avg_semana["avg_franja"] = (avg_semana["total"] / avg_semana["franjas"]).round(2)
             avg_semana = avg_semana[avg_semana["semana"].isin(semanas_sorted)]
             avg_semana["label"] = avg_semana["semana"].map(semana_labels)
             avg_semana = avg_semana.sort_values("semana")
 
             fig5 = go.Figure(go.Scatter(
                 x=avg_semana["label"],
-                y=avg_semana["avg_dia"],
+                y=avg_semana["avg_franja"],
                 mode="lines+markers+text",
                 line=dict(color="#5DCAA5", width=2),
                 marker=dict(size=8, color="#5DCAA5"),
-                text=[f"€{v:.0f}" for v in avg_semana["avg_dia"]],
+                text=[f"€{v:.0f}" for v in avg_semana["avg_franja"]],
                 textposition="top center",
                 textfont=dict(size=11),
             ))
             fig5.update_layout(
-                title="Evolución del promedio de ventas por día trabajado (€, IVA incl.)",
-                yaxis_title="€ promedio/día",
+                title="Evolución del promedio de ventas por franja horaria trabajada (€, IVA incl.)",
+                yaxis_title="€ promedio/franja",
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
