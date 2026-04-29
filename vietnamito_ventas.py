@@ -246,7 +246,7 @@ def render_dashboard(df):
                 yaxis_title="€ ventas",
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, 1200]),
                 xaxis=dict(showgrid=False),
                 legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
                 height=480,
