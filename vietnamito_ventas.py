@@ -164,9 +164,13 @@ def render_dashboard(df):
 
         fig2 = go.Figure()
         for h in horas_sorted:
-            vals_h = dia_hora[dia_hora["hora"] == h]["valor"].tolist()
+            subset = dia_hora[dia_hora["hora"] == h].copy()
+            subset["fecha_ts"] = pd.to_datetime(subset["fecha"])
+            subset["dow_label"] = subset["fecha_ts"].dt.weekday.map(DIAS)
+            subset["fecha_str"] = subset["fecha_ts"].dt.strftime("%d/%m/%Y")
+            hover = subset.apply(lambda r: f"{r['dow_label']} {r['fecha_str']}<br>€{r['valor']:.2f}", axis=1).tolist()
             fig2.add_trace(go.Box(
-                y=vals_h,
+                y=subset["valor"].tolist(),
                 name=f"{h}:00",
                 marker_color="#5DCAA5",
                 line_color="#2A9D8F",
@@ -174,6 +178,8 @@ def render_dashboard(df):
                 boxpoints="all",
                 jitter=0.3,
                 marker=dict(size=5, opacity=0.5, color="#5DCAA5"),
+                text=hover,
+                hovertemplate="%{text}<extra></extra>",
             ))
 
         fig2.update_layout(
