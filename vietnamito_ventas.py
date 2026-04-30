@@ -100,31 +100,18 @@ def calcular_heatmap(df):
     avg.columns = ["dow", "hora", "avg"]
     return avg
 
-def get_week_label(fecha):
-    # Lunes de la semana ISO
-    d = pd.Timestamp(fecha)
-    lunes = d - timedelta(days=d.weekday())
-    domingo = lunes + timedelta(days=6)
-    return f"{lunes.strftime('%d/%m')} – {domingo.strftime('%d/%m')}"
-
 def calcular_por_semana(df):
     df2 = df.copy()
     df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
     df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
     df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
-
-    # Para cada semana y dow, suma de ventas de ese día
-    # Un día puede tener múltiples franjas, sumamos todo
     dia_totales = df2.groupby(["semana", "fecha", "dow"])["valor"].sum().reset_index()
     semana_dow = dia_totales.groupby(["semana", "dow"])["valor"].mean().reset_index()
-
-    # Etiquetas legibles
     semana_labels = {}
     for s in semana_dow["semana"].unique():
         lunes = pd.Timestamp(s)
         domingo = lunes + timedelta(days=6)
         semana_labels[s] = f"{lunes.strftime('%d/%m')} – {domingo.strftime('%d/%m/%y')}"
-
     semana_dow["label"] = semana_dow["semana"].map(semana_labels)
     return semana_dow, semana_labels
 
@@ -171,22 +158,46 @@ def render_dashboard(df):
             st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
 
     with tab2:
-        avg_hora = calcular_promedios_hora(df)
-        horas = list(avg_hora.index)
-        vals = [round(v, 2) for v in avg_hora.values]
-        fig2 = go.Figure(go.Bar(
-            x=[f"{h}:00" for h in horas], y=vals, marker_color="#5DCAA5", marker_line_width=0,
-            text=[f"€{v:.0f}" for v in vals], textposition="outside",
-        ))
+        # Un valor por día+hora
+        dia_hora = df.groupby(["fecha", "hora"])["valor"].sum().reset_index()
+        horas_sorted = sorted(dia_hora["hora"].unique())
+
+        fig2 = go.Figure()
+        for h in horas_sorted:
+            vals_h = dia_hora[dia_hora["hora"] == h]["valor"].tolist()
+            fig2.add_trace(go.Box(
+                y=vals_h,
+                name=f"{h}:00",
+                marker_color="#5DCAA5",
+                line_color="#2A9D8F",
+                boxmean=True,
+                boxpoints="all",
+                jitter=0.3,
+                marker=dict(size=5, opacity=0.5, color="#5DCAA5"),
+            ))
+
         fig2.update_layout(
-            title="Venta media por franja horaria (€, IVA incl.)", yaxis_title="€ promedio", xaxis_title="Hora",
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            title="Distribución de ventas por franja horaria (€, IVA incl.)",
+            yaxis_title="€ ventas",
+            xaxis_title="Hora",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-            xaxis=dict(showgrid=False), showlegend=False, height=400, margin=dict(t=50, b=20),
+            xaxis=dict(showgrid=False),
+            showlegend=False,
+            height=480,
+            margin=dict(t=60, b=20),
         )
         st.plotly_chart(fig2, use_container_width=True)
+        st.caption("La caja = rango central del 50% de los días. Línea = mediana. Cruz = media. Cada punto = un día real.")
+
         with st.expander("Ver datos"):
-            st.dataframe(pd.DataFrame({"Hora": [f"{h}:00" for h in horas], "Promedio (€)": [f"€{v:.2f}" for v in vals]}), hide_index=True, use_container_width=True)
+            resumen = dia_hora.groupby("hora")["valor"].agg(
+                Media="mean", Mediana="median", Min="min", Max="max", Std="std", Dias="count"
+            ).round(2).reset_index()
+            resumen["hora"] = resumen["hora"].apply(lambda h: f"{h}:00")
+            resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº días"]
+            st.dataframe(resumen, hide_index=True, use_container_width=True)
 
     with tab3:
         hm = calcular_heatmap(df)
@@ -232,9 +243,7 @@ def render_dashboard(df):
                 datos = semana_dow[semana_dow["semana"] == s].set_index("dow")
                 vals = [round(datos.loc[d, "valor"], 2) if d in datos.index else None for d in DIAS_ORDER]
                 fig4.add_trace(go.Scatter(
-                    x=dias_labels,
-                    y=vals,
-                    mode="lines+markers",
+                    x=dias_labels, y=vals, mode="lines+markers",
                     name=semana_labels[s],
                     line=dict(color=color, width=2),
                     marker=dict(size=7, color=color),
@@ -244,13 +253,11 @@ def render_dashboard(df):
             fig4.update_layout(
                 title="Ventas por día de semana — comparativa semanal (€, IVA incl.)",
                 yaxis_title="€ ventas",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, 1200]),
                 xaxis=dict(showgrid=False),
                 legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
-                height=480,
-                margin=dict(t=50, b=120),
+                height=480, margin=dict(t=50, b=120),
             )
             st.plotly_chart(fig4, use_container_width=True)
 
@@ -281,13 +288,10 @@ def render_dashboard(df):
             fig5.update_layout(
                 title="Evolución del promedio de ventas por franja horaria trabajada (€, IVA incl.)",
                 yaxis_title="€ promedio/franja",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
                 xaxis=dict(showgrid=False, tickangle=-30),
-                showlegend=False,
-                height=350,
-                margin=dict(t=50, b=80),
+                showlegend=False, height=350, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig5, use_container_width=True)
 
