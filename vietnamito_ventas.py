@@ -111,7 +111,7 @@ def calcular_por_semana(df):
     semana_dow["label"] = semana_dow["semana"].map(semana_labels)
     return semana_dow, semana_labels
 
-def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F"):
+def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", ymax=None):
     df_filtrado = df_filtrado.copy()
     df_filtrado["fecha_ts"] = pd.to_datetime(df_filtrado["fecha"])
     df_filtrado["dow_label"] = df_filtrado["fecha_ts"].dt.weekday.map(DIAS)
@@ -132,7 +132,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F"):
     fig.update_layout(
         title=titulo, yaxis_title="€ ventas", xaxis_title="Hora",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, ymax] if ymax else None),
         xaxis=dict(showgrid=False), showlegend=False, height=480, margin=dict(t=60, b=20),
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -208,7 +208,12 @@ def render_dashboard(df):
             titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
             st.caption(f"{n_inst} instancias de {titulo_sel} con datos")
             color = "#5DCAA5" if seleccion == "Todos los días" else COLORS[DIAS_ORDER[[DIAS[d] for d in DIAS_ORDER].index(seleccion)] if seleccion in [DIAS[d] for d in DIAS_ORDER] else 0]
-            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)")
+            # Escala fija basada en el máximo global
+            df_global = df.copy()
+            df_global["fecha_ts"] = pd.to_datetime(df_global["fecha"])
+            dia_hora_global = df_global.groupby(["fecha", "hora"])["valor"].sum()
+            ymax_global = dia_hora_global.max() * 1.15
+            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)", ymax=ymax_global)
 
     # ── TAB 3: Mapa de calor ──────────────────────────────────
     with tab3:
