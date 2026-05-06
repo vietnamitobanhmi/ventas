@@ -96,6 +96,23 @@ def calcular_heatmap(df):
     avg.columns = ["dow", "hora", "avg"]
     return avg
 
+def calcular_coste_staff_por_hora(sb):
+    """Devuelve dict {hora: coste_medio_por_hora} basado en turnos y coste/hora de empleados."""
+    emp_res = sb.table("empleados").select("*").execute()
+    empleados = {e["id"]: e["coste_hora"] for e in (emp_res.data or [])}
+    turnos_res = sb.table("turnos").select("*").execute()
+    # Cada slot = 30min. Agrupamos coste por hora (slot 09:00 y 09:30 -> hora 9)
+    coste_por_hora = {}
+    for tr in (turnos_res.data or []):
+        slot = tr["slot"]  # "09:00"
+        hora = int(slot.split(":")[0])
+        if hora == 0 or hora == 1:  # madrugada -> hora 0/1 mapped as-is
+            pass
+        coste_slot = empleados.get(tr["empleado_id"], 10) * 0.5  # 30min = 0.5h
+        coste_por_hora[hora] = coste_por_hora.get(hora, 0) + coste_slot
+    # Esto es el coste total semanal por hora. Lo dividimos por 7 para tener promedio diario
+    return {h: v / 7 for h, v in coste_por_hora.items()}
+
 def calcular_por_semana(df):
     df2 = df.copy()
     df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
@@ -111,7 +128,7 @@ def calcular_por_semana(df):
     semana_dow["label"] = semana_dow["semana"].map(semana_labels)
     return semana_dow, semana_labels
 
-def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", ymax=None):
+def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", ymax=None, turnos_data=None, empleados_data=None, dow_filter=None):
     df_filtrado = df_filtrado.copy()
     df_filtrado["fecha_ts"] = pd.to_datetime(df_filtrado["fecha"])
     df_filtrado["dow_label"] = df_filtrado["fecha_ts"].dt.weekday.map(DIAS)
@@ -137,6 +154,71 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption("La caja = rango central del 50% de días. Línea = mediana. Cruz = media. Cada punto = un día real.")
+
+    # ── Gráfica de rentabilidad por franja ──
+    if turnos_data and empleados_data:
+        emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
+        # Calcular coste de personal por hora (slot = 30min = 0.5h)
+        # Si hay filtro de día, usar solo los turnos de ese día
+        coste_hora = {}
+        for tr in turnos_data:
+            dow_tr = tr["dia_semana"]
+            if dow_filter is not None and dow_tr != dow_filter:
+                continue
+            slot = tr["slot"]
+            h = int(slot.split(":")[0])
+            coste_slot = emp_coste.get(tr["empleado_id"], 10) * 0.5
+            coste_hora[h] = coste_hora.get(h, 0) + coste_slot
+
+        # Si filtramos por día, ya tenemos el coste de ese día
+        # Si es "todos los días", promediamos el coste entre los 7 días
+        if dow_filter is None and coste_hora:
+            # Promedio de coste por hora entre todos los días configurados
+            dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_data))
+            if dias_con_turnos > 0:
+                coste_hora = {h: v / dias_con_turnos for h, v in coste_hora.items()}
+
+        # Ventas promedio por hora del filtro actual
+        avg_ventas = dia_hora.groupby("hora")["valor"].mean()
+
+        horas_comunes = sorted(set(list(avg_ventas.index)) | set(coste_hora.keys()))
+        ventas_vals = [avg_ventas.get(h, 0) for h in horas_comunes]
+        coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
+        margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
+        margen_colors = ["#5DCAA5" if m >= 0 else "#E63946" for m in margen_vals]
+        horas_labels = [f"{h}:00" for h in horas_comunes]
+
+        fig_rent = go.Figure()
+        fig_rent.add_trace(go.Bar(
+            x=horas_labels, y=ventas_vals, name="Ventas promedio",
+            marker_color="rgba(93,202,165,0.5)", marker_line_width=0,
+        ))
+        fig_rent.add_trace(go.Bar(
+            x=horas_labels, y=coste_vals, name="Coste personal",
+            marker_color="rgba(230,57,70,0.5)", marker_line_width=0,
+        ))
+        fig_rent.add_trace(go.Scatter(
+            x=horas_labels, y=margen_vals, name="Margen",
+            mode="lines+markers+text",
+            line=dict(color="#F4A261", width=2),
+            marker=dict(size=7, color=margen_colors),
+            text=[f"€{m:+.0f}" for m in margen_vals],
+            textposition="top center", textfont=dict(size=10),
+        ))
+        fig_rent.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
+        fig_rent.update_layout(
+            title="Ventas promedio vs coste de personal por franja horaria",
+            yaxis_title="€", xaxis_title="Hora",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+            xaxis=dict(showgrid=False),
+            barmode="overlay",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
+            height=380, margin=dict(t=50, b=80),
+        )
+        st.plotly_chart(fig_rent, use_container_width=True)
+        st.caption("Margen = ventas promedio − coste de personal en esa franja. Verde = rentable, rojo = coste supera ventas.")
+
     with st.expander("Ver datos"):
         resumen = dia_hora.groupby("hora")["valor"].agg(
             Media="mean", Mediana="median", Min="min", Max="max", Std="std", Instancias="count"
@@ -213,7 +295,15 @@ def render_dashboard(df):
             df_global["fecha_ts"] = pd.to_datetime(df_global["fecha"])
             dia_hora_global = df_global.groupby(["fecha", "hora"])["valor"].sum()
             ymax_global = dia_hora_global.max() * 1.15
-            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)", ymax=ymax_global)
+            # Cargar turnos y empleados para rentabilidad
+            sb_t2 = get_supabase()
+            turnos_t2 = sb_t2.table("turnos").select("*").execute().data or []
+            empleados_t2 = sb_t2.table("empleados").select("*").execute().data or []
+            dow_filter_t2 = None
+            if seleccion != "Todos los días":
+                dow_filter_t2 = [d for d in DIAS_ORDER if DIAS[d] == seleccion][0]
+            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
+                ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
     # ── TAB 3: Mapa de calor ──────────────────────────────────
     with tab3:
