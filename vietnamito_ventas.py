@@ -244,7 +244,10 @@ def render_dashboard(df):
         seleccionadas = []
         for i, (s, lbl) in enumerate(zip(semanas_sorted, labels_sorted)):
             col = cols[i % len(cols)]
-            if col.checkbox(lbl, value=True, key=f"semana_{s}"):
+            color_sem = WEEK_COLORS[i % len(WEEK_COLORS)]
+            c_icon, c_check = col.columns([1, 6])
+            c_icon.markdown(f'<div style="width:18px;height:18px;background:{color_sem};border-radius:3px;margin-top:6px;"></div>', unsafe_allow_html=True)
+            if c_check.checkbox(lbl, value=True, key=f"semana_{s}"):
                 seleccionadas.append(s)
 
         if not seleccionadas:
