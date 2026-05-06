@@ -5,11 +5,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 from supabase import create_client
 
-st.set_page_config(
-    page_title="Vietnamito — Ventas",
-    page_icon="☕",
-    layout="wide"
-)
+st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
 
 st.markdown("""
 <style>
@@ -115,6 +111,40 @@ def calcular_por_semana(df):
     semana_dow["label"] = semana_dow["semana"].map(semana_labels)
     return semana_dow, semana_labels
 
+def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F"):
+    df_filtrado = df_filtrado.copy()
+    df_filtrado["fecha_ts"] = pd.to_datetime(df_filtrado["fecha"])
+    df_filtrado["dow_label"] = df_filtrado["fecha_ts"].dt.weekday.map(DIAS)
+    df_filtrado["fecha_str"] = df_filtrado["fecha_ts"].dt.strftime("%d/%m/%Y")
+    dia_hora = df_filtrado.groupby(["fecha", "fecha_str", "dow_label", "hora"])["valor"].sum().reset_index()
+    horas_sorted = sorted(dia_hora["hora"].unique())
+    fig = go.Figure()
+    for h in horas_sorted:
+        subset = dia_hora[dia_hora["hora"] == h]
+        hover = subset.apply(lambda r: f"{r['dow_label']} {r['fecha_str']}<br>€{r['valor']:.2f}", axis=1).tolist()
+        fig.add_trace(go.Box(
+            y=subset["valor"].tolist(), name=f"{h}:00",
+            marker_color=color, line_color=line_color,
+            boxmean=True, boxpoints="all", jitter=0.3,
+            marker=dict(size=5, opacity=0.5, color=color),
+            text=hover, hovertemplate="%{text}<extra></extra>",
+        ))
+    fig.update_layout(
+        title=titulo, yaxis_title="€ ventas", xaxis_title="Hora",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+        xaxis=dict(showgrid=False), showlegend=False, height=480, margin=dict(t=60, b=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("La caja = rango central del 50% de días. Línea = mediana. Cruz = media. Cada punto = un día real.")
+    with st.expander("Ver datos"):
+        resumen = dia_hora.groupby("hora")["valor"].agg(
+            Media="mean", Mediana="median", Min="min", Max="max", Std="std", Instancias="count"
+        ).round(2).reset_index()
+        resumen["hora"] = resumen["hora"].apply(lambda h: f"{h}:00")
+        resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
+        st.dataframe(resumen, hide_index=True, use_container_width=True)
+
 def render_dashboard(df):
     fecha_min = df["fecha"].min()
     fecha_max = df["fecha"].max()
@@ -132,15 +162,15 @@ def render_dashboard(df):
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📅 Por día de semana",
         "🕐 Por franja horaria",
         "🌡️ Mapa de calor",
         "📈 Por semana",
-        "🔍 Horario por día",
         "👥 Turnos"
     ])
 
+    # ── TAB 1: Por día de semana ──────────────────────────────
     with tab1:
         avg_dow = calcular_promedios_dia(df)
         labels = [DIAS[d] for d in DIAS_ORDER]
@@ -159,54 +189,28 @@ def render_dashboard(df):
         with st.expander("Ver datos"):
             st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
 
+    # ── TAB 2: Por franja horaria (con selector de día) ───────
     with tab2:
-        # Un valor por día+hora
-        dia_hora = df.groupby(["fecha", "hora"])["valor"].sum().reset_index()
-        horas_sorted = sorted(dia_hora["hora"].unique())
+        opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
+        seleccion = st.selectbox("Filtrar por día de la semana:", opciones, key="sel_franja")
 
-        fig2 = go.Figure()
-        for h in horas_sorted:
-            subset = dia_hora[dia_hora["hora"] == h].copy()
-            subset["fecha_ts"] = pd.to_datetime(subset["fecha"])
-            subset["dow_label"] = subset["fecha_ts"].dt.weekday.map(DIAS)
-            subset["fecha_str"] = subset["fecha_ts"].dt.strftime("%d/%m/%Y")
-            hover = subset.apply(lambda r: f"{r['dow_label']} {r['fecha_str']}<br>€{r['valor']:.2f}", axis=1).tolist()
-            fig2.add_trace(go.Box(
-                y=subset["valor"].tolist(),
-                name=f"{h}:00",
-                marker_color="#5DCAA5",
-                line_color="#2A9D8F",
-                boxmean=True,
-                boxpoints="all",
-                jitter=0.3,
-                marker=dict(size=5, opacity=0.5, color="#5DCAA5"),
-                text=hover,
-                hovertemplate="%{text}<extra></extra>",
-            ))
+        df_f = df.copy()
+        df_f["fecha_ts"] = pd.to_datetime(df_f["fecha"])
+        df_f["dow_label"] = df_f["fecha_ts"].dt.weekday.map(DIAS)
 
-        fig2.update_layout(
-            title="Distribución de ventas por franja horaria (€, IVA incl.)",
-            yaxis_title="€ ventas",
-            xaxis_title="Hora",
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-            xaxis=dict(showgrid=False),
-            showlegend=False,
-            height=480,
-            margin=dict(t=60, b=20),
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption("La caja = rango central del 50% de los días. Línea = mediana. Cruz = media. Cada punto = un día real.")
+        if seleccion != "Todos los días":
+            df_f = df_f[df_f["dow_label"] == seleccion]
 
-        with st.expander("Ver datos"):
-            resumen = dia_hora.groupby("hora")["valor"].agg(
-                Media="mean", Mediana="median", Min="min", Max="max", Std="std", Dias="count"
-            ).round(2).reset_index()
-            resumen["hora"] = resumen["hora"].apply(lambda h: f"{h}:00")
-            resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº días"]
-            st.dataframe(resumen, hide_index=True, use_container_width=True)
+        if df_f.empty:
+            st.warning("No hay datos para ese día.")
+        else:
+            n_inst = df_f["fecha"].nunique()
+            titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
+            st.caption(f"{n_inst} instancias de {titulo_sel} con datos")
+            color = "#5DCAA5" if seleccion == "Todos los días" else COLORS[DIAS_ORDER[[DIAS[d] for d in DIAS_ORDER].index(seleccion)] if seleccion in [DIAS[d] for d in DIAS_ORDER] else 0]
+            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)")
 
+    # ── TAB 3: Mapa de calor ──────────────────────────────────
     with tab3:
         hm = calcular_heatmap(df)
         pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
@@ -224,6 +228,7 @@ def render_dashboard(df):
         fig3.update_traces(textfont_size=11)
         st.plotly_chart(fig3, use_container_width=True)
 
+    # ── TAB 4: Por semana ─────────────────────────────────────
     with tab4:
         semana_dow, semana_labels = calcular_por_semana(df)
         semanas_sorted = sorted(semana_labels.keys())
@@ -234,16 +239,13 @@ def render_dashboard(df):
         seleccionadas = []
         for i, (s, lbl) in enumerate(zip(semanas_sorted, labels_sorted)):
             col = cols[i % len(cols)]
-            checked = col.checkbox(lbl, value=True, key=f"semana_{s}")
-            if checked:
+            if col.checkbox(lbl, value=True, key=f"semana_{s}"):
                 seleccionadas.append(s)
 
         if not seleccionadas:
             st.warning("Selecciona al menos una semana.")
         else:
             fig4 = go.Figure()
-            dias_labels = [DIAS[d] for d in DIAS_ORDER]
-
             for i, s in enumerate(semanas_sorted):
                 if s not in seleccionadas:
                     continue
@@ -251,17 +253,13 @@ def render_dashboard(df):
                 datos = semana_dow[semana_dow["semana"] == s].set_index("dow")
                 vals = [round(datos.loc[d, "valor"], 2) if d in datos.index else None for d in DIAS_ORDER]
                 fig4.add_trace(go.Scatter(
-                    x=dias_labels, y=vals, mode="lines+markers",
-                    name=semana_labels[s],
-                    line=dict(color=color, width=2),
-                    marker=dict(size=7, color=color),
-                    connectgaps=False,
+                    x=[DIAS[d] for d in DIAS_ORDER], y=vals, mode="lines+markers",
+                    name=semana_labels[s], line=dict(color=color, width=2),
+                    marker=dict(size=7, color=color), connectgaps=False,
                 ))
-
             fig4.update_layout(
                 title="Ventas por día de semana — comparativa semanal (€, IVA incl.)",
-                yaxis_title="€ ventas",
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis_title="€ ventas", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, 1200]),
                 xaxis=dict(showgrid=False),
                 legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
@@ -274,100 +272,30 @@ def render_dashboard(df):
             df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
             df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
             df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
-            avg_semana = df2.groupby("semana").agg(
-                total=("valor", "sum"),
-                franjas=("valor", "count")
-            ).reset_index()
+            avg_semana = df2.groupby("semana").agg(total=("valor","sum"), franjas=("valor","count")).reset_index()
             avg_semana["avg_franja"] = (avg_semana["total"] / avg_semana["franjas"]).round(2)
             avg_semana = avg_semana[avg_semana["semana"].isin(semanas_sorted)]
             avg_semana["label"] = avg_semana["semana"].map(semana_labels)
             avg_semana = avg_semana.sort_values("semana")
 
             fig5 = go.Figure(go.Scatter(
-                x=avg_semana["label"],
-                y=avg_semana["avg_franja"],
-                mode="lines+markers+text",
-                line=dict(color="#5DCAA5", width=2),
+                x=avg_semana["label"], y=avg_semana["avg_franja"],
+                mode="lines+markers+text", line=dict(color="#5DCAA5", width=2),
                 marker=dict(size=8, color="#5DCAA5"),
                 text=[f"€{v:.0f}" for v in avg_semana["avg_franja"]],
-                textposition="top center",
-                textfont=dict(size=11),
+                textposition="top center", textfont=dict(size=11),
             ))
             fig5.update_layout(
                 title="Evolución del promedio de ventas por franja horaria trabajada (€, IVA incl.)",
-                yaxis_title="€ promedio/franja",
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis_title="€ promedio/franja", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
                 xaxis=dict(showgrid=False, tickangle=-30),
                 showlegend=False, height=350, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig5, use_container_width=True)
 
+    # ── TAB 5: Turnos ─────────────────────────────────────────
     with tab5:
-        opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
-        seleccion = st.selectbox("Selecciona el día de la semana:", opciones)
-
-        df_t5 = df.copy()
-        df_t5["fecha_ts"] = pd.to_datetime(df_t5["fecha"])
-        df_t5["dow_label"] = df_t5["fecha_ts"].dt.weekday.map(DIAS)
-        df_t5["fecha_str"] = df_t5["fecha_ts"].dt.strftime("%d/%m/%Y")
-
-        if seleccion != "Todos los días":
-            df_t5 = df_t5[df_t5["dow_label"] == seleccion]
-
-        if df_t5.empty:
-            st.warning("No hay datos para ese día.")
-        else:
-            dia_hora_t5 = df_t5.groupby(["fecha", "fecha_str", "dow_label", "hora"])["valor"].sum().reset_index()
-            horas_t5 = sorted(dia_hora_t5["hora"].unique())
-            n_instancias = dia_hora_t5["fecha"].nunique()
-            titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
-            st.caption(f"Mostrando {n_instancias} instancias de {titulo_sel} con datos")
-
-            fig_t5 = go.Figure()
-            for h in horas_t5:
-                subset = dia_hora_t5[dia_hora_t5["hora"] == h].copy()
-                hover = subset.apply(
-                    lambda r: f"{r['dow_label']} {r['fecha_str']}<br>€{r['valor']:.2f}", axis=1
-                ).tolist()
-                fig_t5.add_trace(go.Box(
-                    y=subset["valor"].tolist(),
-                    name=f"{h}:00",
-                    marker_color="#7F77DD",
-                    line_color="#5A52B0",
-                    boxmean=True,
-                    boxpoints="all",
-                    jitter=0.3,
-                    marker=dict(size=5, opacity=0.5, color="#7F77DD"),
-                    text=hover,
-                    hovertemplate="%{text}<extra></extra>",
-                ))
-
-            fig_t5.update_layout(
-                title=f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
-                yaxis_title="€ ventas",
-                xaxis_title="Hora",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                xaxis=dict(showgrid=False),
-                showlegend=False,
-                height=480,
-                margin=dict(t=60, b=20),
-            )
-            st.plotly_chart(fig_t5, use_container_width=True)
-            st.caption("La caja = rango central del 50% de instancias. Línea = mediana. Cruz = media. Cada punto = un día real.")
-
-            with st.expander("Ver datos"):
-                resumen_t5 = dia_hora_t5.groupby("hora")["valor"].agg(
-                    Media="mean", Mediana="median", Min="min", Max="max", Std="std", Instancias="count"
-                ).round(2).reset_index()
-                resumen_t5["hora"] = resumen_t5["hora"].apply(lambda h: f"{h}:00")
-                resumen_t5.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
-                st.dataframe(resumen_t5, hide_index=True, use_container_width=True)
-
-
-    with tab6:
         import datetime as dt_mod
         sb = get_supabase()
 
