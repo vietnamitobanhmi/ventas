@@ -405,21 +405,40 @@ def render_dashboard(df):
         empleados = emp_res.data if emp_res.data else []
 
         st.markdown("### Empleados")
-        st.caption("Edita nombres y coste/hora y pulsa 💾 para guardar.")
+        st.caption("Edita nombres y coste/hora. Los turnos se eliminan automáticamente al borrar un empleado.")
 
-        header = st.columns([3, 2, 1])
+        header = st.columns([3, 2, 1, 1])
         header[0].markdown("**Nombre**")
         header[1].markdown("**€/hora**")
         header[2].markdown("**Guardar**")
+        header[3].markdown("**Eliminar**")
 
         for emp in empleados:
-            c1, c2, c3 = st.columns([3, 2, 1])
+            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
             nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom_{emp['id']}")
             nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos_{emp['id']}")
             if c3.button("💾", key=f"saveemp_{emp['id']}"):
                 sb.table("empleados").update({"nombre": nuevo_nombre, "coste_hora": nuevo_coste}).eq("id", emp["id"]).execute()
                 st.success(f"✅ {nuevo_nombre} guardado")
                 st.rerun()
+            if c4.button("🗑️", key=f"delemp_{emp['id']}"):
+                sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
+                sb.table("empleados").delete().eq("id", emp["id"]).execute()
+                st.success(f"✅ {emp['nombre']} eliminado")
+                st.rerun()
+
+        st.markdown("")
+        with st.expander("➕ Añadir empleado"):
+            na1, na2, na3 = st.columns([3, 2, 1])
+            nuevo_emp_nombre = na1.text_input("Nombre:", key="new_emp_nombre")
+            nuevo_emp_coste = na2.number_input("€/hora:", value=10.0, min_value=0.0, step=0.5, format="%.2f", key="new_emp_coste")
+            if na3.button("➕ Añadir", key="add_emp"):
+                if nuevo_emp_nombre.strip():
+                    sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
+                    st.success(f"✅ {nuevo_emp_nombre} añadido")
+                    st.rerun()
+                else:
+                    st.warning("Escribe un nombre.")
 
         st.divider()
         st.markdown("### Turnos por día")
