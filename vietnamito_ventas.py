@@ -132,12 +132,13 @@ def render_dashboard(df):
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📅 Por día de semana",
         "🕐 Por franja horaria",
         "🌡️ Mapa de calor",
         "📈 Por semana",
-        "🔍 Horario por día"
+        "🔍 Horario por día",
+        "👥 Turnos"
     ])
 
     with tab1:
@@ -364,6 +365,118 @@ def render_dashboard(df):
                 resumen_t5["hora"] = resumen_t5["hora"].apply(lambda h: f"{h}:00")
                 resumen_t5.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
                 st.dataframe(resumen_t5, hide_index=True, use_container_width=True)
+
+
+    with tab6:
+        import datetime as dt_mod
+        sb = get_supabase()
+
+        emp_res = sb.table("empleados").select("*").order("id").execute()
+        empleados = emp_res.data if emp_res.data else []
+
+        st.markdown("### Empleados")
+        st.caption("Edita nombres y coste/hora y pulsa 💾 para guardar.")
+
+        header = st.columns([3, 2, 1])
+        header[0].markdown("**Nombre**")
+        header[1].markdown("**€/hora**")
+        header[2].markdown("**Guardar**")
+
+        for emp in empleados:
+            c1, c2, c3 = st.columns([3, 2, 1])
+            nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom_{emp['id']}")
+            nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos_{emp['id']}")
+            if c3.button("💾", key=f"saveemp_{emp['id']}"):
+                sb.table("empleados").update({"nombre": nuevo_nombre, "coste_hora": nuevo_coste}).eq("id", emp["id"]).execute()
+                st.success(f"✅ {nuevo_nombre} guardado")
+                st.rerun()
+
+        st.divider()
+        st.markdown("### Turnos por día")
+
+        slots = []
+        current = dt_mod.datetime(2000, 1, 1, 7, 0)
+        end = dt_mod.datetime(2000, 1, 2, 1, 30)
+        while current < end:
+            slots.append(current.strftime("%H:%M"))
+            current += dt_mod.timedelta(minutes=30)
+
+        turnos_res = sb.table("turnos").select("*").execute()
+        turnos_set = set()
+        for tr in (turnos_res.data or []):
+            turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
+
+        emp_ids = [e["id"] for e in empleados]
+        emp_nombres = {e["id"]: e["nombre"] for e in empleados}
+        emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
+
+        dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
+
+        for di, dow in enumerate(DIAS_ORDER):
+            with dias_tabs[di]:
+                ncols = len(empleados)
+                hdr = st.columns([1] + [2] * ncols)
+                hdr[0].markdown("**Hora**")
+                for ei, eid in enumerate(emp_ids):
+                    hdr[ei+1].markdown(f"**{emp_nombres.get(eid, f'Emp {eid}')}**")
+
+                new_state = {}
+                for slot in slots:
+                    row = st.columns([1] + [2] * ncols)
+                    row[0].markdown(f"`{slot}`")
+                    for ei, eid in enumerate(emp_ids):
+                        checked = row[ei+1].checkbox(
+                            " ", value=(eid, dow, slot) in turnos_set,
+                            key=f"t_{dow}_{slot}_{eid}", label_visibility="collapsed"
+                        )
+                        new_state.setdefault(slot, {})[eid] = checked
+
+                if st.button(f"💾 Guardar turnos {DIAS[dow]}", key=f"saveturno_{dow}"):
+                    sb.table("turnos").delete().eq("dia_semana", dow).execute()
+                    to_insert = [
+                        {"empleado_id": eid, "dia_semana": dow, "slot": slot}
+                        for slot, emp_checks in new_state.items()
+                        for eid, checked in emp_checks.items() if checked
+                    ]
+                    if to_insert:
+                        sb.table("turnos").insert(to_insert).execute()
+                    st.success(f"✅ Turnos del {DIAS[dow]} guardados")
+                    st.rerun()
+
+                horas_dia = {}
+                for slot, emp_checks in new_state.items():
+                    for eid, checked in emp_checks.items():
+                        if checked:
+                            horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
+
+                if any(horas_dia.values()):
+                    st.markdown("**Resumen del día:**")
+                    res_cols = st.columns(ncols)
+                    for ei, eid in enumerate(emp_ids):
+                        h = horas_dia.get(eid, 0)
+                        coste = h * emp_coste.get(eid, 10)
+                        res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
+
+        st.divider()
+        st.markdown("### Resumen semanal")
+        turnos_all = sb.table("turnos").select("*").execute().data or []
+        resumen_rows = []
+        for emp in empleados:
+            eid = emp["id"]
+            total_h = sum(0.5 for tr in turnos_all if tr["empleado_id"] == eid)
+            total_coste = total_h * emp["coste_hora"]
+            resumen_rows.append({
+                "Empleado": emp["nombre"],
+                "Horas/semana": f"{total_h:.1f}h",
+                "Coste semanal": f"€{total_coste:.2f}",
+                "Coste mensual est.": f"€{total_coste * 4.33:.2f}",
+            })
+        st.dataframe(pd.DataFrame(resumen_rows), hide_index=True, use_container_width=True)
+        total_sem = sum(
+            sum(0.5 for tr in turnos_all if tr["empleado_id"] == e["id"]) * e["coste_hora"]
+            for e in empleados
+        )
+        st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
 
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
