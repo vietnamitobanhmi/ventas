@@ -396,6 +396,32 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig5, use_container_width=True)
 
+            # Total de ventas por semana (barras)
+            total_semana = df2.groupby("semana")["valor"].sum().reset_index()
+            total_semana = total_semana[total_semana["semana"].isin(semanas_sorted)]
+            total_semana["label"] = total_semana["semana"].map(semana_labels)
+            total_semana = total_semana.sort_values("semana")
+
+            bar_colors = [WEEK_COLORS[semanas_sorted.index(s) % len(WEEK_COLORS)] for s in total_semana["semana"]]
+
+            fig6 = go.Figure(go.Bar(
+                x=total_semana["label"],
+                y=total_semana["valor"].round(2),
+                marker_color=bar_colors,
+                marker_line_width=0,
+                text=[f"€{v:.0f}" for v in total_semana["valor"]],
+                textposition="outside",
+            ))
+            fig6.update_layout(
+                title="Total de ventas por semana (€, IVA incl.)",
+                yaxis_title="€ total",
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False, tickangle=-30),
+                showlegend=False, height=380, margin=dict(t=50, b=80),
+            )
+            st.plotly_chart(fig6, use_container_width=True)
+
     # ── TAB 5: Turnos ─────────────────────────────────────────
     with tab5:
         import datetime as dt_mod
@@ -422,10 +448,19 @@ def render_dashboard(df):
                 st.success(f"✅ {nuevo_nombre} guardado")
                 st.rerun()
             if c4.button("🗑️", key=f"delemp_{emp['id']}"):
-                sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
-                sb.table("empleados").delete().eq("id", emp["id"]).execute()
-                st.success(f"✅ {emp['nombre']} eliminado")
-                st.rerun()
+                st.session_state[f"confirm_del_{emp['id']}"] = True
+            if st.session_state.get(f"confirm_del_{emp['id']}"):
+                st.warning(f"¿Seguro que quieres eliminar a **{emp['nombre']}** y todos sus turnos?")
+                conf1, conf2 = st.columns(2)
+                if conf1.button("✅ Sí, eliminar", key=f"yes_del_{emp['id']}"):
+                    sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
+                    sb.table("empleados").delete().eq("id", emp["id"]).execute()
+                    st.session_state.pop(f"confirm_del_{emp['id']}", None)
+                    st.success(f"✅ {emp['nombre']} eliminado")
+                    st.rerun()
+                if conf2.button("❌ Cancelar", key=f"no_del_{emp['id']}"):
+                    st.session_state.pop(f"confirm_del_{emp['id']}", None)
+                    st.rerun()
 
         st.markdown("")
         with st.expander("➕ Añadir empleado"):
