@@ -427,11 +427,6 @@ def render_dashboard(df):
             slots.append(current.strftime("%H:%M"))
             current += dt_mod.timedelta(minutes=30)
 
-        turnos_res = sb.table("turnos").select("*").execute()
-        turnos_set = set()
-        for tr in (turnos_res.data or []):
-            turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
-
         emp_ids = [e["id"] for e in empleados]
         emp_nombres = {e["id"]: e["nombre"] for e in empleados}
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
@@ -458,6 +453,12 @@ def render_dashboard(df):
                             ]).execute()
                     st.success(f"✅ Turnos del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
                     st.rerun()
+
+        # Carga fresca de turnos (después de posibles copias)
+        turnos_res = sb.table("turnos").select("*").execute()
+        turnos_set = set()
+        for tr in (turnos_res.data or []):
+            turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
 
         dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
 
