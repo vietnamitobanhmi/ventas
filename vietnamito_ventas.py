@@ -436,6 +436,29 @@ def render_dashboard(df):
         emp_nombres = {e["id"]: e["nombre"] for e in empleados}
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
 
+        # ── Copiar día ──
+        with st.expander("📋 Copiar turnos de un día a otro"):
+            cc1, cc2, cc3 = st.columns([2, 2, 2])
+            dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
+            dias_destino_opts = [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen]
+            dias_destino_sel = cc2.multiselect("Copiar a:", dias_destino_opts, key="copy_to")
+            if cc3.button("📋 Copiar", key="do_copy"):
+                if not dias_destino_sel:
+                    st.warning("Selecciona al menos un día destino.")
+                else:
+                    dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
+                    turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res.data or []) if tr["dia_semana"] == dow_origen]
+                    for dia_dest_label in dias_destino_sel:
+                        dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
+                        sb.table("turnos").delete().eq("dia_semana", dow_dest).execute()
+                        if turnos_origen:
+                            sb.table("turnos").insert([
+                                {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot}
+                                for eid, slot in turnos_origen
+                            ]).execute()
+                    st.success(f"✅ Turnos del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
+                    st.rerun()
+
         dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
 
         for di, dow in enumerate(DIAS_ORDER):
