@@ -132,11 +132,12 @@ def render_dashboard(df):
 
     st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📅 Por día de semana",
         "🕐 Por franja horaria",
         "🌡️ Mapa de calor",
-        "📈 Por semana"
+        "📈 Por semana",
+        "🔍 Horario por día"
     ])
 
     with tab1:
@@ -300,6 +301,69 @@ def render_dashboard(df):
                 showlegend=False, height=350, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig5, use_container_width=True)
+
+    with tab5:
+        opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
+        seleccion = st.selectbox("Selecciona el día de la semana:", opciones)
+
+        df_t5 = df.copy()
+        df_t5["fecha_ts"] = pd.to_datetime(df_t5["fecha"])
+        df_t5["dow_label"] = df_t5["fecha_ts"].dt.weekday.map(DIAS)
+        df_t5["fecha_str"] = df_t5["fecha_ts"].dt.strftime("%d/%m/%Y")
+
+        if seleccion != "Todos los días":
+            df_t5 = df_t5[df_t5["dow_label"] == seleccion]
+
+        if df_t5.empty:
+            st.warning("No hay datos para ese día.")
+        else:
+            dia_hora_t5 = df_t5.groupby(["fecha", "fecha_str", "dow_label", "hora"])["valor"].sum().reset_index()
+            horas_t5 = sorted(dia_hora_t5["hora"].unique())
+            n_instancias = dia_hora_t5["fecha"].nunique()
+            titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
+            st.caption(f"Mostrando {n_instancias} instancias de {titulo_sel} con datos")
+
+            fig_t5 = go.Figure()
+            for h in horas_t5:
+                subset = dia_hora_t5[dia_hora_t5["hora"] == h].copy()
+                hover = subset.apply(
+                    lambda r: f"{r['dow_label']} {r['fecha_str']}<br>€{r['valor']:.2f}", axis=1
+                ).tolist()
+                fig_t5.add_trace(go.Box(
+                    y=subset["valor"].tolist(),
+                    name=f"{h}:00",
+                    marker_color="#7F77DD",
+                    line_color="#5A52B0",
+                    boxmean=True,
+                    boxpoints="all",
+                    jitter=0.3,
+                    marker=dict(size=5, opacity=0.5, color="#7F77DD"),
+                    text=hover,
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+
+            fig_t5.update_layout(
+                title=f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
+                yaxis_title="€ ventas",
+                xaxis_title="Hora",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False),
+                showlegend=False,
+                height=480,
+                margin=dict(t=60, b=20),
+            )
+            st.plotly_chart(fig_t5, use_container_width=True)
+            st.caption("La caja = rango central del 50% de instancias. Línea = mediana. Cruz = media. Cada punto = un día real.")
+
+            with st.expander("Ver datos"):
+                resumen_t5 = dia_hora_t5.groupby("hora")["valor"].agg(
+                    Media="mean", Mediana="median", Min="min", Max="max", Std="std", Instancias="count"
+                ).round(2).reset_index()
+                resumen_t5["hora"] = resumen_t5["hora"].apply(lambda h: f"{h}:00")
+                resumen_t5.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
+                st.dataframe(resumen_t5, hide_index=True, use_container_width=True)
 
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
