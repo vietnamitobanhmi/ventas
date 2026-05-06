@@ -182,7 +182,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         avg_ventas = dia_hora.groupby("hora")["valor"].mean()
 
         horas_comunes = sorted(set(list(avg_ventas.index)) | set(coste_hora.keys()))
-        ventas_vals = [avg_ventas.get(h, 0) for h in horas_comunes]
+        ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]  # -25% coste producto
         coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
         margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
         margen_colors = ["#5DCAA5" if m >= 0 else "#E63946" for m in margen_vals]
@@ -207,7 +207,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         ))
         fig_rent.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
         fig_rent.update_layout(
-            title="Ventas promedio vs coste de personal por franja horaria",
+            title="Ventas netas (−25% producto) vs coste de personal por franja horaria",
             yaxis_title="€", xaxis_title="Hora",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
@@ -217,7 +217,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
             height=380, margin=dict(t=50, b=80),
         )
         st.plotly_chart(fig_rent, use_container_width=True)
-        st.caption("Margen = ventas promedio − coste de personal en esa franja. Verde = rentable, rojo = coste supera ventas.")
+        st.caption("Ventas netas = venta media × 75% (descontado 25% coste de producto). Margen = ventas netas − coste de personal. Verde = rentable, rojo = coste supera ventas netas.")
 
     with st.expander("Ver datos"):
         resumen = dia_hora.groupby("hora")["valor"].agg(
