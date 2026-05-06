@@ -271,31 +271,35 @@ def render_dashboard(df):
         with st.expander("Ver datos"):
             st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
 
-    # ── TAB 2: Por franja horaria (con selector de día) ───────
+    # ── TAB 2: Por franja horaria (con selector de día y rango fechas) ──
     with tab2:
+        import datetime as dt_franja
+        fecha_min_data = df["fecha"].min()
+        fecha_max_data = df["fecha"].max()
+        today = dt_franja.date.today()
+
         opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
-        seleccion = st.selectbox("Filtrar por día de la semana:", opciones, key="sel_franja")
+        seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
+        fc2, fc3 = st.columns(2)
+        fecha_desde = fc2.date_input("Desde:", value=fecha_min_data, min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
+        fecha_hasta = fc3.date_input("Hasta:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_hasta")
 
         df_f = df.copy()
         df_f["fecha_ts"] = pd.to_datetime(df_f["fecha"])
         df_f["dow_label"] = df_f["fecha_ts"].dt.weekday.map(DIAS)
-
+        df_f = df_f[(df_f["fecha"] >= fecha_desde) & (df_f["fecha"] <= fecha_hasta)]
         if seleccion != "Todos los días":
             df_f = df_f[df_f["dow_label"] == seleccion]
 
         if df_f.empty:
-            st.warning("No hay datos para ese día.")
+            st.warning("No hay datos para ese filtro.")
         else:
             n_inst = df_f["fecha"].nunique()
             titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
-            st.caption(f"{n_inst} instancias de {titulo_sel} con datos")
-            color = "#5DCAA5" if seleccion == "Todos los días" else COLORS[DIAS_ORDER[[DIAS[d] for d in DIAS_ORDER].index(seleccion)] if seleccion in [DIAS[d] for d in DIAS_ORDER] else 0]
-            # Escala fija basada en el máximo global
+            st.caption(f"{n_inst} instancias de {titulo_sel} con datos · {fecha_desde.strftime('%d/%m/%Y')} – {fecha_hasta.strftime('%d/%m/%Y')}")
             df_global = df.copy()
-            df_global["fecha_ts"] = pd.to_datetime(df_global["fecha"])
             dia_hora_global = df_global.groupby(["fecha", "hora"])["valor"].sum()
             ymax_global = dia_hora_global.max() * 1.15
-            # Cargar turnos y empleados para rentabilidad
             sb_t2 = get_supabase()
             turnos_t2 = sb_t2.table("turnos").select("*").execute().data or []
             empleados_t2 = sb_t2.table("empleados").select("*").execute().data or []
