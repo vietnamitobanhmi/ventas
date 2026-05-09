@@ -691,7 +691,6 @@ def render_dashboard(df):
         if not ejecuciones:
             st.info("Aún no hay ejecuciones registradas.")
         else:
-            import pandas as pd
             rows = []
             for e in ejecuciones:
                 rows.append({
