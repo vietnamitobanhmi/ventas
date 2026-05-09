@@ -64,9 +64,8 @@ def parse_csv(file):
 
 def save_to_supabase(rows):
     sb = get_supabase()
-    fechas = list(set(r["fecha"] for r in rows))
-    for fecha in fechas:
-        sb.table("ventas").delete().eq("fecha", fecha).execute()
+    # Borra TODA la tabla antes de insertar
+    sb.table("ventas").delete().neq("id", 0).execute()
     for i in range(0, len(rows), 500):
         sb.table("ventas").insert(rows[i:i+500]).execute()
 
@@ -97,20 +96,15 @@ def calcular_heatmap(df):
     return avg
 
 def calcular_coste_staff_por_hora(sb):
-    """Devuelve dict {hora: coste_medio_por_hora} basado en turnos y coste/hora de empleados."""
     emp_res = sb.table("empleados").select("*").execute()
     empleados = {e["id"]: e["coste_hora"] for e in (emp_res.data or [])}
     turnos_res = sb.table("turnos").select("*").execute()
-    # Cada slot = 30min. Agrupamos coste por hora (slot 09:00 y 09:30 -> hora 9)
     coste_por_hora = {}
     for tr in (turnos_res.data or []):
-        slot = tr["slot"]  # "09:00"
+        slot = tr["slot"]
         hora = int(slot.split(":")[0])
-        if hora == 0 or hora == 1:  # madrugada -> hora 0/1 mapped as-is
-            pass
-        coste_slot = empleados.get(tr["empleado_id"], 10) * 0.5  # 30min = 0.5h
+        coste_slot = empleados.get(tr["empleado_id"], 10) * 0.5
         coste_por_hora[hora] = coste_por_hora.get(hora, 0) + coste_slot
-    # Esto es el coste total semanal por hora. Lo dividimos por 7 para tener promedio diario
     return {h: v / 7 for h, v in coste_por_hora.items()}
 
 def calcular_por_semana(df):
@@ -155,11 +149,8 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
     st.plotly_chart(fig, use_container_width=True)
     st.caption("La caja = rango central del 50% de días. Línea = mediana. Cruz = media. Cada punto = un día real.")
 
-    # ── Gráfica de rentabilidad por franja ──
     if turnos_data and empleados_data:
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
-        # Calcular coste de personal por hora (slot = 30min = 0.5h)
-        # Si hay filtro de día, usar solo los turnos de ese día
         coste_hora = {}
         for tr in turnos_data:
             dow_tr = tr["dia_semana"]
@@ -170,37 +161,25 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
             coste_slot = emp_coste.get(tr["empleado_id"], 10) * 0.5
             coste_hora[h] = coste_hora.get(h, 0) + coste_slot
 
-        # Si filtramos por día, ya tenemos el coste de ese día
-        # Si es "todos los días", promediamos el coste entre los 7 días
         if dow_filter is None and coste_hora:
-            # Promedio de coste por hora entre todos los días configurados
             dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_data))
             if dias_con_turnos > 0:
                 coste_hora = {h: v / dias_con_turnos for h, v in coste_hora.items()}
 
-        # Ventas promedio por hora del filtro actual
         avg_ventas = dia_hora.groupby("hora")["valor"].mean()
-
         horas_comunes = sorted(set(list(avg_ventas.index)) | set(coste_hora.keys()))
-        ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]  # -25% coste producto
+        ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]
         coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
         margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
         margen_colors = ["#5DCAA5" if m >= 0 else "#E63946" for m in margen_vals]
         horas_labels = [f"{h}:00" for h in horas_comunes]
 
         fig_rent = go.Figure()
-        fig_rent.add_trace(go.Bar(
-            x=horas_labels, y=ventas_vals, name="Ventas promedio",
-            marker_color="rgba(93,202,165,0.5)", marker_line_width=0,
-        ))
-        fig_rent.add_trace(go.Bar(
-            x=horas_labels, y=coste_vals, name="Coste personal",
-            marker_color="rgba(230,57,70,0.5)", marker_line_width=0,
-        ))
+        fig_rent.add_trace(go.Bar(x=horas_labels, y=ventas_vals, name="Ventas promedio", marker_color="rgba(93,202,165,0.5)", marker_line_width=0))
+        fig_rent.add_trace(go.Bar(x=horas_labels, y=coste_vals, name="Coste personal", marker_color="rgba(230,57,70,0.5)", marker_line_width=0))
         fig_rent.add_trace(go.Scatter(
             x=horas_labels, y=margen_vals, name="Margen",
-            mode="lines+markers+text",
-            line=dict(color="#F4A261", width=2),
+            mode="lines+markers+text", line=dict(color="#F4A261", width=2),
             marker=dict(size=7, color=margen_colors),
             text=[f"€{m:+.0f}" for m in margen_vals],
             textposition="top center", textfont=dict(size=10),
@@ -211,8 +190,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
             yaxis_title="€", xaxis_title="Hora",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-            xaxis=dict(showgrid=False),
-            barmode="overlay",
+            xaxis=dict(showgrid=False), barmode="overlay",
             legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
             height=380, margin=dict(t=50, b=80),
         )
@@ -252,7 +230,6 @@ def render_dashboard(df):
         "👥 Turnos"
     ])
 
-    # ── TAB 1: Por día de semana ──────────────────────────────
     with tab1:
         avg_dow = calcular_promedios_dia(df)
         labels = [DIAS[d] for d in DIAS_ORDER]
@@ -271,7 +248,6 @@ def render_dashboard(df):
         with st.expander("Ver datos"):
             st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
 
-    # ── TAB 2: Por franja horaria (con selector de día y rango fechas) ──
     with tab2:
         import datetime as dt_franja
         fecha_min_data = df["fecha"].min()
@@ -297,8 +273,7 @@ def render_dashboard(df):
             n_inst = df_f["fecha"].nunique()
             titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
             st.caption(f"{n_inst} instancias de {titulo_sel} con datos · {fecha_desde.strftime('%d/%m/%Y')} – {fecha_hasta.strftime('%d/%m/%Y')}")
-            df_global = df.copy()
-            dia_hora_global = df_global.groupby(["fecha", "hora"])["valor"].sum()
+            dia_hora_global = df.groupby(["fecha", "hora"])["valor"].sum()
             ymax_global = dia_hora_global.max() * 1.15
             sb_t2 = get_supabase()
             turnos_t2 = sb_t2.table("turnos").select("*").execute().data or []
@@ -309,7 +284,6 @@ def render_dashboard(df):
             boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
-    # ── TAB 3: Mapa de calor ──────────────────────────────────
     with tab3:
         hm = calcular_heatmap(df)
         pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
@@ -327,7 +301,6 @@ def render_dashboard(df):
         fig3.update_traces(textfont_size=11)
         st.plotly_chart(fig3, use_container_width=True)
 
-    # ── TAB 4: Por semana ─────────────────────────────────────
     with tab4:
         semana_dow, semana_labels = calcular_por_semana(df)
         semanas_sorted = sorted(semana_labels.keys())
@@ -369,7 +342,6 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig4, use_container_width=True)
 
-            # Evolución promedio por franja horaria trabajada
             df2 = df.copy()
             df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
             df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
@@ -396,33 +368,26 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig5, use_container_width=True)
 
-            # Total de ventas por semana (barras)
             total_semana = df2.groupby("semana")["valor"].sum().reset_index()
             total_semana = total_semana[total_semana["semana"].isin(semanas_sorted)]
             total_semana["label"] = total_semana["semana"].map(semana_labels)
             total_semana = total_semana.sort_values("semana")
-
             bar_colors = [WEEK_COLORS[semanas_sorted.index(s) % len(WEEK_COLORS)] for s in total_semana["semana"]]
 
             fig6 = go.Figure(go.Bar(
-                x=total_semana["label"],
-                y=total_semana["valor"].round(2),
-                marker_color=bar_colors,
-                marker_line_width=0,
-                text=[f"€{v:.0f}" for v in total_semana["valor"]],
-                textposition="outside",
+                x=total_semana["label"], y=total_semana["valor"].round(2),
+                marker_color=bar_colors, marker_line_width=0,
+                text=[f"€{v:.0f}" for v in total_semana["valor"]], textposition="outside",
             ))
             fig6.update_layout(
                 title="Total de ventas por semana (€, IVA incl.)",
-                yaxis_title="€ total",
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis_title="€ total", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
                 xaxis=dict(showgrid=False, tickangle=-30),
                 showlegend=False, height=380, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig6, use_container_width=True)
 
-    # ── TAB 5: Turnos ─────────────────────────────────────────
     with tab5:
         import datetime as dt_mod
         sb = get_supabase()
@@ -489,7 +454,6 @@ def render_dashboard(df):
         emp_nombres = {e["id"]: e["nombre"] for e in empleados}
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
 
-        # ── Copiar día ──
         with st.expander("📋 Copiar turnos de un día a otro"):
             cc1, cc2, cc3 = st.columns([2, 2, 2])
             dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
@@ -500,7 +464,8 @@ def render_dashboard(df):
                     st.warning("Selecciona al menos un día destino.")
                 else:
                     dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
-                    turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res.data or []) if tr["dia_semana"] == dow_origen]
+                    turnos_res_copy = sb.table("turnos").select("*").execute()
+                    turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res_copy.data or []) if tr["dia_semana"] == dow_origen]
                     for dia_dest_label in dias_destino_sel:
                         dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
                         sb.table("turnos").delete().eq("dia_semana", dow_dest).execute()
@@ -512,7 +477,6 @@ def render_dashboard(df):
                     st.success(f"✅ Turnos del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
                     st.rerun()
 
-        # Carga fresca de turnos (después de posibles copias)
         turnos_res = sb.table("turnos").select("*").execute()
         turnos_set = set()
         for tr in (turnos_res.data or []):
