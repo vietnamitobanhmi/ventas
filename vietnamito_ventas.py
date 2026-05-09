@@ -629,7 +629,7 @@ def render_dashboard(df):
             st.markdown(f"### Pasos de: {proc['nombre']}")
 
             pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
-            pasos = pasos_res.data or []
+            pasos = sorted(pasos_res.data or [], key=lambda p: p.get("orden", 0))
 
             with st.expander("➕ Añadir paso"):
                 pa1, pa2 = st.columns([3, 1])
@@ -691,9 +691,18 @@ def render_dashboard(df):
                             st.success("✅ Paso guardado")
                             st.rerun()
                         if sc2.button("🗑️ Eliminar", key=f"del_paso_{paso['id']}"):
-                            sb6.table("pasos").delete().eq("id", paso["id"]).execute()
-                            st.success("✅ Paso eliminado")
-                            st.rerun()
+                            st.session_state[f"confirm_del_paso_{paso['id']}"] = True
+                        if st.session_state.get(f"confirm_del_paso_{paso['id']}"):
+                            st.warning(f"¿Eliminar el paso **{paso['titulo']}**? Esta acción no se puede deshacer.")
+                            dp1, dp2 = st.columns(2)
+                            if dp1.button("✅ Sí, eliminar", key=f"yes_del_paso_{paso['id']}"):
+                                sb6.table("pasos").delete().eq("id", paso["id"]).execute()
+                                st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
+                                st.success("✅ Paso eliminado")
+                                st.rerun()
+                            if dp2.button("❌ Cancelar", key=f"no_del_paso_{paso['id']}"):
+                                st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
+                                st.rerun()
 
         st.divider()
         st.markdown("### Historial de ejecuciones")
