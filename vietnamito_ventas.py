@@ -152,18 +152,14 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
     if turnos_data and empleados_data:
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
         coste_hora = {}
-        turnos_filtrados = []
         for tr in turnos_data:
             dow_tr = int(tr["dia_semana"])
             if dow_filter is not None and dow_tr != int(dow_filter):
                 continue
-            turnos_filtrados.append(tr)
             slot = tr["slot"]
             h = int(slot.split(":")[0])
             coste_slot = emp_coste.get(tr["empleado_id"], 10) * 0.5
             coste_hora[h] = coste_hora.get(h, 0) + coste_slot
-
-        st.caption(f"🔍 Debug: dow_filter={dow_filter}, turnos totales={len(turnos_data)}, turnos filtrados={len(turnos_filtrados)}, horas con coste={sorted(coste_hora.keys())}")
 
         if dow_filter is None and coste_hora:
             dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_data))
@@ -492,39 +488,56 @@ def render_dashboard(df):
         for di, dow in enumerate(DIAS_ORDER):
             with dias_tabs[di]:
                 ncols = len(empleados)
+
+                # Inicializar session_state para este día si no existe
+                state_key = f"turnos_state_{dow}"
+                if state_key not in st.session_state:
+                    st.session_state[state_key] = {
+                        (eid, slot): (eid, dow, slot) in turnos_set
+                        for slot in slots for eid in emp_ids
+                    }
+
                 hdr = st.columns([1] + [2] * ncols)
                 hdr[0].markdown("**Hora**")
                 for ei, eid in enumerate(emp_ids):
                     hdr[ei+1].markdown(f"**{emp_nombres.get(eid, f'Emp {eid}')}**")
 
-                new_state = {}
                 for slot in slots:
                     row = st.columns([1] + [2] * ncols)
                     row[0].markdown(f"`{slot}`")
                     for ei, eid in enumerate(emp_ids):
+                        cb_key = f"t_{dow}_{slot}_{eid}"
+                        current_val = st.session_state[state_key].get((eid, slot), False)
                         checked = row[ei+1].checkbox(
-                            " ", value=(eid, dow, slot) in turnos_set,
-                            key=f"t_{dow}_{slot}_{eid}", label_visibility="collapsed"
+                            " ", value=current_val,
+                            key=cb_key, label_visibility="collapsed"
                         )
-                        new_state.setdefault(slot, {})[eid] = checked
+                        st.session_state[state_key][(eid, slot)] = checked
 
-                if st.button(f"💾 Guardar turnos {DIAS[dow]}", key=f"saveturno_{dow}"):
+                st.markdown("")
+                if st.button(f"💾 Guardar turnos {DIAS[dow]}", key=f"saveturno_{dow}", type="primary"):
                     sb.table("turnos").delete().eq("dia_semana", dow).execute()
                     to_insert = [
                         {"empleado_id": eid, "dia_semana": dow, "slot": slot}
-                        for slot, emp_checks in new_state.items()
-                        for eid, checked in emp_checks.items() if checked
+                        for (eid, slot), checked in st.session_state[state_key].items()
+                        if checked
                     ]
                     if to_insert:
                         sb.table("turnos").insert(to_insert).execute()
+                    # Recargar turnos_set y reiniciar state
+                    turnos_res = sb.table("turnos").select("*").execute()
+                    turnos_set = set()
+                    for tr in (turnos_res.data or []):
+                        turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
+                    del st.session_state[state_key]
                     st.success(f"✅ Turnos del {DIAS[dow]} guardados")
                     st.rerun()
 
+                # Resumen del día
                 horas_dia = {}
-                for slot, emp_checks in new_state.items():
-                    for eid, checked in emp_checks.items():
-                        if checked:
-                            horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
+                for (eid, slot), checked in st.session_state[state_key].items():
+                    if checked:
+                        horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
 
                 if any(horas_dia.values()):
                     st.markdown("**Resumen del día:**")
