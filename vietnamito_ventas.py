@@ -152,14 +152,18 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
     if turnos_data and empleados_data:
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
         coste_hora = {}
+        turnos_filtrados = []
         for tr in turnos_data:
             dow_tr = int(tr["dia_semana"])
             if dow_filter is not None and dow_tr != int(dow_filter):
                 continue
+            turnos_filtrados.append(tr)
             slot = tr["slot"]
             h = int(slot.split(":")[0])
             coste_slot = emp_coste.get(tr["empleado_id"], 10) * 0.5
             coste_hora[h] = coste_hora.get(h, 0) + coste_slot
+
+        st.caption(f"🔍 Debug: dow_filter={dow_filter}, turnos totales={len(turnos_data)}, turnos filtrados={len(turnos_filtrados)}, horas con coste={sorted(coste_hora.keys())}")
 
         if dow_filter is None and coste_hora:
             dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_data))
