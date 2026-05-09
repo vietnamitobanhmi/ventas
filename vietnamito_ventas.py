@@ -487,67 +487,59 @@ def render_dashboard(df):
 
         for di, dow in enumerate(DIAS_ORDER):
             with dias_tabs[di]:
-                ncols = len(empleados)
-
-                # Inicializar session_state para este día si no existe
-                state_key = f"turnos_state_{dow}"
-                if state_key not in st.session_state:
-                    st.session_state[state_key] = {
-                        (eid, slot): (eid, dow, slot) in turnos_set
-                        for slot in slots for eid in emp_ids
-                    }
-
-                hdr = st.columns([1] + [2] * ncols)
-                hdr[0].markdown("**Hora**")
-                for ei, eid in enumerate(emp_ids):
-                    hdr[ei+1].markdown(f"**{emp_nombres.get(eid, f'Emp {eid}')}**")
-
+                # Build DataFrame for this day
+                data = {}
                 for slot in slots:
-                    row = st.columns([1] + [2] * ncols)
-                    row[0].markdown(f"`{slot}`")
-                    for ei, eid in enumerate(emp_ids):
-                        cb_key = f"t_{dow}_{slot}_{eid}"
-                        current_val = st.session_state[state_key].get((eid, slot), False)
-                        checked = row[ei+1].checkbox(
-                            " ", value=current_val,
-                            key=cb_key, label_visibility="collapsed"
-                        )
-                        st.session_state[state_key][(eid, slot)] = checked
+                    row = {}
+                    for eid in emp_ids:
+                        row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, dow, slot) in turnos_set
+                    data[slot] = row
+                df_grid = pd.DataFrame(data).T
+                df_grid.index.name = "Hora"
+                df_grid = df_grid.reset_index()
 
-                st.markdown("")
+                edited = st.data_editor(
+                    df_grid,
+                    key=f"grid_{dow}",
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={"Hora": st.column_config.TextColumn("Hora", disabled=True)},
+                    height=min(400, len(slots) * 35 + 40),
+                )
+
                 if st.button(f"💾 Guardar turnos {DIAS[dow]}", key=f"saveturno_{dow}", type="primary"):
                     sb.table("turnos").delete().eq("dia_semana", dow).execute()
-                    to_insert = [
-                        {"empleado_id": eid, "dia_semana": dow, "slot": slot}
-                        for (eid, slot), checked in st.session_state[state_key].items()
-                        if checked
-                    ]
+                    to_insert = []
+                    for _, row in edited.iterrows():
+                        slot = row["Hora"]
+                        for eid in emp_ids:
+                            col_name = emp_nombres.get(eid, f"Emp {eid}")
+                            if row.get(col_name, False):
+                                to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
                     if to_insert:
                         sb.table("turnos").insert(to_insert).execute()
-                    # Recargar turnos_set y reiniciar state
+                    # Reset turnos_set
                     turnos_res = sb.table("turnos").select("*").execute()
-                    turnos_set = set()
-                    for tr in (turnos_res.data or []):
-                        turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
-                    del st.session_state[state_key]
-                    st.success(f"✅ Turnos del {DIAS[dow]} guardados")
+                    turnos_set = set((tr["empleado_id"], tr["dia_semana"], tr["slot"]) for tr in (turnos_res.data or []))
+                    st.success(f"✅ {len(to_insert)} slots guardados para {DIAS[dow]}")
                     st.rerun()
 
-                # Resumen del día
+                # Resumen
                 horas_dia = {}
-                for (eid, slot), checked in st.session_state[state_key].items():
-                    if checked:
-                        horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
-
+                for _, row in edited.iterrows():
+                    for eid in emp_ids:
+                        col_name = emp_nombres.get(eid, f"Emp {eid}")
+                        if row.get(col_name, False):
+                            horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
                 if any(horas_dia.values()):
                     st.markdown("**Resumen del día:**")
-                    res_cols = st.columns(ncols)
+                    res_cols = st.columns(len(emp_ids))
                     for ei, eid in enumerate(emp_ids):
                         h = horas_dia.get(eid, 0)
                         coste = h * emp_coste.get(eid, 10)
                         res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
 
-        st.divider()
+                st.divider()
         st.markdown("### Resumen semanal")
         turnos_all = sb.table("turnos").select("*").execute().data or []
         resumen_rows = []
