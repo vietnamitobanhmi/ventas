@@ -48,9 +48,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="logo-container"><img src="https://raw.githubusercontent.com/vietnamitobanhmi/ventas/main/Logo_Vietnamito_Final.png" style="width:180px;background:black;border-radius:12px;padding:12px;"></div>', unsafe_allow_html=True)
+st.markdown('<div class="logo-container"><img src="https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png" style="width:180px;background:black;border-radius:12px;padding:12px;"></div>', unsafe_allow_html=True)
 
-LOGO_URL = "https://raw.githubusercontent.com/vietnamitobanhmi/ventas/main/Logo_Vietnamito_Final.png"
+LOGO_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png"
 
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMzIyMjMsImV4cCI6MjA5MjcwODIyM30.jznrwuusfgtVkrzz_bfdsxq3tVsv-uV2tyMeIlh3bZg"
