@@ -631,16 +631,20 @@ def render_dashboard(df):
             pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
             pasos = sorted(pasos_res.data or [], key=lambda p: p.get("orden", 0))
 
+            if "add_paso_counter" not in st.session_state:
+                st.session_state.add_paso_counter = 0
+            counter = st.session_state.add_paso_counter
+
             with st.expander("➕ Añadir paso"):
                 pa1, pa2 = st.columns([3, 1])
-                new_paso_titulo = pa1.text_input("Título del paso:", key="new_paso_titulo")
-                new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key="new_paso_orden")
-                new_paso_desc = st.text_area("Descripción (opcional):", key="new_paso_desc", height=80)
-                new_paso_foto_url = st.text_input("URL de foto (opcional):", key="new_paso_foto", placeholder="https://...")
-                new_paso_foto_file = st.file_uploader("O sube una foto:", type=["jpg","jpeg","png","webp"], key="new_paso_foto_file")
+                new_paso_titulo = pa1.text_input("Título del paso:", key=f"new_paso_titulo_{counter}")
+                new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key=f"new_paso_orden_{counter}")
+                new_paso_desc = st.text_area("Descripción (opcional):", key=f"new_paso_desc_{counter}", height=80)
+                new_paso_foto_url = st.text_input("URL de foto (opcional):", key=f"new_paso_foto_{counter}", placeholder="https://...")
+                new_paso_foto_file = st.file_uploader("O sube una foto:", type=["jpg","jpeg","png","webp"], key=f"new_paso_foto_file_{counter}")
                 if new_paso_foto_file:
                     st.image(new_paso_foto_file, width=200)
-                if st.button("➕ Añadir paso", key="add_paso"):
+                if st.button("➕ Añadir paso", key=f"add_paso_{counter}"):
                     if new_paso_titulo.strip():
                         foto_url = new_paso_foto_url.strip() or None
                         if new_paso_foto_file:
@@ -655,6 +659,7 @@ def render_dashboard(df):
                             "foto_url": foto_url,
                             "orden": int(new_paso_orden),
                         }).execute()
+                        st.session_state.add_paso_counter += 1
                         st.success("✅ Paso añadido")
                         st.rerun()
                     else:
