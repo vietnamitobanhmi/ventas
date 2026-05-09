@@ -179,8 +179,8 @@ st.markdown(f"## {paso['titulo']}")
 
 if paso.get("descripcion"):
     desc = paso["descripcion"]
-    # Separar líneas normales de líneas (check)
     lineas = desc.split("\n")
+    checks_pendientes = {}
     for i, linea in enumerate(lineas):
         if "(check)" in linea.lower():
             texto_check = linea.replace("(check)", "").replace("(Check)", "").replace("(CHECK)", "").strip()
