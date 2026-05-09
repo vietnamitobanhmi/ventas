@@ -31,6 +31,18 @@ WEEK_COLORS = [
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def upload_foto(sb, file, prefix):
+    import urllib.parse
+    ext = file.name.split(".")[-1].lower()
+    fname = f"pasos/{prefix}_{file.name}"
+    fname_encoded = urllib.parse.quote(fname, safe="/")
+    try:
+        sb.storage.from_("assets").upload(fname, file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+    except Exception:
+        file.seek(0)
+        sb.storage.from_("assets").update(fname, file.read(), {"content-type": f"image/{ext}"})
+    return f"{SUPABASE_URL}/storage/v1/object/public/assets/{fname_encoded}"
+
 def parse_csv(file):
     content = file.read()
     try:
@@ -64,7 +76,6 @@ def parse_csv(file):
 
 def save_to_supabase(rows):
     sb = get_supabase()
-    # Borra TODA la tabla antes de insertar
     sb.table("ventas").delete().neq("id", 0).execute()
     for i in range(0, len(rows), 500):
         sb.table("ventas").insert(rows[i:i+500]).execute()
@@ -94,18 +105,6 @@ def calcular_heatmap(df):
     avg = (totales / dias_unicos).reset_index()
     avg.columns = ["dow", "hora", "avg"]
     return avg
-
-def calcular_coste_staff_por_hora(sb):
-    emp_res = sb.table("empleados").select("*").execute()
-    empleados = {e["id"]: e["coste_hora"] for e in (emp_res.data or [])}
-    turnos_res = sb.table("turnos").select("*").execute()
-    coste_por_hora = {}
-    for tr in (turnos_res.data or []):
-        slot = tr["slot"]
-        hora = int(slot.split(":")[0])
-        coste_slot = empleados.get(tr["empleado_id"], 10) * 0.5
-        coste_por_hora[hora] = coste_por_hora.get(hora, 0) + coste_slot
-    return {h: v / 7 for h, v in coste_por_hora.items()}
 
 def calcular_por_semana(df):
     df2 = df.copy()
@@ -167,7 +166,6 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
                 coste_hora = {h: v / dias_con_turnos for h, v in coste_hora.items()}
 
         avg_ventas = dia_hora.groupby("hora")["valor"].mean()
-        # Solo mostrar horas que tienen ventas reales en el filtro actual
         horas_comunes = sorted(avg_ventas.index)
         ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]
         coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
@@ -488,7 +486,6 @@ def render_dashboard(df):
 
         for di, dow in enumerate(DIAS_ORDER):
             with dias_tabs[di]:
-                # Build DataFrame for this day
                 data = {}
                 for slot in slots:
                     row = {}
@@ -519,13 +516,11 @@ def render_dashboard(df):
                                 to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
                     if to_insert:
                         sb.table("turnos").insert(to_insert).execute()
-                    # Reset turnos_set
                     turnos_res = sb.table("turnos").select("*").execute()
                     turnos_set = set((tr["empleado_id"], tr["dia_semana"], tr["slot"]) for tr in (turnos_res.data or []))
                     st.success(f"✅ {len(to_insert)} slots guardados para {DIAS[dow]}")
                     st.rerun()
 
-                # Resumen
                 horas_dia = {}
                 for _, row in edited.iterrows():
                     for eid in emp_ids:
@@ -541,6 +536,7 @@ def render_dashboard(df):
                         res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
 
                 st.divider()
+
         st.markdown("### Resumen semanal")
         turnos_all = sb.table("turnos").select("*").execute().data or []
         resumen_rows = []
@@ -569,7 +565,6 @@ def render_dashboard(df):
         proc_res = sb6.table("procesos").select("*").order("orden").execute()
         procesos = proc_res.data or []
 
-        # Añadir proceso
         with st.expander("➕ Nuevo proceso"):
             new_proc_nombre = st.text_input("Nombre:", key="new_proc_nombre")
             new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
@@ -636,23 +631,31 @@ def render_dashboard(df):
             pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
             pasos = pasos_res.data or []
 
-            # Añadir paso
             with st.expander("➕ Añadir paso"):
                 pa1, pa2 = st.columns([3, 1])
                 new_paso_titulo = pa1.text_input("Título del paso:", key="new_paso_titulo")
                 new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key="new_paso_orden")
                 new_paso_desc = st.text_area("Descripción (opcional):", key="new_paso_desc", height=80)
-                new_paso_foto = st.text_input("URL de foto (opcional):", key="new_paso_foto", placeholder="https://...")
+                new_paso_foto_url = st.text_input("URL de foto (opcional):", key="new_paso_foto", placeholder="https://...")
+                new_paso_foto_file = st.file_uploader("O sube una foto:", type=["jpg","jpeg","png","webp"], key="new_paso_foto_file")
+                if new_paso_foto_file:
+                    st.image(new_paso_foto_file, width=200)
                 if st.button("➕ Añadir paso", key="add_paso"):
                     if new_paso_titulo.strip():
+                        foto_url = new_paso_foto_url.strip() or None
+                        if new_paso_foto_file:
+                            try:
+                                foto_url = upload_foto(sb6, new_paso_foto_file, f"{proc_sel}_{len(pasos)+1}")
+                            except Exception as e:
+                                st.warning(f"No se pudo subir la foto: {e}")
                         sb6.table("pasos").insert({
                             "proceso_id": proc_sel,
                             "titulo": new_paso_titulo.strip(),
                             "descripcion": new_paso_desc.strip() or None,
-                            "foto_url": new_paso_foto.strip() or None,
+                            "foto_url": foto_url,
                             "orden": int(new_paso_orden),
                         }).execute()
-                        st.success(f"✅ Paso añadido")
+                        st.success("✅ Paso añadido")
                         st.rerun()
                     else:
                         st.warning("Escribe un título.")
@@ -667,7 +670,15 @@ def render_dashboard(df):
                         s_orden = sp2.number_input("Orden:", value=int(paso["orden"]), min_value=1, key=f"sp_ord_{paso['id']}")
                         s_desc = st.text_area("Descripción:", value=paso.get("descripcion") or "", key=f"sp_desc_{paso['id']}", height=80)
                         s_foto = st.text_input("URL foto:", value=paso.get("foto_url") or "", key=f"sp_foto_{paso['id']}")
-                        if s_foto:
+                        s_foto_file = st.file_uploader("O sube foto nueva:", type=["jpg","jpeg","png","webp"], key=f"sp_foto_file_{paso['id']}")
+                        if s_foto_file:
+                            st.image(s_foto_file, width=200)
+                            try:
+                                s_foto = upload_foto(sb6, s_foto_file, str(paso['id']))
+                                st.success("✅ Foto lista — pulsa Guardar para confirmar")
+                            except Exception as e:
+                                st.warning(f"No se pudo subir: {e}")
+                        elif s_foto:
                             st.image(s_foto, width=200)
                         sc1, sc2 = st.columns(2)
                         if sc1.button("💾 Guardar", key=f"save_paso_{paso['id']}"):
@@ -690,7 +701,6 @@ def render_dashboard(df):
         ejec_res = sb6.table("ejecuciones").select("*").order("iniciado_at", desc=True).limit(50).execute()
         ejecuciones = ejec_res.data or []
 
-        # Cargar lookup tables
         emp_lookup = {e["id"]: e["nombre"] for e in (sb6.table("empleados").select("id, nombre").execute().data or [])}
         proc_lookup = {p["id"]: p["nombre"] for p in (sb6.table("procesos").select("id, nombre").execute().data or [])}
 
