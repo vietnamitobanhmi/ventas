@@ -110,7 +110,7 @@ def calcular_coste_staff_por_hora(sb):
 def calcular_por_semana(df):
     df2 = df.copy()
     df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
-    df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
+    df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="D")
     df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
     dia_totales = df2.groupby(["semana", "fecha", "dow"])["valor"].sum().reset_index()
     semana_dow = dia_totales.groupby(["semana", "dow"])["valor"].mean().reset_index()
@@ -346,7 +346,7 @@ def render_dashboard(df):
 
             df2 = df.copy()
             df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
-            df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
+            df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="D")
             df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
             avg_semana = df2.groupby("semana").agg(total=("valor","sum"), franjas=("valor","count")).reset_index()
             avg_semana["avg_franja"] = (avg_semana["total"] / avg_semana["franjas"]).round(2)
