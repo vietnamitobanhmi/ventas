@@ -167,7 +167,8 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
                 coste_hora = {h: v / dias_con_turnos for h, v in coste_hora.items()}
 
         avg_ventas = dia_hora.groupby("hora")["valor"].mean()
-        horas_comunes = sorted(set(list(avg_ventas.index)) | set(coste_hora.keys()))
+        # Solo mostrar horas que tienen ventas reales en el filtro actual
+        horas_comunes = sorted(avg_ventas.index)
         ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]
         coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
         margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
