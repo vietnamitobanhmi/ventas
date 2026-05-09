@@ -223,12 +223,13 @@ def render_dashboard(df):
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📅 Por día de semana",
         "🕐 Por franja horaria",
         "🌡️ Mapa de calor",
         "📈 Por semana",
-        "👥 Turnos"
+        "👥 Turnos",
+        "📋 Checklists"
     ])
 
     with tab1:
@@ -559,6 +560,165 @@ def render_dashboard(df):
             for e in empleados
         )
         st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
+
+    # ── TAB 6: Checklists (admin) ────────────────────────────
+    with tab6:
+        sb6 = get_supabase()
+        st.markdown("### Procesos")
+
+        proc_res = sb6.table("procesos").select("*").order("orden").execute()
+        procesos = proc_res.data or []
+
+        # Añadir proceso
+        with st.expander("➕ Nuevo proceso"):
+            np1, np2, np3 = st.columns([3, 1, 1])
+            new_proc_nombre = np1.text_input("Nombre:", key="new_proc_nombre")
+            new_proc_orden = np2.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden")
+            new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
+            if np3.button("➕ Añadir", key="add_proc"):
+                if new_proc_nombre.strip():
+                    sb6.table("procesos").insert({
+                        "nombre": new_proc_nombre.strip(),
+                        "descripcion": new_proc_desc.strip() or None,
+                        "orden": int(new_proc_orden),
+                        "activo": True
+                    }).execute()
+                    st.success(f"✅ Proceso '{new_proc_nombre}' creado")
+                    st.rerun()
+                else:
+                    st.warning("Escribe un nombre.")
+
+        if not procesos:
+            st.info("No hay procesos. Crea uno arriba.")
+        else:
+            proc_sel = st.selectbox(
+                "Selecciona proceso para editar:",
+                options=[p["id"] for p in procesos],
+                format_func=lambda x: next(p["nombre"] for p in procesos if p["id"] == x),
+                key="proc_sel"
+            )
+            proc = next(p for p in procesos if p["id"] == proc_sel)
+
+            with st.expander(f"✏️ Editar proceso: {proc['nombre']}"):
+                e1, e2 = st.columns([3, 1])
+                edit_nombre = e1.text_input("Nombre:", value=proc["nombre"], key=f"ep_nom_{proc['id']}")
+                edit_orden = e2.number_input("Orden:", value=int(proc.get("orden") or 0), key=f"ep_ord_{proc['id']}")
+                edit_desc = st.text_input("Descripción:", value=proc.get("descripcion") or "", key=f"ep_desc_{proc['id']}")
+                edit_activo = st.checkbox("Activo", value=proc.get("activo", True), key=f"ep_act_{proc['id']}")
+                ec1, ec2 = st.columns(2)
+                if ec1.button("💾 Guardar cambios", key=f"save_proc_{proc['id']}"):
+                    sb6.table("procesos").update({
+                        "nombre": edit_nombre,
+                        "descripcion": edit_desc or None,
+                        "orden": int(edit_orden),
+                        "activo": edit_activo
+                    }).eq("id", proc["id"]).execute()
+                    st.success("✅ Proceso actualizado")
+                    st.rerun()
+                if ec2.button("🗑️ Eliminar proceso", key=f"del_proc_{proc['id']}"):
+                    st.session_state[f"confirm_del_proc_{proc['id']}"] = True
+                if st.session_state.get(f"confirm_del_proc_{proc['id']}"):
+                    st.error(f"¿Eliminar '{proc['nombre']}' y todos sus pasos?")
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("✅ Sí, eliminar", key=f"yes_del_proc_{proc['id']}"):
+                        sb6.table("procesos").delete().eq("id", proc["id"]).execute()
+                        st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
+                        st.success("✅ Proceso eliminado")
+                        st.rerun()
+                    if dc2.button("❌ Cancelar", key=f"no_del_proc_{proc['id']}"):
+                        st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
+                        st.rerun()
+
+            st.markdown(f"### Pasos de: {proc['nombre']}")
+
+            pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
+            pasos = pasos_res.data or []
+
+            # Añadir paso
+            with st.expander("➕ Añadir paso"):
+                pa1, pa2 = st.columns([3, 1])
+                new_paso_titulo = pa1.text_input("Título del paso:", key="new_paso_titulo")
+                new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key="new_paso_orden")
+                new_paso_desc = st.text_area("Descripción (opcional):", key="new_paso_desc", height=80)
+                new_paso_foto = st.text_input("URL de foto (opcional):", key="new_paso_foto", placeholder="https://...")
+                if st.button("➕ Añadir paso", key="add_paso"):
+                    if new_paso_titulo.strip():
+                        sb6.table("pasos").insert({
+                            "proceso_id": proc_sel,
+                            "titulo": new_paso_titulo.strip(),
+                            "descripcion": new_paso_desc.strip() or None,
+                            "foto_url": new_paso_foto.strip() or None,
+                            "orden": int(new_paso_orden),
+                        }).execute()
+                        st.success(f"✅ Paso añadido")
+                        st.rerun()
+                    else:
+                        st.warning("Escribe un título.")
+
+            if not pasos:
+                st.info("Este proceso no tiene pasos. Añade uno arriba.")
+            else:
+                for paso in pasos:
+                    with st.expander(f"**{paso['orden']}.** {paso['titulo']}"):
+                        sp1, sp2 = st.columns([3, 1])
+                        s_titulo = sp1.text_input("Título:", value=paso["titulo"], key=f"sp_tit_{paso['id']}")
+                        s_orden = sp2.number_input("Orden:", value=int(paso["orden"]), min_value=1, key=f"sp_ord_{paso['id']}")
+                        s_desc = st.text_area("Descripción:", value=paso.get("descripcion") or "", key=f"sp_desc_{paso['id']}", height=80)
+                        s_foto = st.text_input("URL foto:", value=paso.get("foto_url") or "", key=f"sp_foto_{paso['id']}")
+                        if s_foto:
+                            st.image(s_foto, width=200)
+                        sc1, sc2 = st.columns(2)
+                        if sc1.button("💾 Guardar", key=f"save_paso_{paso['id']}"):
+                            sb6.table("pasos").update({
+                                "titulo": s_titulo,
+                                "descripcion": s_desc or None,
+                                "foto_url": s_foto or None,
+                                "orden": int(s_orden),
+                            }).eq("id", paso["id"]).execute()
+                            st.success("✅ Paso guardado")
+                            st.rerun()
+                        if sc2.button("🗑️ Eliminar", key=f"del_paso_{paso['id']}"):
+                            sb6.table("pasos").delete().eq("id", paso["id"]).execute()
+                            st.success("✅ Paso eliminado")
+                            st.rerun()
+
+        st.divider()
+        st.markdown("### Historial de ejecuciones")
+
+        ejec_res = sb6.table("ejecuciones").select("*, empleados(nombre), procesos(nombre)").order("iniciado_at", desc=True).limit(50).execute()
+        ejecuciones = ejec_res.data or []
+
+        if not ejecuciones:
+            st.info("Aún no hay ejecuciones registradas.")
+        else:
+            import pandas as pd
+            rows = []
+            for e in ejecuciones:
+                rows.append({
+                    "Fecha": pd.Timestamp(e["iniciado_at"]).strftime("%d/%m/%Y %H:%M"),
+                    "Empleado": e.get("empleados", {}).get("nombre", "—"),
+                    "Proceso": e.get("procesos", {}).get("nombre", "—"),
+                    "Completado": "✅" if e["completado"] else "⏳",
+                })
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+            # Detalle de ejecución
+            ejec_ids = {f"{e.get('empleados',{}).get('nombre','?')} — {e.get('procesos',{}).get('nombre','?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"] for e in ejecuciones}
+            sel_ejec = st.selectbox("Ver detalle de ejecución:", list(ejec_ids.keys()), key="sel_ejec")
+            if sel_ejec:
+                ejec_id = ejec_ids[sel_ejec]
+                ep_res = sb6.table("ejecucion_pasos").select("*, pasos(titulo, orden)").eq("ejecucion_id", ejec_id).order("timestamp").execute()
+                ep_data = ep_res.data or []
+                if ep_data:
+                    for ep in ep_data:
+                        estado = "✅ Hecho" if ep["estado"] == "hecho" else "⚠️ No pudo"
+                        titulo = ep.get("pasos", {}).get("titulo", "—")
+                        orden = ep.get("pasos", {}).get("orden", "?")
+                        st.markdown(f"**{orden}. {titulo}** — {estado}")
+                        if ep.get("nota"):
+                            st.caption(f"📝 {ep['nota']}")
+                else:
+                    st.info("No hay pasos registrados para esta ejecución.")
 
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
