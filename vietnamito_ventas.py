@@ -664,7 +664,7 @@ def render_dashboard(df):
                 st.info("Este proceso no tiene pasos. Añade uno arriba.")
             else:
                 for paso in pasos:
-                    with st.expander(f"**{paso['orden']}.** {paso['titulo']}"):
+                    with st.expander(f"**{paso['orden']}.** {paso['titulo']}", key=f"exp_paso_{paso['id']}_{paso['orden']}"):
                         sp1, sp2 = st.columns([3, 1])
                         s_titulo = sp1.text_input("Título:", value=paso["titulo"], key=f"sp_tit_{paso['id']}")
                         s_orden = sp2.number_input("Orden:", value=int(paso["orden"]), min_value=1, key=f"sp_ord_{paso['id']}")
