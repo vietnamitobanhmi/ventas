@@ -1,220 +1,749 @@
 import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime, timedelta
 from supabase import create_client
-from datetime import datetime
 
-st.set_page_config(
-    page_title="VietnamitApp",
-    page_icon="✅",
-    layout="centered"
-)
+st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
 
 st.markdown("""
 <style>
-    .block-container { padding-top: 1.5rem; max-width: 600px; }
-    h1 { font-size: 1.6rem; font-weight: 700; }
-    h2 { font-size: 1.2rem; font-weight: 600; }
-    .paso-card {
-        background: #1e2130;
-        border-radius: 12px;
-        padding: 1.5rem;
-        margin-bottom: 1rem;
-    }
-    .paso-num {
-        font-size: 0.8rem;
-        color: #888;
-        margin-bottom: 0.3rem;
-    }
-    .paso-titulo {
-        font-size: 1.2rem;
-        font-weight: 600;
-        margin-bottom: 0.5rem;
-    }
-    .paso-desc {
-        font-size: 0.95rem;
-        color: #ccc;
-        line-height: 1.5;
-    }
-    div[data-testid="stButton"] button {
-        width: 100%;
-        font-size: 1rem;
-        padding: 0.6rem;
-        border-radius: 8px;
-    }
-    .logo-container {
-        display: flex;
-        justify-content: center;
-        margin-bottom: 1.5rem;
-    }
+    .block-container { padding-top: 1.5rem; }
+    h1 { font-size: 1.6rem; font-weight: 600; }
+    .stTabs [data-baseweb="tab"] { font-size: 0.9rem; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="logo-container"><img src="https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png" style="width:180px;background:black;border-radius:12px;padding:12px;"></div>', unsafe_allow_html=True)
-
-LOGO_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png"
-
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMzIyMjMsImV4cCI6MjA5MjcwODIyM30.jznrwuusfgtVkrzz_bfdsxq3tVsv-uV2tyMeIlh3bZg"
+
+DIAS = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
+DIAS_ORDER = [0, 1, 2, 3, 4, 5, 6]
+COLORS = ["#378ADD", "#5DCAA5", "#D85A30", "#7F77DD", "#BA7517", "#D4537E", "#639922"]
+WEEK_COLORS = [
+    "#E63946","#F4A261","#2A9D8F","#457B9D","#9B2226",
+    "#6A4C93","#1982C4","#8AC926","#FF595E","#6A994E",
+    "#BC6C25","#4CC9F0","#F72585","#3A0CA3","#4361EE",
+]
 
 @st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def init_state():
-    for key in ["empleado_id", "empleado_nombre", "proceso_id", "proceso_nombre",
-                "pasos", "paso_actual", "ejecucion_id", "no_puedo_activo"]:
-        if key not in st.session_state:
-            st.session_state[key] = None
-    if "paso_actual" not in st.session_state or st.session_state.paso_actual is None:
-        st.session_state.paso_actual = 0
-    if "no_puedo_activo" not in st.session_state:
-        st.session_state.no_puedo_activo = False
+def parse_csv(file):
+    content = file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except:
+        text = content.decode("latin-1")
+    lines = [l for l in text.strip().split("\n") if l.strip()]
+    sep = ";" if ";" in lines[0] else ","
+    rows = []
+    for line in lines[1:]:
+        parts = line.strip().split(sep)
+        if len(parts) < 12:
+            continue
+        try:
+            date_str = parts[0].strip().strip('"')
+            val = float(parts[11].replace(",", "."))
+            if val == 0:
+                continue
+            dt = datetime.strptime(date_str, "%d/%m/%Y %H:%M:%S")
+            rows.append({
+                "fecha": dt.strftime("%Y-%m-%d"),
+                "hora": dt.hour,
+                "dow": dt.weekday(),
+                "valor": val,
+                "ntrans": int(parts[1]) if parts[1].strip().isdigit() else 0,
+                "items": int(parts[7]) if parts[7].strip().isdigit() else 0,
+            })
+        except:
+            continue
+    return rows
 
-def reset():
-    for key in ["empleado_id", "empleado_nombre", "proceso_id", "proceso_nombre",
-                "pasos", "paso_actual", "ejecucion_id", "no_puedo_activo"]:
-        st.session_state[key] = None
-    st.session_state.paso_actual = 0
-    st.session_state.no_puedo_activo = False
+def save_to_supabase(rows):
+    sb = get_supabase()
+    # Borra TODA la tabla antes de insertar
+    sb.table("ventas").delete().neq("id", 0).execute()
+    for i in range(0, len(rows), 500):
+        sb.table("ventas").insert(rows[i:i+500]).execute()
 
-init_state()
-sb = get_supabase()
+def load_from_supabase():
+    sb = get_supabase()
+    result = sb.table("ventas").select("*").execute()
+    if not result.data:
+        return pd.DataFrame()
+    df = pd.DataFrame(result.data)
+    df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
+    return df
 
-# ── PANTALLA 1: Selección de empleado ────────────────────────
-if st.session_state.empleado_id is None:
-    st.title("🍜 VietnamitApp")
-    st.markdown("### ¿Quién eres?")
+def calcular_promedios_dia(df):
+    dias_unicos = df.groupby("dow")["fecha"].nunique()
+    totales = df.groupby("dow")["valor"].sum()
+    return (totales / dias_unicos).reindex(DIAS_ORDER, fill_value=0)
 
-    emp_res = sb.table("empleados").select("*").order("nombre").execute()
-    empleados = emp_res.data or []
+def calcular_promedios_hora(df):
+    dias_por_hora = df.groupby("hora")["fecha"].nunique()
+    totales = df.groupby("hora")["valor"].sum()
+    return (totales / dias_por_hora).sort_index()
 
-    if not empleados:
-        st.warning("No hay empleados configurados. Contacta con el administrador.")
-        st.stop()
+def calcular_heatmap(df):
+    dias_unicos = df.groupby(["dow", "hora"])["fecha"].nunique()
+    totales = df.groupby(["dow", "hora"])["valor"].sum()
+    avg = (totales / dias_unicos).reset_index()
+    avg.columns = ["dow", "hora", "avg"]
+    return avg
 
-    for emp in empleados:
-        if st.button(emp["nombre"], key=f"emp_{emp['id']}", use_container_width=True):
-            st.session_state.empleado_id = emp["id"]
-            st.session_state.empleado_nombre = emp["nombre"]
-            st.rerun()
-    st.stop()
+def calcular_coste_staff_por_hora(sb):
+    emp_res = sb.table("empleados").select("*").execute()
+    empleados = {e["id"]: e["coste_hora"] for e in (emp_res.data or [])}
+    turnos_res = sb.table("turnos").select("*").execute()
+    coste_por_hora = {}
+    for tr in (turnos_res.data or []):
+        slot = tr["slot"]
+        hora = int(slot.split(":")[0])
+        coste_slot = empleados.get(tr["empleado_id"], 10) * 0.5
+        coste_por_hora[hora] = coste_por_hora.get(hora, 0) + coste_slot
+    return {h: v / 7 for h, v in coste_por_hora.items()}
 
-# ── PANTALLA 2: Selección de proceso ─────────────────────────
-if st.session_state.proceso_id is None:
-    st.title(f"Hola, {st.session_state.empleado_nombre} 👋")
-    st.markdown("### ¿Qué vas a hacer?")
+def calcular_por_semana(df):
+    df2 = df.copy()
+    df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
+    df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
+    df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
+    dia_totales = df2.groupby(["semana", "fecha", "dow"])["valor"].sum().reset_index()
+    semana_dow = dia_totales.groupby(["semana", "dow"])["valor"].mean().reset_index()
+    semana_labels = {}
+    for s in semana_dow["semana"].unique():
+        lunes = pd.Timestamp(s)
+        domingo = lunes + timedelta(days=6)
+        semana_labels[s] = f"{lunes.strftime('%d/%m')} – {domingo.strftime('%d/%m/%y')}"
+    semana_dow["label"] = semana_dow["semana"].map(semana_labels)
+    return semana_dow, semana_labels
 
-    proc_res = sb.table("procesos").select("*").eq("activo", True).order("orden").execute()
-    procesos = proc_res.data or []
+def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", ymax=None, turnos_data=None, empleados_data=None, dow_filter=None):
+    df_filtrado = df_filtrado.copy()
+    df_filtrado["fecha_ts"] = pd.to_datetime(df_filtrado["fecha"])
+    df_filtrado["dow_label"] = df_filtrado["fecha_ts"].dt.weekday.map(DIAS)
+    df_filtrado["fecha_str"] = df_filtrado["fecha_ts"].dt.strftime("%d/%m/%Y")
+    dia_hora = df_filtrado.groupby(["fecha", "fecha_str", "dow_label", "hora"])["valor"].sum().reset_index()
+    horas_sorted = sorted(dia_hora["hora"].unique())
+    fig = go.Figure()
+    for h in horas_sorted:
+        subset = dia_hora[dia_hora["hora"] == h]
+        hover = subset.apply(lambda r: f"{r['dow_label']} {r['fecha_str']}<br>€{r['valor']:.2f}", axis=1).tolist()
+        fig.add_trace(go.Box(
+            y=subset["valor"].tolist(), name=f"{h}:00",
+            marker_color=color, line_color=line_color,
+            boxmean=True, boxpoints="all", jitter=0.3,
+            marker=dict(size=5, opacity=0.5, color=color),
+            text=hover, hovertemplate="%{text}<extra></extra>",
+        ))
+    fig.update_layout(
+        title=titulo, yaxis_title="€ ventas", xaxis_title="Hora",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, ymax] if ymax else None),
+        xaxis=dict(showgrid=False), showlegend=False, height=480, margin=dict(t=60, b=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("La caja = rango central del 50% de días. Línea = mediana. Cruz = media. Cada punto = un día real.")
 
-    if not procesos:
-        st.warning("No hay procesos configurados. Contacta con el administrador.")
-    else:
-        for proc in procesos:
-            if st.button(f"**{proc['nombre']}**" + (f"\n{proc['descripcion']}" if proc.get('descripcion') else ""),
-                        key=f"proc_{proc['id']}", use_container_width=True):
-                # Cargar pasos
-                pasos_res = sb.table("pasos").select("*").eq("proceso_id", proc["id"]).order("orden").execute()
-                pasos = pasos_res.data or []
-                if not pasos:
-                    st.warning("Este proceso no tiene pasos configurados.")
-                else:
-                    st.session_state.proceso_id = proc["id"]
-                    st.session_state.proceso_nombre = proc["nombre"]
-                    st.session_state.pasos = pasos
-                    st.session_state.paso_actual = 0
-                    # Crear ejecución
-                    ejec = sb.table("ejecuciones").insert({
-                        "empleado_id": st.session_state.empleado_id,
-                        "proceso_id": proc["id"],
-                    }).execute()
-                    st.session_state.ejecucion_id = ejec.data[0]["id"]
+    if turnos_data and empleados_data:
+        emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
+        coste_hora = {}
+        for tr in turnos_data:
+            dow_tr = int(tr["dia_semana"])
+            if dow_filter is not None and dow_tr != int(dow_filter):
+                continue
+            slot = tr["slot"]
+            h = int(slot.split(":")[0])
+            coste_slot = emp_coste.get(tr["empleado_id"], 10) * 0.5
+            coste_hora[h] = coste_hora.get(h, 0) + coste_slot
+
+        if dow_filter is None and coste_hora:
+            dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_data))
+            if dias_con_turnos > 0:
+                coste_hora = {h: v / dias_con_turnos for h, v in coste_hora.items()}
+
+        avg_ventas = dia_hora.groupby("hora")["valor"].mean()
+        # Solo mostrar horas que tienen ventas reales en el filtro actual
+        horas_comunes = sorted(avg_ventas.index)
+        ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]
+        coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
+        margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
+        margen_colors = ["#5DCAA5" if m >= 0 else "#E63946" for m in margen_vals]
+        horas_labels = [f"{h}:00" for h in horas_comunes]
+
+        fig_rent = go.Figure()
+        fig_rent.add_trace(go.Bar(x=horas_labels, y=ventas_vals, name="Ventas promedio", marker_color="rgba(93,202,165,0.5)", marker_line_width=0))
+        fig_rent.add_trace(go.Bar(x=horas_labels, y=coste_vals, name="Coste personal", marker_color="rgba(230,57,70,0.5)", marker_line_width=0))
+        fig_rent.add_trace(go.Scatter(
+            x=horas_labels, y=margen_vals, name="Margen",
+            mode="lines+markers+text", line=dict(color="#F4A261", width=2),
+            marker=dict(size=7, color=margen_colors),
+            text=[f"€{m:+.0f}" for m in margen_vals],
+            textposition="top center", textfont=dict(size=10),
+        ))
+        fig_rent.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
+        fig_rent.update_layout(
+            title="Ventas netas (−25% producto) vs coste de personal por franja horaria",
+            yaxis_title="€", xaxis_title="Hora",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+            xaxis=dict(showgrid=False), barmode="overlay",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
+            height=380, margin=dict(t=50, b=80),
+        )
+        st.plotly_chart(fig_rent, use_container_width=True)
+        st.caption("Ventas netas = venta media × 75% (descontado 25% coste de producto). Margen = ventas netas − coste de personal. Verde = rentable, rojo = coste supera ventas netas.")
+
+    with st.expander("Ver datos"):
+        resumen = dia_hora.groupby("hora")["valor"].agg(
+            Media="mean", Mediana="median", Min="min", Max="max", Std="std", Instancias="count"
+        ).round(2).reset_index()
+        resumen["hora"] = resumen["hora"].apply(lambda h: f"{h}:00")
+        resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
+        st.dataframe(resumen, hide_index=True, use_container_width=True)
+
+def render_dashboard(df):
+    fecha_min = df["fecha"].min()
+    fecha_max = df["fecha"].max()
+    n_dias = df["fecha"].nunique()
+    total_ventas = df["valor"].sum()
+    mejor_dow = calcular_promedios_dia(df).idxmax()
+    mejor_hora = calcular_promedios_hora(df).idxmax()
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Período", f"{fecha_min.strftime('%d/%m')} – {fecha_max.strftime('%d/%m/%Y')}")
+    col2.metric("Días con datos", n_dias)
+    col3.metric("Total ventas", f"€{total_ventas:,.2f}")
+    col4.metric("Mejor día", DIAS[mejor_dow])
+    col5.metric("Mejor franja", f"{mejor_hora}:00h")
+
+    st.divider()
+
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📅 Por día de semana",
+        "🕐 Por franja horaria",
+        "🌡️ Mapa de calor",
+        "📈 Por semana",
+        "👥 Turnos",
+        "📋 Checklists"
+    ])
+
+    with tab1:
+        avg_dow = calcular_promedios_dia(df)
+        labels = [DIAS[d] for d in DIAS_ORDER]
+        values = [round(avg_dow.get(d, 0), 2) for d in DIAS_ORDER]
+        fig = go.Figure(go.Bar(
+            x=labels, y=values, marker_color=COLORS, marker_line_width=0,
+            text=[f"€{v:.0f}" for v in values], textposition="outside",
+        ))
+        fig.update_layout(
+            title="Venta media por día de la semana (€, IVA incl.)", yaxis_title="€ promedio",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+            xaxis=dict(showgrid=False), showlegend=False, height=400, margin=dict(t=50, b=20),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        with st.expander("Ver datos"):
+            st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
+
+    with tab2:
+        import datetime as dt_franja
+        fecha_min_data = df["fecha"].min()
+        fecha_max_data = df["fecha"].max()
+        today = dt_franja.date.today()
+
+        opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
+        seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
+        fc2, fc3 = st.columns(2)
+        fecha_desde = fc2.date_input("Desde:", value=fecha_min_data, min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
+        fecha_hasta = fc3.date_input("Hasta:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_hasta")
+
+        df_f = df.copy()
+        df_f["fecha_ts"] = pd.to_datetime(df_f["fecha"])
+        df_f["dow_label"] = df_f["fecha_ts"].dt.weekday.map(DIAS)
+        df_f = df_f[(df_f["fecha"] >= fecha_desde) & (df_f["fecha"] <= fecha_hasta)]
+        if seleccion != "Todos los días":
+            df_f = df_f[df_f["dow_label"] == seleccion]
+
+        if df_f.empty:
+            st.warning("No hay datos para ese filtro.")
+        else:
+            n_inst = df_f["fecha"].nunique()
+            titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
+            st.caption(f"{n_inst} instancias de {titulo_sel} con datos · {fecha_desde.strftime('%d/%m/%Y')} – {fecha_hasta.strftime('%d/%m/%Y')}")
+            dia_hora_global = df.groupby(["fecha", "hora"])["valor"].sum()
+            ymax_global = dia_hora_global.max() * 1.15
+            sb_t2 = get_supabase()
+            turnos_t2 = sb_t2.table("turnos").select("*").execute().data or []
+            empleados_t2 = sb_t2.table("empleados").select("*").execute().data or []
+            dow_filter_t2 = None
+            if seleccion != "Todos los días":
+                dow_filter_t2 = [d for d in DIAS_ORDER if DIAS[d] == seleccion][0]
+            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
+                ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
+
+    with tab3:
+        hm = calcular_heatmap(df)
+        pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
+        pivot.index = [DIAS[d] for d in DIAS_ORDER]
+        pivot.columns = [f"{h}:00" for h in pivot.columns]
+        fig3 = px.imshow(
+            pivot, color_continuous_scale=[[0, "#E1F5EE"], [0.5, "#1D9E75"], [1, "#04342C"]],
+            aspect="auto", text_auto=".0f", labels={"color": "€ promedio"},
+        )
+        fig3.update_layout(
+            title="Venta media por día y franja horaria (€, IVA incl.)",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            height=350, margin=dict(t=50, b=20), xaxis_title="Hora", yaxis_title="",
+        )
+        fig3.update_traces(textfont_size=11)
+        st.plotly_chart(fig3, use_container_width=True)
+
+    with tab4:
+        semana_dow, semana_labels = calcular_por_semana(df)
+        semanas_sorted = sorted(semana_labels.keys())
+        labels_sorted = [semana_labels[s] for s in semanas_sorted]
+
+        st.markdown("**Selecciona las semanas a mostrar:**")
+        cols = st.columns(min(len(semanas_sorted), 4))
+        seleccionadas = []
+        for i, (s, lbl) in enumerate(zip(semanas_sorted, labels_sorted)):
+            col = cols[i % len(cols)]
+            color_sem = WEEK_COLORS[i % len(WEEK_COLORS)]
+            c_icon, c_check = col.columns([1, 6])
+            c_icon.markdown(f'<div style="width:18px;height:18px;background:{color_sem};border-radius:3px;margin-top:6px;"></div>', unsafe_allow_html=True)
+            if c_check.checkbox(lbl, value=True, key=f"semana_{s}"):
+                seleccionadas.append(s)
+
+        if not seleccionadas:
+            st.warning("Selecciona al menos una semana.")
+        else:
+            fig4 = go.Figure()
+            for i, s in enumerate(semanas_sorted):
+                if s not in seleccionadas:
+                    continue
+                color = WEEK_COLORS[i % len(WEEK_COLORS)]
+                datos = semana_dow[semana_dow["semana"] == s].set_index("dow")
+                vals = [round(datos.loc[d, "valor"], 2) if d in datos.index else None for d in DIAS_ORDER]
+                fig4.add_trace(go.Scatter(
+                    x=[DIAS[d] for d in DIAS_ORDER], y=vals, mode="lines+markers",
+                    name=semana_labels[s], line=dict(color=color, width=2),
+                    marker=dict(size=7, color=color), connectgaps=False,
+                ))
+            fig4.update_layout(
+                title="Ventas por día de semana — comparativa semanal (€, IVA incl.)",
+                yaxis_title="€ ventas", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, 1200]),
+                xaxis=dict(showgrid=False),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
+                height=480, margin=dict(t=50, b=120),
+            )
+            st.plotly_chart(fig4, use_container_width=True)
+
+            df2 = df.copy()
+            df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
+            df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="d")
+            df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
+            avg_semana = df2.groupby("semana").agg(total=("valor","sum"), franjas=("valor","count")).reset_index()
+            avg_semana["avg_franja"] = (avg_semana["total"] / avg_semana["franjas"]).round(2)
+            avg_semana = avg_semana[avg_semana["semana"].isin(semanas_sorted)]
+            avg_semana["label"] = avg_semana["semana"].map(semana_labels)
+            avg_semana = avg_semana.sort_values("semana")
+
+            fig5 = go.Figure(go.Scatter(
+                x=avg_semana["label"], y=avg_semana["avg_franja"],
+                mode="lines+markers+text", line=dict(color="#5DCAA5", width=2),
+                marker=dict(size=8, color="#5DCAA5"),
+                text=[f"€{v:.0f}" for v in avg_semana["avg_franja"]],
+                textposition="top center", textfont=dict(size=11),
+            ))
+            fig5.update_layout(
+                title="Evolución del promedio de ventas por franja horaria trabajada (€, IVA incl.)",
+                yaxis_title="€ promedio/franja", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False, tickangle=-30),
+                showlegend=False, height=350, margin=dict(t=50, b=80),
+            )
+            st.plotly_chart(fig5, use_container_width=True)
+
+            total_semana = df2.groupby("semana")["valor"].sum().reset_index()
+            total_semana = total_semana[total_semana["semana"].isin(semanas_sorted)]
+            total_semana["label"] = total_semana["semana"].map(semana_labels)
+            total_semana = total_semana.sort_values("semana")
+            bar_colors = [WEEK_COLORS[semanas_sorted.index(s) % len(WEEK_COLORS)] for s in total_semana["semana"]]
+
+            fig6 = go.Figure(go.Bar(
+                x=total_semana["label"], y=total_semana["valor"].round(2),
+                marker_color=bar_colors, marker_line_width=0,
+                text=[f"€{v:.0f}" for v in total_semana["valor"]], textposition="outside",
+            ))
+            fig6.update_layout(
+                title="Total de ventas por semana (€, IVA incl.)",
+                yaxis_title="€ total", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False, tickangle=-30),
+                showlegend=False, height=380, margin=dict(t=50, b=80),
+            )
+            st.plotly_chart(fig6, use_container_width=True)
+
+    with tab5:
+        import datetime as dt_mod
+        sb = get_supabase()
+
+        emp_res = sb.table("empleados").select("*").order("id").execute()
+        empleados = emp_res.data if emp_res.data else []
+
+        st.markdown("### Empleados")
+        st.caption("Edita nombres y coste/hora. Los turnos se eliminan automáticamente al borrar un empleado.")
+
+        header = st.columns([3, 2, 1, 1])
+        header[0].markdown("**Nombre**")
+        header[1].markdown("**€/hora**")
+        header[2].markdown("**Guardar**")
+        header[3].markdown("**Eliminar**")
+
+        for emp in empleados:
+            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom_{emp['id']}")
+            nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos_{emp['id']}")
+            if c3.button("💾", key=f"saveemp_{emp['id']}"):
+                sb.table("empleados").update({"nombre": nuevo_nombre, "coste_hora": nuevo_coste}).eq("id", emp["id"]).execute()
+                st.success(f"✅ {nuevo_nombre} guardado")
+                st.rerun()
+            if c4.button("🗑️", key=f"delemp_{emp['id']}"):
+                st.session_state[f"confirm_del_{emp['id']}"] = True
+            if st.session_state.get(f"confirm_del_{emp['id']}"):
+                st.warning(f"¿Seguro que quieres eliminar a **{emp['nombre']}** y todos sus turnos?")
+                conf1, conf2 = st.columns(2)
+                if conf1.button("✅ Sí, eliminar", key=f"yes_del_{emp['id']}"):
+                    sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
+                    sb.table("empleados").delete().eq("id", emp["id"]).execute()
+                    st.session_state.pop(f"confirm_del_{emp['id']}", None)
+                    st.success(f"✅ {emp['nombre']} eliminado")
+                    st.rerun()
+                if conf2.button("❌ Cancelar", key=f"no_del_{emp['id']}"):
+                    st.session_state.pop(f"confirm_del_{emp['id']}", None)
                     st.rerun()
 
-    st.markdown("---")
-    if st.button("← Cambiar empleado", key="back_emp"):
-        reset()
-        st.rerun()
-    st.stop()
+        st.markdown("")
+        with st.expander("➕ Añadir empleado"):
+            na1, na2, na3 = st.columns([3, 2, 1])
+            nuevo_emp_nombre = na1.text_input("Nombre:", key="new_emp_nombre")
+            nuevo_emp_coste = na2.number_input("€/hora:", value=10.0, min_value=0.0, step=0.5, format="%.2f", key="new_emp_coste")
+            if na3.button("➕ Añadir", key="add_emp"):
+                if nuevo_emp_nombre.strip():
+                    sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
+                    st.success(f"✅ {nuevo_emp_nombre} añadido")
+                    st.rerun()
+                else:
+                    st.warning("Escribe un nombre.")
 
-# ── PANTALLA 3: Pasos ─────────────────────────────────────────
-pasos = st.session_state.pasos or []
-paso_actual = st.session_state.paso_actual or 0
+        st.divider()
+        st.markdown("### Turnos por día")
 
-# Completado
-if paso_actual >= len(pasos):
-    # Marcar ejecución como completada
-    sb.table("ejecuciones").update({
-        "completado": True,
-        "completado_at": datetime.utcnow().isoformat()
-    }).eq("id", st.session_state.ejecucion_id).execute()
+        slots = []
+        current = dt_mod.datetime(2000, 1, 1, 7, 0)
+        end = dt_mod.datetime(2000, 1, 2, 1, 30)
+        while current < end:
+            slots.append(current.strftime("%H:%M"))
+            current += dt_mod.timedelta(minutes=30)
 
-    st.balloons()
-    st.title("✅ ¡Todo listo!")
-    st.markdown(f"**{st.session_state.proceso_nombre}** completado por **{st.session_state.empleado_nombre}**.")
-    st.markdown(f"*{datetime.now().strftime('%d/%m/%Y %H:%M')}*")
-    st.markdown("---")
-    if st.button("🔄 Hacer otro proceso", use_container_width=True):
-        st.session_state.proceso_id = None
-        st.session_state.proceso_nombre = None
-        st.session_state.pasos = None
-        st.session_state.paso_actual = 0
-        st.session_state.ejecucion_id = None
-        st.session_state.no_puedo_activo = False
-        st.rerun()
-    if st.button("👋 Salir", use_container_width=True):
-        reset()
-        st.rerun()
-    st.stop()
+        emp_ids = [e["id"] for e in empleados]
+        emp_nombres = {e["id"]: e["nombre"] for e in empleados}
+        emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
 
-paso = pasos[paso_actual]
-n_total = len(pasos)
+        with st.expander("📋 Copiar turnos de un día a otro"):
+            cc1, cc2, cc3 = st.columns([2, 2, 2])
+            dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
+            dias_destino_opts = [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen]
+            dias_destino_sel = cc2.multiselect("Copiar a:", dias_destino_opts, key="copy_to")
+            if cc3.button("📋 Copiar", key="do_copy"):
+                if not dias_destino_sel:
+                    st.warning("Selecciona al menos un día destino.")
+                else:
+                    dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
+                    turnos_res_copy = sb.table("turnos").select("*").execute()
+                    turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res_copy.data or []) if tr["dia_semana"] == dow_origen]
+                    for dia_dest_label in dias_destino_sel:
+                        dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
+                        sb.table("turnos").delete().eq("dia_semana", dow_dest).execute()
+                        if turnos_origen:
+                            sb.table("turnos").insert([
+                                {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot}
+                                for eid, slot in turnos_origen
+                            ]).execute()
+                    st.success(f"✅ Turnos del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
+                    st.rerun()
 
-# Barra de progreso
-st.progress((paso_actual) / n_total)
-st.caption(f"Paso {paso_actual + 1} de {n_total} · {st.session_state.proceso_nombre} · {st.session_state.empleado_nombre}")
+        turnos_res = sb.table("turnos").select("*").execute()
+        turnos_set = set()
+        for tr in (turnos_res.data or []):
+            turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
 
-# Tarjeta del paso
-st.markdown(f'<div class="paso-num">Paso {paso_actual + 1}</div>', unsafe_allow_html=True)
-st.markdown(f"## {paso['titulo']}")
+        dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
 
-if paso.get("descripcion"):
-    st.markdown(paso["descripcion"])
+        for di, dow in enumerate(DIAS_ORDER):
+            with dias_tabs[di]:
+                # Build DataFrame for this day
+                data = {}
+                for slot in slots:
+                    row = {}
+                    for eid in emp_ids:
+                        row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, dow, slot) in turnos_set
+                    data[slot] = row
+                df_grid = pd.DataFrame(data).T
+                df_grid.index.name = "Hora"
+                df_grid = df_grid.reset_index()
 
-if paso.get("foto_url"):
-    st.image(paso["foto_url"], use_container_width=True)
+                edited = st.data_editor(
+                    df_grid,
+                    key=f"grid_{dow}",
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={"Hora": st.column_config.TextColumn("Hora", disabled=True)},
+                    height=min(400, len(slots) * 35 + 40),
+                )
 
-st.markdown("---")
+                if st.button(f"💾 Guardar turnos {DIAS[dow]}", key=f"saveturno_{dow}", type="primary"):
+                    sb.table("turnos").delete().eq("dia_semana", dow).execute()
+                    to_insert = []
+                    for _, row in edited.iterrows():
+                        slot = row["Hora"]
+                        for eid in emp_ids:
+                            col_name = emp_nombres.get(eid, f"Emp {eid}")
+                            if row.get(col_name, False):
+                                to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
+                    if to_insert:
+                        sb.table("turnos").insert(to_insert).execute()
+                    # Reset turnos_set
+                    turnos_res = sb.table("turnos").select("*").execute()
+                    turnos_set = set((tr["empleado_id"], tr["dia_semana"], tr["slot"]) for tr in (turnos_res.data or []))
+                    st.success(f"✅ {len(to_insert)} slots guardados para {DIAS[dow]}")
+                    st.rerun()
 
-# Botones
-if not st.session_state.no_puedo_activo:
-    col1, col2 = st.columns([3, 1])
-    if col1.button("✅ Hecho", key="btn_hecho", type="primary", use_container_width=True):
-        sb.table("ejecucion_pasos").insert({
-            "ejecucion_id": st.session_state.ejecucion_id,
-            "paso_id": paso["id"],
-            "estado": "hecho",
-        }).execute()
-        st.session_state.paso_actual += 1
-        st.session_state.no_puedo_activo = False
-        st.rerun()
+                # Resumen
+                horas_dia = {}
+                for _, row in edited.iterrows():
+                    for eid in emp_ids:
+                        col_name = emp_nombres.get(eid, f"Emp {eid}")
+                        if row.get(col_name, False):
+                            horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
+                if any(horas_dia.values()):
+                    st.markdown("**Resumen del día:**")
+                    res_cols = st.columns(len(emp_ids))
+                    for ei, eid in enumerate(emp_ids):
+                        h = horas_dia.get(eid, 0)
+                        coste = h * emp_coste.get(eid, 10)
+                        res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
 
-    if col2.button("⚠️ No puedo", key="btn_nopuedo", use_container_width=True):
-        st.session_state.no_puedo_activo = True
-        st.rerun()
+                st.divider()
+        st.markdown("### Resumen semanal")
+        turnos_all = sb.table("turnos").select("*").execute().data or []
+        resumen_rows = []
+        for emp in empleados:
+            eid = emp["id"]
+            total_h = sum(0.5 for tr in turnos_all if tr["empleado_id"] == eid)
+            total_coste = total_h * emp["coste_hora"]
+            resumen_rows.append({
+                "Empleado": emp["nombre"],
+                "Horas/semana": f"{total_h:.1f}h",
+                "Coste semanal": f"€{total_coste:.2f}",
+                "Coste mensual est.": f"€{total_coste * 4.33:.2f}",
+            })
+        st.dataframe(pd.DataFrame(resumen_rows), hide_index=True, use_container_width=True)
+        total_sem = sum(
+            sum(0.5 for tr in turnos_all if tr["empleado_id"] == e["id"]) * e["coste_hora"]
+            for e in empleados
+        )
+        st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
+
+    # ── TAB 6: Checklists (admin) ────────────────────────────
+    with tab6:
+        sb6 = get_supabase()
+        st.markdown("### Procesos")
+
+        proc_res = sb6.table("procesos").select("*").order("orden").execute()
+        procesos = proc_res.data or []
+
+        # Añadir proceso
+        with st.expander("➕ Nuevo proceso"):
+            np1, np2, np3 = st.columns([3, 1, 1])
+            new_proc_nombre = np1.text_input("Nombre:", key="new_proc_nombre")
+            new_proc_orden = np2.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden")
+            new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
+            if np3.button("➕ Añadir", key="add_proc"):
+                if new_proc_nombre.strip():
+                    sb6.table("procesos").insert({
+                        "nombre": new_proc_nombre.strip(),
+                        "descripcion": new_proc_desc.strip() or None,
+                        "orden": int(new_proc_orden),
+                        "activo": True
+                    }).execute()
+                    st.success(f"✅ Proceso '{new_proc_nombre}' creado")
+                    st.rerun()
+                else:
+                    st.warning("Escribe un nombre.")
+
+        if not procesos:
+            st.info("No hay procesos. Crea uno arriba.")
+        else:
+            proc_sel = st.selectbox(
+                "Selecciona proceso para editar:",
+                options=[p["id"] for p in procesos],
+                format_func=lambda x: next(p["nombre"] for p in procesos if p["id"] == x),
+                key="proc_sel"
+            )
+            proc = next(p for p in procesos if p["id"] == proc_sel)
+
+            with st.expander(f"✏️ Editar proceso: {proc['nombre']}"):
+                e1, e2 = st.columns([3, 1])
+                edit_nombre = e1.text_input("Nombre:", value=proc["nombre"], key=f"ep_nom_{proc['id']}")
+                edit_orden = e2.number_input("Orden:", value=int(proc.get("orden") or 0), key=f"ep_ord_{proc['id']}")
+                edit_desc = st.text_input("Descripción:", value=proc.get("descripcion") or "", key=f"ep_desc_{proc['id']}")
+                edit_activo = st.checkbox("Activo", value=proc.get("activo", True), key=f"ep_act_{proc['id']}")
+                ec1, ec2 = st.columns(2)
+                if ec1.button("💾 Guardar cambios", key=f"save_proc_{proc['id']}"):
+                    sb6.table("procesos").update({
+                        "nombre": edit_nombre,
+                        "descripcion": edit_desc or None,
+                        "orden": int(edit_orden),
+                        "activo": edit_activo
+                    }).eq("id", proc["id"]).execute()
+                    st.success("✅ Proceso actualizado")
+                    st.rerun()
+                if ec2.button("🗑️ Eliminar proceso", key=f"del_proc_{proc['id']}"):
+                    st.session_state[f"confirm_del_proc_{proc['id']}"] = True
+                if st.session_state.get(f"confirm_del_proc_{proc['id']}"):
+                    st.error(f"¿Eliminar '{proc['nombre']}' y todos sus pasos?")
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("✅ Sí, eliminar", key=f"yes_del_proc_{proc['id']}"):
+                        sb6.table("procesos").delete().eq("id", proc["id"]).execute()
+                        st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
+                        st.success("✅ Proceso eliminado")
+                        st.rerun()
+                    if dc2.button("❌ Cancelar", key=f"no_del_proc_{proc['id']}"):
+                        st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
+                        st.rerun()
+
+            st.markdown(f"### Pasos de: {proc['nombre']}")
+
+            pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
+            pasos = pasos_res.data or []
+
+            # Añadir paso
+            with st.expander("➕ Añadir paso"):
+                pa1, pa2 = st.columns([3, 1])
+                new_paso_titulo = pa1.text_input("Título del paso:", key="new_paso_titulo")
+                new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key="new_paso_orden")
+                new_paso_desc = st.text_area("Descripción (opcional):", key="new_paso_desc", height=80)
+                new_paso_foto = st.text_input("URL de foto (opcional):", key="new_paso_foto", placeholder="https://...")
+                if st.button("➕ Añadir paso", key="add_paso"):
+                    if new_paso_titulo.strip():
+                        sb6.table("pasos").insert({
+                            "proceso_id": proc_sel,
+                            "titulo": new_paso_titulo.strip(),
+                            "descripcion": new_paso_desc.strip() or None,
+                            "foto_url": new_paso_foto.strip() or None,
+                            "orden": int(new_paso_orden),
+                        }).execute()
+                        st.success(f"✅ Paso añadido")
+                        st.rerun()
+                    else:
+                        st.warning("Escribe un título.")
+
+            if not pasos:
+                st.info("Este proceso no tiene pasos. Añade uno arriba.")
+            else:
+                for paso in pasos:
+                    with st.expander(f"**{paso['orden']}.** {paso['titulo']}"):
+                        sp1, sp2 = st.columns([3, 1])
+                        s_titulo = sp1.text_input("Título:", value=paso["titulo"], key=f"sp_tit_{paso['id']}")
+                        s_orden = sp2.number_input("Orden:", value=int(paso["orden"]), min_value=1, key=f"sp_ord_{paso['id']}")
+                        s_desc = st.text_area("Descripción:", value=paso.get("descripcion") or "", key=f"sp_desc_{paso['id']}", height=80)
+                        s_foto = st.text_input("URL foto:", value=paso.get("foto_url") or "", key=f"sp_foto_{paso['id']}")
+                        if s_foto:
+                            st.image(s_foto, width=200)
+                        sc1, sc2 = st.columns(2)
+                        if sc1.button("💾 Guardar", key=f"save_paso_{paso['id']}"):
+                            sb6.table("pasos").update({
+                                "titulo": s_titulo,
+                                "descripcion": s_desc or None,
+                                "foto_url": s_foto or None,
+                                "orden": int(s_orden),
+                            }).eq("id", paso["id"]).execute()
+                            st.success("✅ Paso guardado")
+                            st.rerun()
+                        if sc2.button("🗑️ Eliminar", key=f"del_paso_{paso['id']}"):
+                            sb6.table("pasos").delete().eq("id", paso["id"]).execute()
+                            st.success("✅ Paso eliminado")
+                            st.rerun()
+
+        st.divider()
+        st.markdown("### Historial de ejecuciones")
+
+        ejec_res = sb6.table("ejecuciones").select("*, empleados(nombre), procesos(nombre)").order("iniciado_at", desc=True).limit(50).execute()
+        ejecuciones = ejec_res.data or []
+
+        if not ejecuciones:
+            st.info("Aún no hay ejecuciones registradas.")
+        else:
+            rows = []
+            for e in ejecuciones:
+                rows.append({
+                    "Fecha": pd.Timestamp(e["iniciado_at"]).strftime("%d/%m/%Y %H:%M"),
+                    "Empleado": e.get("empleados", {}).get("nombre", "—"),
+                    "Proceso": e.get("procesos", {}).get("nombre", "—"),
+                    "Completado": "✅" if e["completado"] else "⏳",
+                })
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+            # Detalle de ejecución
+            ejec_ids = {f"{e.get('empleados',{}).get('nombre','?')} — {e.get('procesos',{}).get('nombre','?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"] for e in ejecuciones}
+            sel_ejec = st.selectbox("Ver detalle de ejecución:", list(ejec_ids.keys()), key="sel_ejec")
+            if sel_ejec:
+                ejec_id = ejec_ids[sel_ejec]
+                ep_res = sb6.table("ejecucion_pasos").select("*, pasos(titulo, orden)").eq("ejecucion_id", ejec_id).order("timestamp").execute()
+                ep_data = ep_res.data or []
+                if ep_data:
+                    for ep in ep_data:
+                        estado = "✅ Hecho" if ep["estado"] == "hecho" else "⚠️ No pudo"
+                        titulo = ep.get("pasos", {}).get("titulo", "—")
+                        orden = ep.get("pasos", {}).get("orden", "?")
+                        st.markdown(f"**{orden}. {titulo}** — {estado}")
+                        if ep.get("nota"):
+                            st.caption(f"📝 {ep['nota']}")
+                else:
+                    st.info("No hay pasos registrados para esta ejecución.")
+
+    st.divider()
+    st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
+
+# ── UI principal ──────────────────────────────────────────────
+st.title("☕ Vietnamito — Dashboard de Ventas")
+
+uploaded = st.file_uploader(
+    "Sube un CSV nuevo de Epos Now para actualizar los datos",
+    type=["csv"],
+    help="Descárgalo desde Epos Now → Reports → Sales Breakdown by Hour"
+)
+
+if uploaded:
+    with st.spinner("Procesando y guardando en la nube..."):
+        rows = parse_csv(uploaded)
+        if rows:
+            save_to_supabase(rows)
+            st.success(f"✅ {len(rows)} registros guardados. Los datos se han actualizado.")
+        else:
+            st.error("No se pudieron leer datos del CSV.")
+
+with st.spinner("Cargando datos..."):
+    df = load_from_supabase()
+
+if df.empty:
+    st.info("Sube un CSV para empezar. La próxima vez los datos se cargarán automáticamente.")
 else:
-    st.warning("¿Por qué no puedes completar este paso?")
-    nota = st.text_area("Explica el motivo:", key="nota_nopuedo", placeholder="Describe el problema...")
-    col1, col2 = st.columns(2)
-    if col1.button("📝 Confirmar y continuar", key="btn_confirmar_nopuedo", type="primary", use_container_width=True):
-        sb.table("ejecucion_pasos").insert({
-            "ejecucion_id": st.session_state.ejecucion_id,
-            "paso_id": paso["id"],
-            "estado": "no_puedo",
-            "nota": nota or "(sin nota)",
-        }).execute()
-        st.session_state.paso_actual += 1
-        st.session_state.no_puedo_activo = False
-        st.rerun()
-    if col2.button("← Cancelar", key="btn_cancel_nopuedo", use_container_width=True):
-        st.session_state.no_puedo_activo = False
-        st.rerun()
+    render_dashboard(df)
