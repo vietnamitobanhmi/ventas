@@ -571,20 +571,22 @@ def render_dashboard(df):
 
         # Añadir proceso
         with st.expander("➕ Nuevo proceso"):
-            np1, np2, np3 = st.columns([3, 1, 1])
-            new_proc_nombre = np1.text_input("Nombre:", key="new_proc_nombre")
-            new_proc_orden = np2.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden")
+            new_proc_nombre = st.text_input("Nombre:", key="new_proc_nombre")
             new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
-            if np3.button("➕ Añadir", key="add_proc"):
+            new_proc_orden = st.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden")
+            if st.button("➕ Añadir proceso", key="add_proc"):
                 if new_proc_nombre.strip():
-                    sb6.table("procesos").insert({
-                        "nombre": new_proc_nombre.strip(),
-                        "descripcion": new_proc_desc.strip() or None,
-                        "orden": int(new_proc_orden),
-                        "activo": True
-                    }).execute()
-                    st.success(f"✅ Proceso '{new_proc_nombre}' creado")
-                    st.rerun()
+                    try:
+                        sb6.table("procesos").insert({
+                            "nombre": new_proc_nombre.strip(),
+                            "descripcion": new_proc_desc.strip() or None,
+                            "orden": int(new_proc_orden),
+                            "activo": True
+                        }).execute()
+                        st.success(f"✅ Proceso '{new_proc_nombre}' creado")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al crear proceso: {e}")
                 else:
                     st.warning("Escribe un nombre.")
 
