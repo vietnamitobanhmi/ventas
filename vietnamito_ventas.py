@@ -685,8 +685,12 @@ def render_dashboard(df):
         st.divider()
         st.markdown("### Historial de ejecuciones")
 
-        ejec_res = sb6.table("ejecuciones").select("*, empleados(nombre), procesos(nombre)").order("iniciado_at", desc=True).limit(50).execute()
+        ejec_res = sb6.table("ejecuciones").select("*").order("iniciado_at", desc=True).limit(50).execute()
         ejecuciones = ejec_res.data or []
+
+        # Cargar lookup tables
+        emp_lookup = {e["id"]: e["nombre"] for e in (sb6.table("empleados").select("id, nombre").execute().data or [])}
+        proc_lookup = {p["id"]: p["nombre"] for p in (sb6.table("procesos").select("id, nombre").execute().data or [])}
 
         if not ejecuciones:
             st.info("Aún no hay ejecuciones registradas.")
@@ -695,24 +699,28 @@ def render_dashboard(df):
             for e in ejecuciones:
                 rows.append({
                     "Fecha": pd.Timestamp(e["iniciado_at"]).strftime("%d/%m/%Y %H:%M"),
-                    "Empleado": e.get("empleados", {}).get("nombre", "—"),
-                    "Proceso": e.get("procesos", {}).get("nombre", "—"),
+                    "Empleado": emp_lookup.get(e["empleado_id"], "—"),
+                    "Proceso": proc_lookup.get(e["proceso_id"], "—"),
                     "Completado": "✅" if e["completado"] else "⏳",
                 })
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-            # Detalle de ejecución
-            ejec_ids = {f"{e.get('empleados',{}).get('nombre','?')} — {e.get('procesos',{}).get('nombre','?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"] for e in ejecuciones}
+            ejec_ids = {
+                f"{emp_lookup.get(e['empleado_id'],'?')} — {proc_lookup.get(e['proceso_id'],'?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"]
+                for e in ejecuciones
+            }
             sel_ejec = st.selectbox("Ver detalle de ejecución:", list(ejec_ids.keys()), key="sel_ejec")
             if sel_ejec:
                 ejec_id = ejec_ids[sel_ejec]
-                ep_res = sb6.table("ejecucion_pasos").select("*, pasos(titulo, orden)").eq("ejecucion_id", ejec_id).order("timestamp").execute()
+                ep_res = sb6.table("ejecucion_pasos").select("*").eq("ejecucion_id", ejec_id).order("timestamp").execute()
                 ep_data = ep_res.data or []
+                paso_lookup = {p["id"]: p for p in (sb6.table("pasos").select("id, titulo, orden").execute().data or [])}
                 if ep_data:
                     for ep in ep_data:
                         estado = "✅ Hecho" if ep["estado"] == "hecho" else "⚠️ No pudo"
-                        titulo = ep.get("pasos", {}).get("titulo", "—")
-                        orden = ep.get("pasos", {}).get("orden", "?")
+                        paso = paso_lookup.get(ep["paso_id"], {})
+                        titulo = paso.get("titulo", "—")
+                        orden = paso.get("orden", "?")
                         st.markdown(f"**{orden}. {titulo}** — {estado}")
                         if ep.get("nota"):
                             st.caption(f"📝 {ep['nota']}")
