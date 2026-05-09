@@ -48,9 +48,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(f'''<div class="logo-container">
-  <img src="{LOGO_URL}" style="width:180px;background:black;border-radius:12px;padding:12px;">
-</div>''', unsafe_allow_html=True)
+st.markdown('<div class="logo-container"><img src="https://raw.githubusercontent.com/vietnamitobanhmi/ventas/main/Logo_Vietnamito_Final.png" style="width:180px;background:black;border-radius:12px;padding:12px;"></div>', unsafe_allow_html=True)
 
 LOGO_URL = "https://raw.githubusercontent.com/vietnamitobanhmi/ventas/main/Logo_Vietnamito_Final.png"
 
