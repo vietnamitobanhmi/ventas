@@ -178,7 +178,23 @@ st.markdown(f'<div class="paso-num">Paso {paso_actual + 1}</div>', unsafe_allow_
 st.markdown(f"## {paso['titulo']}")
 
 if paso.get("descripcion"):
-    st.markdown(paso["descripcion"])
+    desc = paso["descripcion"]
+    # Separar líneas normales de líneas (check)
+    lineas = desc.split("\n")
+    for i, linea in enumerate(lineas):
+        if "(check)" in linea.lower():
+            texto_check = linea.replace("(check)", "").replace("(Check)", "").replace("(CHECK)", "").strip()
+            checks_pendientes[f"check_{paso['id']}_{i}"] = texto_check
+        else:
+            if linea.strip():
+                st.markdown(linea)
+            else:
+                st.markdown("")
+
+    if checks_pendientes:
+        st.markdown("**Verifica cada punto:**")
+        for key, texto in checks_pendientes.items():
+            st.checkbox(texto, key=key)
 
 if paso.get("foto_url"):
     st.image(paso["foto_url"], use_container_width=True)
