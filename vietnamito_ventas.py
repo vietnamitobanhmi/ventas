@@ -221,13 +221,22 @@ def render_dashboard(df):
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    sb_counts = get_supabase()
+    ped_pend = len((sb_counts.table("pedidos").select("id").eq("estado","pendiente").execute().data or []))
+    res_pend = len((sb_counts.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
+
+    ped_label = f"🛵 Pedidos {'🔴 ' + str(ped_pend) if ped_pend > 0 else ''}"
+    res_label = f"🍽️ Reservas {'🔴 ' + str(res_pend) if res_pend > 0 else ''}"
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📅 Por día de semana",
         "🕐 Por franja horaria",
         "🌡️ Mapa de calor",
         "📈 Por semana",
         "👥 Turnos",
-        "📋 Checklists"
+        "📋 Checklists",
+        ped_label,
+        res_label,
     ])
 
     with tab1:
@@ -759,6 +768,100 @@ def render_dashboard(df):
                             st.caption(f"📝 {ep['nota']}")
                 else:
                     st.info("No hay pasos registrados para esta ejecución.")
+
+    # ── TAB 7: Pedidos ──────────────────────────────────────
+    with tab7:
+        sb7 = get_supabase()
+        st.markdown("### Pedidos")
+        
+        filtro_ped = st.selectbox("Filtrar:", ["Todos", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados"], key="filtro_ped")
+        filtro_map = {"Todos": None, "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado"}
+        
+        q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
+        if filtro_map[filtro_ped]:
+            q = q.eq("estado", filtro_map[filtro_ped])
+        pedidos = q.limit(100).execute().data or []
+        
+        if not pedidos:
+            st.info("No hay pedidos con ese filtro.")
+        else:
+            for ped in pedidos:
+                items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+                
+                estado = ped["estado"]
+                color_map = {"pendiente": "🔴", "preparando": "🟡", "listo": "🟢", "entregado": "✅", "cancelado": "⚫"}
+                icono = color_map.get(estado, "⚪")
+                
+                with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{ped['total']:.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
+                    c1, c2 = st.columns(2)
+                    c1.markdown(f"**Nombre:** {ped['nombre']}")
+                    c1.markdown(f"**Teléfono:** {ped['telefono']}")
+                    c1.markdown(f"**Email:** {ped.get('email') or '—'}")
+                    c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
+                    c2.markdown(f"**Total:** €{ped['total']:.2f}")
+                    c2.markdown(f"**Estado:** {estado}")
+                    c2.markdown(f"**Fecha:** {pd.Timestamp(ped['creado_at']).strftime('%d/%m/%Y %H:%M')}")
+                    if ped.get("notas"):
+                        st.markdown(f"**Notas:** {ped['notas']}")
+                    st.markdown(f"**Productos:** {productos_str}")
+                    
+                    st.markdown("**Cambiar estado:**")
+                    estados = ["pendiente", "preparando", "listo", "entregado", "cancelado"]
+                    cols = st.columns(len(estados))
+                    for i, est in enumerate(estados):
+                        with cols[i]:
+                            if est != estado:
+                                if st.button(est.capitalize(), key=f"ped_{ped['id']}_{est}"):
+                                    sb7.table("pedidos").update({"estado": est}).eq("id", ped["id"]).execute()
+                                    st.success(f"✅ Pedido #{ped['id']} → {est}")
+                                    st.rerun()
+                            else:
+                                st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
+
+    # ── TAB 8: Reservas ─────────────────────────────────────
+    with tab8:
+        sb8 = get_supabase()
+        st.markdown("### Reservas")
+        
+        filtro_res = st.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
+        filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
+        
+        q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
+        if filtro_res_map[filtro_res]:
+            q2 = q2.eq("estado", filtro_res_map[filtro_res])
+        reservas = q2.limit(100).execute().data or []
+        
+        if not reservas:
+            st.info("No hay reservas con ese filtro.")
+        else:
+            for res in reservas:
+                estado = res["estado"]
+                color_map = {"pendiente": "🔴", "confirmada": "🟢", "cancelada": "⚫"}
+                icono = color_map.get(estado, "⚪")
+                
+                with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {pd.Timestamp(res['creado_at']).strftime('%d/%m %H:%M')}"):
+                    c1, c2 = st.columns(2)
+                    c1.markdown(f"**Nombre:** {res['nombre']}")
+                    c1.markdown(f"**Teléfono:** {res['telefono']}")
+                    c1.markdown(f"**Email:** {res.get('email') or '—'}")
+                    c2.markdown(f"**Fecha:** {res['fecha']} a las {res['hora']}")
+                    c2.markdown(f"**Personas:** {res['personas']}")
+                    c2.markdown(f"**Estado:** {estado}")
+                    if res.get("notas"):
+                        st.markdown(f"**Notas:** {res['notas']}")
+                    
+                    st.markdown("**Cambiar estado:**")
+                    rc1, rc2, rc3 = st.columns(3)
+                    for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
+                        with col:
+                            if est != estado:
+                                if st.button(est.capitalize(), key=f"res_{res['id']}_{est}"):
+                                    sb8.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
+                                    st.success(f"✅ Reserva #{res['id']} → {est}")
+                                    st.rerun()
+                            else:
+                                st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
 
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
