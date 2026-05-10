@@ -228,7 +228,7 @@ def render_dashboard(df):
     ped_label = f"🛵 Pedidos {'🔴 ' + str(ped_pend) if ped_pend > 0 else ''}"
     res_label = f"🍽️ Reservas {'🔴 ' + str(res_pend) if res_pend > 0 else ''}"
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📅 Por día de semana",
         "🕐 Por franja horaria",
         "🌡️ Mapa de calor",
@@ -237,6 +237,7 @@ def render_dashboard(df):
         "📋 Checklists",
         ped_label,
         res_label,
+        "🌐 Web",
     ])
 
     with tab1:
@@ -862,6 +863,203 @@ def render_dashboard(df):
                                     st.rerun()
                             else:
                                 st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
+
+    # ── TAB 9: Web ──────────────────────────────────────────
+    with tab9:
+        sb9 = get_supabase()
+        st.markdown("### Gestión de la web")
+
+        web_tab1, web_tab2, web_tab3 = st.tabs(["⚙️ Configuración", "🍜 Menú", "📸 Categorías"])
+
+        # ── CONFIG ──
+        with web_tab1:
+            st.markdown("#### Datos del local y horarios")
+            cfg_res = sb9.table("config").select("*").execute()
+            cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
+
+            st.markdown("**Información general**")
+            c1, c2 = st.columns(2)
+            new_cfg = {}
+            new_cfg["nombre_local"] = c1.text_input("Nombre del local", value=cfg.get("nombre_local","Vietnamito"), key="cfg_nombre")
+            new_cfg["direccion"] = c2.text_input("Dirección", value=cfg.get("direccion",""), key="cfg_dir")
+            new_cfg["telefono"] = c1.text_input("Teléfono", value=cfg.get("telefono",""), key="cfg_tel")
+            new_cfg["email_pedidos"] = c2.text_input("Email pedidos", value=cfg.get("email_pedidos",""), key="cfg_email")
+            new_cfg["tiempo_espera_min"] = c1.text_input("Tiempo espera recogida (min)", value=cfg.get("tiempo_espera_min","15"), key="cfg_espera")
+            new_cfg["mesas_total"] = c2.text_input("Nº máximo comensales", value=cfg.get("mesas_total","15"), key="cfg_mesas")
+
+            st.markdown("**Horarios**")
+            dias_cfg = [("lunes","Lun"),("martes","Mar"),("miercoles","Mié"),("jueves","Jue"),("viernes","Vie"),("sabado","Sáb"),("domingo","Dom")]
+            cols_h = st.columns(7)
+            for (dia, label), col in zip(dias_cfg, cols_h):
+                new_cfg[f"horario_{dia}"] = col.text_input(label, value=cfg.get(f"horario_{dia}",""), key=f"cfg_h_{dia}")
+
+            st.markdown("**Activar / desactivar**")
+            act1, act2 = st.columns(2)
+            new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
+            new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
+
+            if st.button("💾 Guardar configuración", key="save_cfg", type="primary"):
+                for clave, valor in new_cfg.items():
+                    sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
+                st.success("✅ Configuración guardada")
+                st.rerun()
+
+        # ── MENÚ ──
+        with web_tab2:
+            cats_res = sb9.table("categorias").select("*").order("orden").execute()
+            cats_web = cats_res.data or []
+            prods_res = sb9.table("productos").select("*").order("orden").execute()
+            prods_web = prods_res.data or []
+
+            if not cats_web:
+                st.info("No hay categorías. Créalas en la pestaña Categorías primero.")
+            else:
+                cat_sel_web = st.selectbox("Categoría:", [c["nombre"] for c in cats_web], key="cat_sel_web")
+                cat_obj = next(c for c in cats_web if c["nombre"] == cat_sel_web)
+                prods_cat_web = [p for p in prods_web if p["categoria_id"] == cat_obj["id"]]
+
+                # Añadir producto
+                with st.expander("➕ Añadir producto"):
+                    if "prod_counter" not in st.session_state:
+                        st.session_state.prod_counter = 0
+                    pc = st.session_state.prod_counter
+                    pa1, pa2 = st.columns([3,1])
+                    new_prod_nom = pa1.text_input("Nombre:", key=f"pn_{pc}")
+                    new_prod_precio = pa2.number_input("Precio €:", value=6.50, min_value=0.0, step=0.5, format="%.2f", key=f"pp_{pc}")
+                    new_prod_desc = st.text_area("Descripción:", key=f"pd_{pc}", height=70)
+                    new_prod_foto_url = st.text_input("URL foto (opcional):", key=f"pf_{pc}")
+                    new_prod_foto_file = st.file_uploader("O sube foto:", type=["jpg","jpeg","png","webp"], key=f"pff_{pc}")
+                    if new_prod_foto_file:
+                        st.image(new_prod_foto_file, width=150)
+                    new_prod_orden = st.number_input("Orden:", value=len(prods_cat_web)+1, min_value=1, key=f"po_{pc}")
+
+                    if st.button("➕ Añadir producto", key=f"add_prod_{pc}"):
+                        if new_prod_nom.strip():
+                            foto_url = new_prod_foto_url.strip() or None
+                            if new_prod_foto_file:
+                                try:
+                                    import urllib.parse
+                                    ext = new_prod_foto_file.name.split(".")[-1].lower()
+                                    fname = f"productos/{cat_obj['id']}_{new_prod_nom.strip().replace(' ','_')}.{ext}"
+                                    sb9.storage.from_("assets").upload(fname, new_prod_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                                    foto_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+                                except Exception as e:
+                                    st.warning(f"No se pudo subir foto: {e}")
+                            sb9.table("productos").insert({
+                                "categoria_id": cat_obj["id"],
+                                "nombre": new_prod_nom.strip(),
+                                "descripcion": new_prod_desc.strip() or None,
+                                "precio": float(new_prod_precio),
+                                "foto_url": foto_url,
+                                "orden": int(new_prod_orden),
+                                "disponible": True
+                            }).execute()
+                            st.session_state.prod_counter += 1
+                            st.success("✅ Producto añadido")
+                            st.rerun()
+                        else:
+                            st.warning("Escribe un nombre.")
+
+                # Editar productos existentes
+                st.markdown(f"**{len(prods_cat_web)} productos en {cat_sel_web}:**")
+                for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
+                    with st.expander(f"{'✅' if prod['disponible'] else '❌'} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
+                        ep1, ep2 = st.columns([3,1])
+                        e_nom = ep1.text_input("Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
+                        e_precio = ep2.number_input("€:", value=float(prod["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_{prod['id']}")
+                        e_desc = st.text_area("Descripción:", value=prod.get("descripcion") or "", key=f"ed_{prod['id']}", height=70)
+                        e_orden = ep2.number_input("Orden:", value=int(prod.get("orden",0)), min_value=1, key=f"eord_{prod['id']}")
+                        e_disp = ep1.checkbox("Disponible", value=prod.get("disponible",True), key=f"edis_{prod['id']}")
+                        e_foto = st.text_input("URL foto:", value=prod.get("foto_url") or "", key=f"ef_{prod['id']}")
+                        e_foto_file = st.file_uploader("Cambiar foto:", type=["jpg","jpeg","png","webp"], key=f"eff_{prod['id']}")
+                        if e_foto_file:
+                            st.image(e_foto_file, width=150)
+                            try:
+                                import urllib.parse
+                                ext = e_foto_file.name.split(".")[-1].lower()
+                                fname = f"productos/{prod['id']}.{ext}"
+                                sb9.storage.from_("assets").upload(fname, e_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                                e_foto = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+                                st.success("✅ Foto lista — pulsa Guardar")
+                            except Exception as ex:
+                                st.warning(f"Error foto: {ex}")
+                        elif e_foto:
+                            st.image(e_foto, width=150)
+
+                        sc1, sc2 = st.columns(2)
+                        if sc1.button("💾 Guardar", key=f"save_prod_{prod['id']}"):
+                            sb9.table("productos").update({
+                                "nombre": e_nom, "descripcion": e_desc or None,
+                                "precio": float(e_precio), "foto_url": e_foto or None,
+                                "orden": int(e_orden), "disponible": e_disp
+                            }).eq("id", prod["id"]).execute()
+                            st.success("✅ Guardado")
+                            st.rerun()
+                        if sc2.button("🗑️ Eliminar", key=f"del_prod_{prod['id']}"):
+                            st.session_state[f"confirm_del_prod_{prod['id']}"] = True
+                        if st.session_state.get(f"confirm_del_prod_{prod['id']}"):
+                            st.warning(f"¿Eliminar '{prod['nombre']}'?")
+                            dc1, dc2 = st.columns(2)
+                            if dc1.button("✅ Sí", key=f"yes_prod_{prod['id']}"):
+                                sb9.table("productos").delete().eq("id", prod["id"]).execute()
+                                st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                st.success("✅ Eliminado")
+                                st.rerun()
+                            if dc2.button("❌ No", key=f"no_prod_{prod['id']}"):
+                                st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                st.rerun()
+
+        # ── CATEGORÍAS ──
+        with web_tab3:
+            st.markdown("#### Categorías del menú")
+
+            with st.expander("➕ Nueva categoría"):
+                nc1, nc2 = st.columns([3,1])
+                new_cat_nom = nc1.text_input("Nombre:", key="new_cat_nom")
+                new_cat_ord = nc2.number_input("Orden:", value=len(cats_web)+1, min_value=1, key="new_cat_ord")
+                new_cat_desc = st.text_input("Descripción (opcional):", key="new_cat_desc")
+                if st.button("➕ Añadir categoría", key="add_cat_web"):
+                    if new_cat_nom.strip():
+                        sb9.table("categorias").insert({
+                            "nombre": new_cat_nom.strip(),
+                            "descripcion": new_cat_desc.strip() or None,
+                            "orden": int(new_cat_ord),
+                            "activo": True
+                        }).execute()
+                        st.success(f"✅ Categoría '{new_cat_nom}' creada")
+                        st.rerun()
+                    else:
+                        st.warning("Escribe un nombre.")
+
+            for cat in cats_web:
+                n_prods = len([p for p in prods_web if p["categoria_id"] == cat["id"]])
+                with st.expander(f"{'✅' if cat['activo'] else '❌'} {cat['orden']}. {cat['nombre']} ({n_prods} productos)"):
+                    cc1, cc2 = st.columns([3,1])
+                    c_nom = cc1.text_input("Nombre:", value=cat["nombre"], key=f"cnom_{cat['id']}")
+                    c_ord = cc2.number_input("Orden:", value=int(cat.get("orden",0)), min_value=1, key=f"cord_{cat['id']}")
+                    c_desc = st.text_input("Descripción:", value=cat.get("descripcion") or "", key=f"cdesc_{cat['id']}")
+                    c_act = st.checkbox("Activa", value=cat.get("activo",True), key=f"cact_{cat['id']}")
+                    csc1, csc2 = st.columns(2)
+                    if csc1.button("💾 Guardar", key=f"save_cat_{cat['id']}"):
+                        sb9.table("categorias").update({
+                            "nombre": c_nom, "descripcion": c_desc or None,
+                            "orden": int(c_ord), "activo": c_act
+                        }).eq("id", cat["id"]).execute()
+                        st.success("✅ Categoría guardada")
+                        st.rerun()
+                    if csc2.button("🗑️ Eliminar", key=f"del_cat_{cat['id']}"):
+                        st.session_state[f"confirm_del_cat_{cat['id']}"] = True
+                    if st.session_state.get(f"confirm_del_cat_{cat['id']}"):
+                        st.warning(f"¿Eliminar '{cat['nombre']}' y todos sus productos?")
+                        dc1, dc2 = st.columns(2)
+                        if dc1.button("✅ Sí", key=f"yes_cat_{cat['id']}"):
+                            sb9.table("categorias").delete().eq("id", cat["id"]).execute()
+                            st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
+                            st.success("✅ Eliminada")
+                            st.rerun()
+                        if dc2.button("❌ No", key=f"no_cat_{cat['id']}"):
+                            st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
+                            st.rerun()
 
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
