@@ -886,6 +886,9 @@ def render_dashboard(df):
             new_cfg["email_pedidos"] = c2.text_input("Email pedidos", value=cfg.get("email_pedidos",""), key="cfg_email")
             new_cfg["tiempo_espera_min"] = c1.text_input("Tiempo espera recogida (min)", value=cfg.get("tiempo_espera_min","15"), key="cfg_espera")
             new_cfg["mesas_total"] = c2.text_input("Nº máximo comensales", value=cfg.get("mesas_total","15"), key="cfg_mesas")
+            st.markdown("**Textos del hero (página de inicio)**")
+            new_cfg["hero_titulo"] = st.text_input("Título hero (HTML permitido, ej: El mejor<br>Banh mi de<br><em>Barcelona</em>)", value=cfg.get("hero_titulo","El mejor<br>Banh mi de<br><em>Barcelona</em>"), key="cfg_hero_titulo")
+            new_cfg["hero_subtitulo"] = st.text_input("Subtítulo hero", value=cfg.get("hero_subtitulo",""), placeholder="Ej: Comida vietnamita auténtica en el corazón de Barcelona", key="cfg_hero_sub")
 
             st.markdown("**Horarios**")
             dias_cfg = [("lunes","Lun"),("martes","Mar"),("miercoles","Mié"),("jueves","Jue"),("viernes","Vie"),("sabado","Sáb"),("domingo","Dom")]
