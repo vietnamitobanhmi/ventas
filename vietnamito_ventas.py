@@ -652,12 +652,19 @@ def render_dashboard(df):
                                 foto_url = upload_foto(sb6, new_paso_foto_file, f"{proc_sel}_{len(pasos)+1}")
                             except Exception as e:
                                 st.warning(f"No se pudo subir la foto: {e}")
+                        nuevo_orden = int(new_paso_orden)
+                        # Si el orden ya existe, correr hacia abajo los posteriores
+                        ordenes_existentes = [p["orden"] for p in pasos]
+                        if nuevo_orden in ordenes_existentes:
+                            pasos_a_mover = [p for p in pasos if p["orden"] >= nuevo_orden]
+                            for p in pasos_a_mover:
+                                sb6.table("pasos").update({"orden": p["orden"] + 1}).eq("id", p["id"]).execute()
                         sb6.table("pasos").insert({
                             "proceso_id": proc_sel,
                             "titulo": new_paso_titulo.strip(),
                             "descripcion": new_paso_desc.strip() or None,
                             "foto_url": foto_url,
-                            "orden": int(new_paso_orden),
+                            "orden": nuevo_orden,
                         }).execute()
                         st.session_state.add_paso_counter += 1
                         st.success("✅ Paso añadido")
