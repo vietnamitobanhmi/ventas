@@ -62,7 +62,7 @@ st.markdown(f"""
 .block-container {{ padding: 0 !important; max-width: 100% !important; }}
 header {{ display: none !important; }}
 .stApp {{ background: #F5F0E8; }}
-[data-testid="stHorizontalBlock"] {{ display: none !important; }}
+
 
 :root {{
     --cream: #F5F0E8;
@@ -325,21 +325,36 @@ st.markdown(f"""
     <span class="viet-nav-name">{config.get('nombre_local','Vietnamito')}</span>
   </div>
   <div class="viet-nav-links">
-    <span class="viet-nav-link {'active' if pagina=='inicio' else ''}" onclick="">Inicio</span>
-    <span class="viet-nav-link {'active' if pagina=='menu' else ''}" onclick="">Menú</span>
-    <span class="viet-nav-link {'active' if pagina=='pedido' else ''}" onclick="">Pedir</span>
-    <span class="viet-nav-link {'active' if pagina=='reserva' else ''}" onclick="">Reservar</span>
+    <span class="viet-nav-link {'active' if pagina=='inicio' else ''}" onclick="navTo('inicio')">Inicio</span>
+    <span class="viet-nav-link {'active' if pagina=='menu' else ''}" onclick="navTo('menu')">Menú</span>
+    <span class="viet-nav-link {'active' if pagina=='pedido' else ''}" onclick="navTo('pedido')">Pedir</span>
+    <span class="viet-nav-link {'active' if pagina=='reserva' else ''}" onclick="navTo('reserva')">Reservar</span>
   </div>
-  <button class="viet-nav-cta">🛒 Pedir para recoger</button>
+  <button class="viet-nav-cta" onclick="navTo('pedido')">🛒 Pedir para recoger</button>
 </nav>
 """, unsafe_allow_html=True)
 
-# Nav funcional (oculto visualmente via CSS)
-nc = st.columns(4)
-if nc[0].button("Inicio", key="nav_i"): st.session_state.pagina = "inicio"; st.rerun()
-if nc[1].button("Menú", key="nav_m"): st.session_state.pagina = "menu"; st.rerun()
-if nc[2].button("Pedir", key="nav_p"): st.session_state.pagina = "pedido"; st.rerun()
-if nc[3].button("Reservar", key="nav_r"): st.session_state.pagina = "reserva"; st.rerun()
+# Nav via sidebar (invisible) + session state
+with st.sidebar:
+    st.markdown("### Navegación")
+    if st.button("🏠 Inicio", key="nav_i", use_container_width=True): st.session_state.pagina = "inicio"; st.rerun()
+    if st.button("🍜 Menú", key="nav_m", use_container_width=True): st.session_state.pagina = "menu"; st.rerun()
+    if st.button("🛵 Pedir", key="nav_p", use_container_width=True): st.session_state.pagina = "pedido"; st.rerun()
+    if st.button("🍽️ Reservar", key="nav_r", use_container_width=True): st.session_state.pagina = "reserva"; st.rerun()
+
+# Nav links via HTML+JS que abre el sidebar
+st.markdown("""
+<style>
+[data-testid="stSidebar"] { display: none !important; }
+</style>
+<script>
+function navTo(p) {
+    const btns = window.parent.document.querySelectorAll('[data-testid="stSidebarContent"] button');
+    const map = {inicio:0, menu:1, pedido:2, reserva:3};
+    if(btns[map[p]]) btns[map[p]].click();
+}
+</script>
+""", unsafe_allow_html=True)
 
 # ── INICIO ────────────────────────────────────────────────────
 if st.session_state.pagina == "inicio":
@@ -350,7 +365,7 @@ if st.session_state.pagina == "inicio":
       <div class="viet-hero-content">
         <span class="viet-hero-tag">Barcelona · Eixample Esquerra</span>
         <h1 class="viet-hero-title">Banh mi &<br><em>sabores</em> de Vietnam</h1>
-        <p class="viet-hero-sub">{config.get('direccion','')} · Hoy: {horario_hoy}</p>
+        <p class="viet-hero-sub">El mejor Banh mi de Barcelona · {config.get('direccion','')}</p>
       </div>
     </div>
     <div class="viet-strip">
@@ -361,11 +376,12 @@ if st.session_state.pagina == "inicio":
     """, unsafe_allow_html=True)
 
     # Botones hero funcionales
-    hc1, hc2, hc3 = st.columns([2,2,4])
-    with hc1:
-        if st.button("🛵 Pedir para recoger", key="h_ped"): st.session_state.pagina = "menu"; st.rerun()
-    with hc2:
-        if st.button("🍽️ Reservar mesa", key="h_res"): st.session_state.pagina = "reserva"; st.rerun()
+    st.markdown("""
+    <div style="display:flex;gap:12px;padding:0 64px 32px;">
+      <button class="viet-btn-primary" onclick="navTo('menu')">🛵 Pedir para recoger</button>
+      <button class="viet-btn-ghost" onclick="navTo('reserva')">🍽️ Reservar mesa</button>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Sección del local
     st.markdown("""
