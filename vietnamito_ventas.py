@@ -907,6 +907,45 @@ def render_dashboard(df):
                 st.success("✅ Configuración guardada")
                 st.rerun()
 
+            st.divider()
+            st.markdown("#### Fotos de la web")
+            st.caption("Estas fotos aparecen en la página de inicio de vietnamito.es")
+
+            fotos_config = [
+                ("foto_hero", "Hero principal (fondo grande al entrar)"),
+                ("foto_franja", "Franja intermedia (segunda foto)"),
+                ("foto_split", "Sección 'Nuestro espacio' (tercera foto)"),
+                ("foto_reserva", "Página de reservas (fondo lateral)"),
+                ("foto_mural_banner", "Banner inferior (encima del footer)"),
+            ]
+
+            import urllib.parse as _ul
+            for clave_foto, label_foto in fotos_config:
+                st.markdown(f"**{label_foto}**")
+                url_actual = cfg.get(clave_foto, "")
+                fc1, fc2 = st.columns([3, 1])
+                new_url = fc1.text_input("URL actual:", value=url_actual, key=f"furl_{clave_foto}")
+                if url_actual:
+                    fc2.image(url_actual, width=100)
+                foto_upload = st.file_uploader(f"Subir nueva foto:", type=["jpg","jpeg","png","webp"], key=f"fup_{clave_foto}")
+                if foto_upload:
+                    try:
+                        ext = foto_upload.name.split(".")[-1].lower()
+                        fname = f"web/{clave_foto}.{ext}"
+                        sb9.storage.from_("assets").upload(fname, foto_upload.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                        new_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{_ul.quote(fname, safe='/')}"
+                        sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
+                        st.success(f"✅ Foto subida y guardada")
+                        st.rerun()
+                    except Exception as e:
+                        st.warning(f"Error: {e}")
+                elif new_url != url_actual:
+                    if st.button(f"💾 Guardar URL", key=f"fsave_{clave_foto}"):
+                        sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
+                        st.success("✅ URL guardada")
+                        st.rerun()
+                st.markdown("")
+
         # ── MENÚ ──
         with web_tab2:
             cats_res = sb9.table("categorias").select("*").order("orden").execute()
