@@ -398,6 +398,88 @@ def render_dashboard(df):
             )
             st.plotly_chart(fig6, use_container_width=True)
 
+            # Evolución por día de la semana semana a semana
+            st.markdown("---")
+            st.markdown("**Evolución por día de la semana**")
+            st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en esa semana.")
+
+            df3 = df.copy()
+            df3["fecha_ts"] = pd.to_datetime(df3["fecha"])
+            df3["lunes"] = df3["fecha_ts"] - pd.to_timedelta(df3["fecha_ts"].dt.weekday, unit="D")
+            df3["semana"] = df3["lunes"].dt.strftime("%Y-%m-%d")
+            df3["dow"] = df3["fecha_ts"].dt.weekday
+
+            # Total por día real (fecha) y semana
+            dia_totales = df3.groupby(["semana", "fecha", "dow"])["valor"].sum().reset_index()
+
+            fig_dow = go.Figure()
+            for dow_idx in DIAS_ORDER:
+                datos_dow = dia_totales[dia_totales["dow"] == dow_idx].copy()
+                datos_dow = datos_dow[datos_dow["semana"].isin(semanas_sorted)]
+                datos_dow = datos_dow.sort_values("semana")
+                datos_dow["label"] = datos_dow["semana"].map(semana_labels)
+
+                if datos_dow.empty:
+                    continue
+
+                color = COLORS[dow_idx % len(COLORS)]
+                fig_dow.add_trace(go.Scatter(
+                    x=datos_dow["label"],
+                    y=datos_dow["valor"].round(2),
+                    mode="lines+markers",
+                    name=DIAS[dow_idx],
+                    line=dict(color=color, width=2),
+                    marker=dict(size=7, color=color),
+                    connectgaps=False,
+                ))
+
+            fig_dow.update_layout(
+                title="Ventas por día de la semana — evolución semanal (€, IVA incl.)",
+                yaxis_title="€ ventas", xaxis_title="Semana",
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                xaxis=dict(showgrid=False, tickangle=-30),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
+                height=480, margin=dict(t=50, b=120),
+            )
+            st.plotly_chart(fig_dow, use_container_width=True)
+
+            # También una versión separada por día (subplot style con selectbox)
+            st.markdown("**Zoom en un día concreto**")
+            dow_zoom = st.selectbox("Día:", [DIAS[d] for d in DIAS_ORDER], key="dow_zoom")
+            dow_zoom_idx = [d for d in DIAS_ORDER if DIAS[d] == dow_zoom][0]
+            datos_zoom = dia_totales[dia_totales["dow"] == dow_zoom_idx].copy()
+            datos_zoom = datos_zoom[datos_zoom["semana"].isin(semanas_sorted)].sort_values("semana")
+            datos_zoom["label"] = datos_zoom["semana"].map(semana_labels)
+
+            if not datos_zoom.empty:
+                avg_zoom = datos_zoom["valor"].mean()
+                fig_zoom = go.Figure()
+                fig_zoom.add_hline(y=avg_zoom, line_dash="dot", line_color="rgba(128,128,128,0.5)",
+                                   annotation_text=f"Media €{avg_zoom:.0f}", annotation_position="right")
+                fig_zoom.add_trace(go.Bar(
+                    x=datos_zoom["label"], y=datos_zoom["valor"].round(2),
+                    marker_color=COLORS[dow_zoom_idx % len(COLORS)], marker_line_width=0,
+                    text=[f"€{v:.0f}" for v in datos_zoom["valor"]], textposition="outside",
+                ))
+                fig_zoom.update_layout(
+                    title=f"Ventas de los {dow_zoom} por semana (€, IVA incl.)",
+                    yaxis_title="€ ventas",
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                    xaxis=dict(showgrid=False, tickangle=-30),
+                    showlegend=False, height=360, margin=dict(t=50, b=80),
+                )
+                st.plotly_chart(fig_zoom, use_container_width=True)
+
+                # Mini tabla resumen
+                resumen_zoom = datos_zoom[["label","valor"]].copy()
+                resumen_zoom.columns = ["Semana", "Ventas (€)"]
+                resumen_zoom["Ventas (€)"] = resumen_zoom["Ventas (€)"].round(2)
+                resumen_zoom["vs Media"] = resumen_zoom["Ventas (€)"].apply(lambda v: f"{'↑' if v >= avg_zoom else '↓'} {abs(v-avg_zoom):.0f}€")
+                with st.expander("Ver datos"):
+                    st.dataframe(resumen_zoom, hide_index=True, use_container_width=True)
+
     with tab5:
         import datetime as dt_mod
         sb = get_supabase()
