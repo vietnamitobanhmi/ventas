@@ -258,6 +258,48 @@ def render_dashboard(df):
         with st.expander("Ver datos"):
             st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
 
+        st.divider()
+        st.markdown("**Evolución semanal por día**")
+        st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en cada semana.")
+
+        df_evo = df.copy()
+        df_evo["fecha_ts"] = pd.to_datetime(df_evo["fecha"])
+        df_evo["lunes"] = df_evo["fecha_ts"] - pd.to_timedelta(df_evo["fecha_ts"].dt.weekday, unit="D")
+        df_evo["semana"] = df_evo["lunes"].dt.strftime("%Y-%m-%d")
+        df_evo["dow"] = df_evo["fecha_ts"].dt.weekday
+        dia_sem = df_evo.groupby(["semana","fecha","dow"])["valor"].sum().reset_index()
+
+        semana_labels_evo = {}
+        for s in sorted(dia_sem["semana"].unique()):
+            lunes = pd.Timestamp(s)
+            semana_labels_evo[s] = lunes.strftime("%d/%m")
+
+        fig_evo = go.Figure()
+        for dow_idx in DIAS_ORDER:
+            d = dia_sem[dia_sem["dow"] == dow_idx].sort_values("semana")
+            if d.empty:
+                continue
+            fig_evo.add_trace(go.Scatter(
+                x=d["semana"].map(semana_labels_evo),
+                y=d["valor"].round(2),
+                mode="lines+markers",
+                name=DIAS[dow_idx],
+                line=dict(color=COLORS[dow_idx % len(COLORS)], width=2),
+                marker=dict(size=7, color=COLORS[dow_idx % len(COLORS)]),
+                connectgaps=False,
+            ))
+
+        fig_evo.update_layout(
+            title="Evolución de ventas por día de la semana (€, IVA incl.)",
+            yaxis_title="€ ventas", xaxis_title="Semana (lunes)",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+            xaxis=dict(showgrid=False, tickangle=-30),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
+            height=480, margin=dict(t=50, b=100),
+        )
+        st.plotly_chart(fig_evo, use_container_width=True)
+
     with tab2:
         import datetime as dt_franja
         fecha_min_data = df["fecha"].min()
@@ -397,88 +439,6 @@ def render_dashboard(df):
                 showlegend=False, height=380, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig6, use_container_width=True)
-
-            # Evolución por día de la semana semana a semana
-            st.markdown("---")
-            st.markdown("**Evolución por día de la semana**")
-            st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en esa semana.")
-
-            df3 = df.copy()
-            df3["fecha_ts"] = pd.to_datetime(df3["fecha"])
-            df3["lunes"] = df3["fecha_ts"] - pd.to_timedelta(df3["fecha_ts"].dt.weekday, unit="D")
-            df3["semana"] = df3["lunes"].dt.strftime("%Y-%m-%d")
-            df3["dow"] = df3["fecha_ts"].dt.weekday
-
-            # Total por día real (fecha) y semana
-            dia_totales = df3.groupby(["semana", "fecha", "dow"])["valor"].sum().reset_index()
-
-            fig_dow = go.Figure()
-            for dow_idx in DIAS_ORDER:
-                datos_dow = dia_totales[dia_totales["dow"] == dow_idx].copy()
-                datos_dow = datos_dow[datos_dow["semana"].isin(semanas_sorted)]
-                datos_dow = datos_dow.sort_values("semana")
-                datos_dow["label"] = datos_dow["semana"].map(semana_labels)
-
-                if datos_dow.empty:
-                    continue
-
-                color = COLORS[dow_idx % len(COLORS)]
-                fig_dow.add_trace(go.Scatter(
-                    x=datos_dow["label"],
-                    y=datos_dow["valor"].round(2),
-                    mode="lines+markers",
-                    name=DIAS[dow_idx],
-                    line=dict(color=color, width=2),
-                    marker=dict(size=7, color=color),
-                    connectgaps=False,
-                ))
-
-            fig_dow.update_layout(
-                title="Ventas por día de la semana — evolución semanal (€, IVA incl.)",
-                yaxis_title="€ ventas", xaxis_title="Semana",
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                xaxis=dict(showgrid=False, tickangle=-30),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
-                height=480, margin=dict(t=50, b=120),
-            )
-            st.plotly_chart(fig_dow, use_container_width=True)
-
-            # También una versión separada por día (subplot style con selectbox)
-            st.markdown("**Zoom en un día concreto**")
-            dow_zoom = st.selectbox("Día:", [DIAS[d] for d in DIAS_ORDER], key="dow_zoom")
-            dow_zoom_idx = [d for d in DIAS_ORDER if DIAS[d] == dow_zoom][0]
-            datos_zoom = dia_totales[dia_totales["dow"] == dow_zoom_idx].copy()
-            datos_zoom = datos_zoom[datos_zoom["semana"].isin(semanas_sorted)].sort_values("semana")
-            datos_zoom["label"] = datos_zoom["semana"].map(semana_labels)
-
-            if not datos_zoom.empty:
-                avg_zoom = datos_zoom["valor"].mean()
-                fig_zoom = go.Figure()
-                fig_zoom.add_hline(y=avg_zoom, line_dash="dot", line_color="rgba(128,128,128,0.5)",
-                                   annotation_text=f"Media €{avg_zoom:.0f}", annotation_position="right")
-                fig_zoom.add_trace(go.Bar(
-                    x=datos_zoom["label"], y=datos_zoom["valor"].round(2),
-                    marker_color=COLORS[dow_zoom_idx % len(COLORS)], marker_line_width=0,
-                    text=[f"€{v:.0f}" for v in datos_zoom["valor"]], textposition="outside",
-                ))
-                fig_zoom.update_layout(
-                    title=f"Ventas de los {dow_zoom} por semana (€, IVA incl.)",
-                    yaxis_title="€ ventas",
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                    xaxis=dict(showgrid=False, tickangle=-30),
-                    showlegend=False, height=360, margin=dict(t=50, b=80),
-                )
-                st.plotly_chart(fig_zoom, use_container_width=True)
-
-                # Mini tabla resumen
-                resumen_zoom = datos_zoom[["label","valor"]].copy()
-                resumen_zoom.columns = ["Semana", "Ventas (€)"]
-                resumen_zoom["Ventas (€)"] = resumen_zoom["Ventas (€)"].round(2)
-                resumen_zoom["vs Media"] = resumen_zoom["Ventas (€)"].apply(lambda v: f"{'↑' if v >= avg_zoom else '↓'} {abs(v-avg_zoom):.0f}€")
-                with st.expander("Ver datos"):
-                    st.dataframe(resumen_zoom, hide_index=True, use_container_width=True)
 
     with tab5:
         import datetime as dt_mod
@@ -968,6 +928,7 @@ def render_dashboard(df):
             new_cfg["email_pedidos"] = c2.text_input("Email pedidos", value=cfg.get("email_pedidos",""), key="cfg_email")
             new_cfg["tiempo_espera_min"] = c1.text_input("Tiempo espera recogida (min)", value=cfg.get("tiempo_espera_min","15"), key="cfg_espera")
             new_cfg["mesas_total"] = c2.text_input("Nº máximo comensales", value=cfg.get("mesas_total","15"), key="cfg_mesas")
+            new_cfg["barrio"] = c1.text_input("Barrio", value=cfg.get("barrio","Sants - Les Corts"), key="cfg_barrio")
             st.markdown("**Textos del hero (página de inicio)**")
             new_cfg["hero_titulo"] = st.text_input("Título hero (HTML permitido, ej: El mejor<br>Banh mi de<br><em>Barcelona</em>)", value=cfg.get("hero_titulo","El mejor<br>Banh mi de<br><em>Barcelona</em>"), key="cfg_hero_titulo")
             new_cfg["hero_subtitulo"] = st.text_input("Subtítulo hero", value=cfg.get("hero_subtitulo",""), placeholder="Ej: Comida vietnamita auténtica en el corazón de Barcelona", key="cfg_hero_sub")
