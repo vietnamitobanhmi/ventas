@@ -284,17 +284,23 @@ def render_dashboard(df):
             empleados_data = sb0.table("empleados").select("*").execute().data or []
             emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
 
-            # Calcular coste de personal por hora del día (configuración actual)
-            # Solo contar horas con trabajadores
-            coste_por_slot = {}  # (dow, hora) -> coste
-            horas_con_staff = set()  # (dow, hora) con al menos 1 trabajador
+            # Calcular coste de personal por slot (dow, slot) -> coste
+            # Usar slot completo (HH:MM) como key para no perder los :30
+            coste_por_slot_full = {}  # (dow, slot) -> coste total ese slot
+            horas_con_staff = set()  # (dow, hora_entera) con al menos 1 trabajador
             for tr in turnos_data:
                 dow = int(tr["dia_semana"])
-                h = int(tr["slot"].split(":")[0])
+                slot = tr["slot"]
+                h = int(slot.split(":")[0])
                 coste = emp_coste.get(tr["empleado_id"], 10) * 0.5
-                key = (dow, h)
-                coste_por_slot[key] = coste_por_slot.get(key, 0) + coste
-                horas_con_staff.add(key)
+                key = (dow, slot)
+                coste_por_slot_full[key] = coste_por_slot_full.get(key, 0) + coste
+                horas_con_staff.add((dow, h))
+
+            # Coste total por día de la semana (suma de todos sus slots)
+            coste_por_slot = {}  # (dow,) -> coste diario total
+            for (dow, slot), coste in coste_por_slot_full.items():
+                coste_por_slot[(dow, slot)] = coste
 
             # Filtrar ventas solo en horas con staff
             df_rent["dow"] = pd.to_datetime(df_rent["fecha"]).dt.weekday
@@ -306,11 +312,24 @@ def render_dashboard(df):
             n_dias = (fin - inicio).days + 1
             n_semanas = n_dias / 7
 
-            # Coste total de personal para el periodo (coste semanal × semanas)
-            coste_semanal_total = sum(coste_por_slot.values()) * 2  # × 2 porque son slots de 30min → horas
-            # Corrección: ya está en €/slot (0.5h), así que es la suma directa por semana
-            coste_semanal = sum(coste_por_slot.values())
-            coste_periodo = coste_semanal * n_semanas
+            # Días reales abiertos por dow (días con al menos una venta)
+            dias_abiertos_por_dow = {}
+            for dow_idx in range(7):
+                df_dow_check = df_rent[df_rent["dow"] == dow_idx]
+                dias_con_venta = df_dow_check.groupby("fecha")["valor"].sum()
+                dias_abiertos_por_dow[dow_idx] = int((dias_con_venta > 0).sum())
+
+            # Coste diario por dow = suma de todos sus slots
+            coste_dia_por_dow = {}
+            for (dow_idx, slot), coste in coste_por_slot.items():
+                coste_dia_por_dow[dow_idx] = coste_dia_por_dow.get(dow_idx, 0) + coste
+
+            # Coste real del periodo: coste/día × días abiertos
+            coste_periodo = sum(
+                coste_dia_por_dow.get(dow_idx, 0) * dias_abiertos_por_dow.get(dow_idx, 0)
+                for dow_idx in range(7)
+            )
+            coste_semanal = sum(coste_dia_por_dow.values())
 
             # Ventas brutas (solo horas con staff)
             ventas_brutas = df_rent_staff["valor"].sum()
@@ -392,7 +411,19 @@ def render_dashboard(df):
             semana_margen = df_rent2.groupby("semana")["valor"].sum().reset_index()
             semana_margen.columns = ["semana","ventas_brutas"]
             semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] * 0.75
-            semana_margen["coste"] = coste_semanal
+            # Coste real por semana: contar días abiertos en cada semana
+            def coste_semana(semana_str):
+                lunes = pd.Timestamp(semana_str)
+                coste = 0
+                for d in range(7):
+                    fecha_dia = (lunes + pd.Timedelta(days=d)).date()
+                    if fecha_dia < inicio or fecha_dia > fin:
+                        continue
+                    ventas_dia = df_rent[df_rent["fecha"] == fecha_dia]["valor"].sum()
+                    if ventas_dia > 0:
+                        coste += coste_dia_por_dow.get(d, 0)
+                return coste
+            semana_margen["coste"] = semana_margen["semana"].apply(coste_semana)
             semana_margen["margen"] = semana_margen["ventas_netas"] - semana_margen["coste"]
             semana_margen["label"] = semana_margen["semana"].apply(
                 lambda s: pd.Timestamp(s).strftime("%d/%m")
