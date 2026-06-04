@@ -53,7 +53,7 @@ st.markdown('<div class="logo-container"><img src="https://rwtpjqvgiiuvniixqapu.
 LOGO_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png"
 
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMzIyMjMsImV4cCI6MjA5MjcwODIyM30.jznrwuusfgtVkrzz_bfdsxq3tVsv-uV2tyMeIlh3bZg"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 
 @st.cache_resource
 def get_supabase():
