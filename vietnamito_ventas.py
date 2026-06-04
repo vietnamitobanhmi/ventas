@@ -1392,6 +1392,198 @@ with st.spinner("Cargando datos..."):
     df = load_from_supabase()
 
 if df.empty:
-    st.info("Sube un CSV para empezar. La próxima vez los datos se cargarán automáticamente.")
+    st.info("No hay datos de ventas. Sube un CSV de Epos Now para ver el dashboard de ventas.")
+    st.divider()
+    # Mostrar pestañas de gestión completas aunque no haya datos de ventas
+    _sb0 = get_supabase()
+    _ped_pend = len((_sb0.table("pedidos").select("id").eq("estado","pendiente").execute().data or []))
+    _res_pend = len((_sb0.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
+    _ped_lbl = f"🛵 Pedidos {'🔴 ' + str(_ped_pend) if _ped_pend > 0 else ''}"
+    _res_lbl = f"🍽️ Reservas {'🔴 ' + str(_res_pend) if _res_pend > 0 else ''}"
+
+    _t1, _t2, _t3, _t4, _t5 = st.tabs(["👥 Turnos", "📋 Checklists", _ped_lbl, _res_lbl, "🌐 Web"])
+
+    # Reutilizar el mismo código de las pestañas del dashboard
+    # Para ello creamos un df vacío con las columnas necesarias
+    import pandas as _pd2
+    _df_empty = _pd2.DataFrame(columns=["fecha","hora","dow","valor","ntrans","items"])
+
+    with _t1:
+        import datetime as _dt_mod
+        sb = _sb0
+        emp_res = sb.table("empleados").select("*").order("id").execute()
+        empleados = emp_res.data if emp_res.data else []
+        st.markdown("### Empleados")
+        header = st.columns([3, 2, 1, 1])
+        header[0].markdown("**Nombre**"); header[1].markdown("**€/hora**"); header[2].markdown("**Guardar**"); header[3].markdown("**Eliminar**")
+        for emp in empleados:
+            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom2_{emp['id']}")
+            nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos2_{emp['id']}")
+            if c3.button("💾", key=f"saveemp2_{emp['id']}"):
+                sb.table("empleados").update({"nombre": nuevo_nombre, "coste_hora": nuevo_coste}).eq("id", emp["id"]).execute()
+                st.success(f"✅ {nuevo_nombre} guardado"); st.rerun()
+            if c4.button("🗑️", key=f"delemp2_{emp['id']}"):
+                st.session_state[f"confirm_del2_{emp['id']}"] = True
+            if st.session_state.get(f"confirm_del2_{emp['id']}"):
+                st.warning(f"¿Eliminar a **{emp['nombre']}**?")
+                if st.button("✅ Sí", key=f"yes2_{emp['id']}"):
+                    sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
+                    sb.table("empleados").delete().eq("id", emp["id"]).execute()
+                    st.session_state.pop(f"confirm_del2_{emp['id']}", None); st.rerun()
+                if st.button("❌ No", key=f"no2_{emp['id']}"):
+                    st.session_state.pop(f"confirm_del2_{emp['id']}", None); st.rerun()
+        with st.expander("➕ Añadir empleado"):
+            na1, na2, na3 = st.columns([3, 2, 1])
+            nuevo_emp_nombre = na1.text_input("Nombre:", key="new_emp_nombre2")
+            nuevo_emp_coste = na2.number_input("€/hora:", value=10.0, min_value=0.0, step=0.5, format="%.2f", key="new_emp_coste2")
+            if na3.button("➕", key="add_emp2"):
+                if nuevo_emp_nombre.strip():
+                    sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
+                    st.success(f"✅ {nuevo_emp_nombre} añadido"); st.rerun()
+
+    with _t2:
+        sb6 = _sb0
+        st.markdown("### Procesos")
+        proc_res = sb6.table("procesos").select("*").order("orden").execute()
+        procesos = proc_res.data or []
+        with st.expander("➕ Nuevo proceso"):
+            new_proc_nombre2 = st.text_input("Nombre:", key="new_proc_nombre2")
+            new_proc_desc2 = st.text_input("Descripción:", key="new_proc_desc2")
+            new_proc_orden2 = st.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden2")
+            if st.button("➕ Añadir proceso", key="add_proc2"):
+                if new_proc_nombre2.strip():
+                    try:
+                        sb6.table("procesos").insert({"nombre": new_proc_nombre2.strip(), "descripcion": new_proc_desc2.strip() or None, "orden": int(new_proc_orden2), "activo": True}).execute()
+                        st.success(f"✅ '{new_proc_nombre2}' creado"); st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+        if procesos:
+            proc_sel2 = st.selectbox("Proceso:", options=[p["id"] for p in procesos], format_func=lambda x: next(p["nombre"] for p in procesos if p["id"] == x), key="proc_sel2")
+            pasos_res2 = sb6.table("pasos").select("*").eq("proceso_id", proc_sel2).order("orden").execute()
+            pasos2 = sorted(pasos_res2.data or [], key=lambda p: p.get("orden",0))
+            st.markdown(f"**{len(pasos2)} pasos**")
+            with st.expander("➕ Añadir paso"):
+                new_paso_titulo2 = st.text_input("Título:", key="new_paso_titulo2")
+                new_paso_orden2 = st.number_input("Orden:", value=len(pasos2)+1, min_value=1, key="new_paso_orden2")
+                new_paso_desc2 = st.text_area("Descripción:", key="new_paso_desc2", height=80)
+                if st.button("➕ Añadir paso", key="add_paso2"):
+                    if new_paso_titulo2.strip():
+                        sb6.table("pasos").insert({"proceso_id": proc_sel2, "titulo": new_paso_titulo2.strip(), "descripcion": new_paso_desc2.strip() or None, "orden": int(new_paso_orden2)}).execute()
+                        st.success("✅ Paso añadido"); st.rerun()
+
+    with _t3:
+        sb7 = _sb0
+        st.markdown("### Pedidos")
+        filtro_ped2 = st.selectbox("Filtrar:", ["Todos","Pendientes","Preparando","Listos","Entregados","Cancelados"], key="filtro_ped2")
+        filtro_map2 = {"Todos":None,"Pendientes":"pendiente","Preparando":"preparando","Listos":"listo","Entregados":"entregado","Cancelados":"cancelado"}
+        q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
+        if filtro_map2[filtro_ped2]: q = q.eq("estado", filtro_map2[filtro_ped2])
+        pedidos2 = q.limit(100).execute().data or []
+        if not pedidos2:
+            st.info("No hay pedidos.")
+        for ped in pedidos2:
+            items_res2 = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+            productos_str2 = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res2])
+            icono2 = {"pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"⚫"}.get(ped["estado"],"⚪")
+            with st.expander(f"{icono2} #{ped['id']} · {ped['nombre']} · €{ped['total']:.2f} · {ped['hora_recogida']}"):
+                st.markdown(f"**{ped['nombre']}** · {ped['telefono']} · {ped.get('email','—')}")
+                st.markdown(f"**Productos:** {productos_str2}")
+                if ped.get("notas"): st.caption(f"📝 {ped['notas']}")
+                cols2 = st.columns(5)
+                for i2, est2 in enumerate(["pendiente","preparando","listo","entregado","cancelado"]):
+                    with cols2[i2]:
+                        if est2 != ped["estado"]:
+                            if st.button(est2.capitalize(), key=f"ped2_{ped['id']}_{est2}"):
+                                sb7.table("pedidos").update({"estado": est2}).eq("id", ped["id"]).execute()
+                                st.rerun()
+
+    with _t4:
+        sb8 = _sb0
+        st.markdown("### Reservas")
+        filtro_res2 = st.selectbox("Filtrar:", ["Todos","Pendientes","Confirmadas","Canceladas"], key="filtro_res2")
+        filtro_res_map2 = {"Todos":None,"Pendientes":"pendiente","Confirmadas":"confirmada","Canceladas":"cancelada"}
+        q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
+        if filtro_res_map2[filtro_res2]: q2 = q2.eq("estado", filtro_res_map2[filtro_res2])
+        reservas2 = q2.limit(100).execute().data or []
+        if not reservas2:
+            st.info("No hay reservas.")
+        for res2 in reservas2:
+            icono3 = {"pendiente":"🔴","confirmada":"🟢","cancelada":"⚫"}.get(res2["estado"],"⚪")
+            with st.expander(f"{icono3} #{res2['id']} · {res2['nombre']} · {res2['personas']} pax · {res2['fecha']} {res2['hora']}"):
+                st.markdown(f"**{res2['nombre']}** · {res2['telefono']} · {res2.get('email','—')}")
+                if res2.get("notas"): st.caption(f"📝 {res2['notas']}")
+                rc1, rc2, rc3 = st.columns(3)
+                for col3, est3 in zip([rc1,rc2,rc3], ["pendiente","confirmada","cancelada"]):
+                    with col3:
+                        if est3 != res2["estado"]:
+                            if st.button(est3.capitalize(), key=f"res2_{res2['id']}_{est3}"):
+                                sb8.table("reservas").update({"estado": est3}).eq("id", res2["id"]).execute()
+                                st.rerun()
+
+    with _t5:
+        # Reutilizar exactamente el mismo código del tab9
+        sb9 = _sb0
+        st.markdown("### Gestión de la web")
+        web_tab1, web_tab2, web_tab3 = st.tabs(["⚙️ Configuración", "🍜 Menú", "📸 Categorías"])
+        cfg_res = sb9.table("config").select("*").execute()
+        cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
+        with web_tab1:
+            st.markdown("#### Datos del local y horarios")
+            c1, c2 = st.columns(2)
+            new_cfg = {}
+            new_cfg["nombre_local"] = c1.text_input("Nombre del local", value=cfg.get("nombre_local","Vietnamito"), key="cfg_nombre_e")
+            new_cfg["direccion"] = c2.text_input("Dirección", value=cfg.get("direccion",""), key="cfg_dir_e")
+            new_cfg["telefono"] = c1.text_input("Teléfono", value=cfg.get("telefono",""), key="cfg_tel_e")
+            new_cfg["email_pedidos"] = c2.text_input("Email pedidos", value=cfg.get("email_pedidos",""), key="cfg_email_e")
+            new_cfg["tiempo_espera_min"] = c1.text_input("Tiempo espera (min)", value=cfg.get("tiempo_espera_min","15"), key="cfg_espera_e")
+            new_cfg["mesas_total"] = c2.text_input("Nº máximo comensales", value=cfg.get("mesas_total","15"), key="cfg_mesas_e")
+            new_cfg["barrio"] = c1.text_input("Barrio", value=cfg.get("barrio","Sants - Les Corts"), key="cfg_barrio_e")
+            new_cfg["hero_titulo"] = st.text_input("Título hero", value=cfg.get("hero_titulo","El mejor<br>Banh mi de<br><em>Barcelona</em>"), key="cfg_hero_titulo_e")
+            new_cfg["hero_subtitulo"] = st.text_input("Subtítulo hero", value=cfg.get("hero_subtitulo",""), key="cfg_hero_sub_e")
+            st.markdown("**Horarios**")
+            dias_cfg = [("lunes","Lun"),("martes","Mar"),("miercoles","Mié"),("jueves","Jue"),("viernes","Vie"),("sabado","Sáb"),("domingo","Dom")]
+            cols_h = st.columns(7)
+            for (dia, label), col in zip(dias_cfg, cols_h):
+                new_cfg[f"horario_{dia}"] = col.text_input(label, value=cfg.get(f"horario_{dia}",""), key=f"cfg_h_{dia}_e")
+            st.markdown("**Activar / desactivar**")
+            act1, act2 = st.columns(2)
+            new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act_e") else "false"
+            new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act_e") else "false"
+            if st.button("💾 Guardar configuración", key="save_cfg_e", type="primary"):
+                for clave, valor in new_cfg.items():
+                    sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
+                st.success("✅ Configuración guardada"); st.rerun()
+
+        with web_tab2:
+            cats_res_e = sb9.table("categorias").select("*").order("orden").execute()
+            cats_web_e = cats_res_e.data or []
+            prods_res_e = sb9.table("productos").select("*").order("orden").execute()
+            prods_web_e = prods_res_e.data or []
+            if cats_web_e:
+                cat_sel_web_e = st.selectbox("Categoría:", [c["nombre"] for c in cats_web_e], key="cat_sel_web_e")
+                cat_obj_e = next(c for c in cats_web_e if c["nombre"] == cat_sel_web_e)
+                prods_cat_e = [p for p in prods_web_e if p["categoria_id"] == cat_obj_e["id"]]
+                st.markdown(f"**{len(prods_cat_e)} productos**")
+                for prod_e in sorted(prods_cat_e, key=lambda p: p.get("orden",0)):
+                    with st.expander(f"{'✅' if prod_e['disponible'] else '❌'} {prod_e['orden']}. {prod_e['nombre']} — €{prod_e['precio']:.2f}"):
+                        ep1_e, ep2_e = st.columns([3,1])
+                        e_nom_e = ep1_e.text_input("Nombre:", value=prod_e["nombre"], key=f"en_e_{prod_e['id']}")
+                        e_precio_e = ep2_e.number_input("€:", value=float(prod_e["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_e_{prod_e['id']}")
+                        e_desc_e = st.text_area("Descripción:", value=prod_e.get("descripcion") or "", key=f"ed_e_{prod_e['id']}", height=70)
+                        e_disp_e = st.checkbox("Disponible", value=prod_e.get("disponible",True), key=f"edis_e_{prod_e['id']}")
+                        if st.button("💾 Guardar", key=f"save_prod_e_{prod_e['id']}"):
+                            sb9.table("productos").update({"nombre": e_nom_e, "descripcion": e_desc_e or None, "precio": float(e_precio_e), "disponible": e_disp_e}).eq("id", prod_e["id"]).execute()
+                            st.success("✅ Guardado"); st.rerun()
+
+        with web_tab3:
+            st.markdown("#### Categorías")
+            for cat_e in cats_web_e:
+                with st.expander(f"{cat_e['orden']}. {cat_e['nombre']}"):
+                    c_nom_e = st.text_input("Nombre:", value=cat_e["nombre"], key=f"cnom_e_{cat_e['id']}")
+                    c_act_e = st.checkbox("Activa", value=cat_e.get("activo",True), key=f"cact_e_{cat_e['id']}")
+                    if st.button("💾 Guardar", key=f"save_cat_e_{cat_e['id']}"):
+                        sb9.table("categorias").update({"nombre": c_nom_e, "activo": c_act_e}).eq("id", cat_e["id"]).execute()
+                        st.success("✅ Guardado"); st.rerun()
 else:
     render_dashboard(df)
