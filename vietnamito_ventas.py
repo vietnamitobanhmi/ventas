@@ -1087,10 +1087,25 @@ def render_dashboard(df):
     with tab8:
         sb8 = get_supabase()
         st.markdown("### Reservas")
-        
-        filtro_res = st.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
+
+        col_filt_r, col_del_r = st.columns([3,1])
+        filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
         filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
-        
+
+        if col_del_r.button("🗑️ Borrar canceladas", key="del_cancelled_res"):
+            st.session_state["confirm_del_cancelled_res"] = True
+        if st.session_state.get("confirm_del_cancelled_res"):
+            st.warning("¿Borrar todas las reservas canceladas? No se puede deshacer.")
+            dc1, dc2 = st.columns(2)
+            if dc1.button("✅ Sí, borrar", key="yes_del_cancelled_res"):
+                sb8.table("reservas").delete().eq("estado", "cancelada").execute()
+                st.session_state.pop("confirm_del_cancelled_res", None)
+                st.success("✅ Reservas canceladas eliminadas")
+                st.rerun()
+            if dc2.button("❌ Cancelar", key="no_del_cancelled_res"):
+                st.session_state.pop("confirm_del_cancelled_res", None)
+                st.rerun()
+
         q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
         if filtro_res_map[filtro_res]:
             q2 = q2.eq("estado", filtro_res_map[filtro_res])
