@@ -1037,10 +1037,28 @@ def render_dashboard(df):
     with tab7:
         sb7 = get_supabase()
         st.markdown("### Pedidos")
-        
-        filtro_ped = st.selectbox("Filtrar:", ["Todos", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados"], key="filtro_ped")
+
+        col_filt_p, col_del_p = st.columns([3, 1])
+        filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados"], key="filtro_ped")
         filtro_map = {"Todos": None, "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado"}
-        
+
+        if col_del_p.button("🗑️ Borrar cancelados", key="del_cancelled_ped"):
+            st.session_state["confirm_del_cancelled_ped"] = True
+        if st.session_state.get("confirm_del_cancelled_ped"):
+            st.warning("¿Borrar todos los pedidos cancelados? No se puede deshacer.")
+            dp1, dp2 = st.columns(2)
+            if dp1.button("✅ Sí, borrar", key="yes_del_cancelled_ped"):
+                ped_ids = [p["id"] for p in (sb7.table("pedidos").select("id").eq("estado","cancelado").execute().data or [])]
+                if ped_ids:
+                    sb7.table("pedido_items").delete().in_("pedido_id", ped_ids).execute()
+                    sb7.table("pedidos").delete().eq("estado", "cancelado").execute()
+                st.session_state.pop("confirm_del_cancelled_ped", None)
+                st.success("✅ Pedidos cancelados eliminados")
+                st.rerun()
+            if dp2.button("❌ Cancelar", key="no_del_cancelled_ped"):
+                st.session_state.pop("confirm_del_cancelled_ped", None)
+                st.rerun()
+
         q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
         if filtro_map[filtro_ped]:
             q = q.eq("estado", filtro_map[filtro_ped])
