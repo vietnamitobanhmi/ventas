@@ -1320,13 +1320,22 @@ def render_dashboard(df):
                             st.session_state[f"confirm_del_prod_{prod['id']}"] = True
                         if st.session_state.get(f"confirm_del_prod_{prod['id']}"):
                             st.warning(f"¿Eliminar '{prod['nombre']}'?")
-                            dc1, dc2 = st.columns(2)
-                            if dc1.button("✅ Sí", key=f"yes_prod_{prod['id']}"):
-                                sb9.table("productos").delete().eq("id", prod["id"]).execute()
+                            dc1, dc2, dc3 = st.columns(3)
+                            if dc1.button("✅ Sí, eliminar", key=f"yes_prod_{prod['id']}"):
+                                try:
+                                    sb9.table("productos").delete().eq("id", prod["id"]).execute()
+                                    st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                    st.success("✅ Eliminado")
+                                    st.rerun()
+                                except Exception as _e:
+                                    st.error("No se puede eliminar porque tiene pedidos asociados. Márcalo como no disponible en su lugar.")
+                                    st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                            if dc2.button("🚫 Desactivar", key=f"dis_prod_{prod['id']}"):
+                                sb9.table("productos").update({"disponible": False}).eq("id", prod["id"]).execute()
                                 st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
-                                st.success("✅ Eliminado")
+                                st.success("✅ Producto desactivado — no aparecerá en la web")
                                 st.rerun()
-                            if dc2.button("❌ No", key=f"no_prod_{prod['id']}"):
+                            if dc3.button("❌ Cancelar", key=f"no_prod_{prod['id']}"):
                                 st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
                                 st.rerun()
 
