@@ -1309,6 +1309,22 @@ def render_dashboard(df):
                         e_desc = st.text_area("Descripción:", value=prod.get("descripcion") or "", key=f"ed_{prod['id']}", height=70)
                         e_orden = ep2.number_input("Orden:", value=int(prod.get("orden",0)), min_value=1, key=f"eord_{prod['id']}")
                         e_disp = ep1.checkbox("Disponible", value=prod.get("disponible",True), key=f"edis_{prod['id']}")
+
+                        # Cambiar categoría
+                        otras_cats = [c for c in cats_web if c["id"] != cat_obj["id"]]
+                        if otras_cats:
+                            st.markdown("**Mover a otra categoría:**")
+                            cat_mover_opts = {c["nombre"]: c["id"] for c in otras_cats}
+                            cat_mover_sel = st.selectbox("Categoría destino:", list(cat_mover_opts.keys()), key=f"cat_mover_{prod['id']}")
+                            if st.button(f"↗️ Mover a {cat_mover_sel}", key=f"mover_prod_{prod['id']}"):
+                                cat_dest_id = cat_mover_opts[cat_mover_sel]
+                                # Calcular orden máximo en la categoría destino
+                                prods_dest = [p for p in prods_web if p["categoria_id"] == cat_dest_id]
+                                nuevo_orden = max((p.get("orden",0) for p in prods_dest), default=0) + 1
+                                sb9.table("productos").update({"categoria_id": cat_dest_id, "orden": nuevo_orden}).eq("id", prod["id"]).execute()
+                                st.success(f"✅ Movido a {cat_mover_sel} (orden {nuevo_orden})")
+                                st.rerun()
+
                         e_foto = st.text_input("URL foto:", value=prod.get("foto_url") or "", key=f"ef_{prod['id']}")
                         e_foto_file = st.file_uploader("Cambiar foto:", type=["jpg","jpeg","png","webp"], key=f"eff_{prod['id']}")
                         if e_foto_file:
