@@ -223,7 +223,7 @@ def render_dashboard(df):
     ped_pend = len((sb_counts.table("pedidos").select("id").eq("estado","pendiente").execute().data or []))
     res_pend = len((sb_counts.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
 
-    ped_label = f"🛵 Pedidos {'🔴 ' + str(ped_pend) if ped_pend > 0 else ''}"
+    ped_label = f"🛍️ Pedidos {'🔴 ' + str(ped_pend) if ped_pend > 0 else ''}"
     res_label = f"🍽️ Reservas {'🔴 ' + str(res_pend) if res_pend > 0 else ''}"
 
     tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
@@ -1209,39 +1209,35 @@ def render_dashboard(df):
             st.caption("Estas fotos aparecen en la página de inicio de vietnamito.es")
 
             fotos_config = [
-                ("foto_hero", "Hero principal (fondo grande al entrar)"),
-                ("foto_franja", "Franja intermedia (segunda foto)"),
-                ("foto_split", "Sección 'Nuestro espacio' (tercera foto)"),
-                ("foto_reserva", "Página de reservas (fondo lateral)"),
-                ("foto_mural_banner", "Banner inferior (encima del footer)"),
+                ("foto_hero", "🖼️ Hero principal", "Fondo grande al entrar a la web"),
+                ("foto_franja", "🖼️ Franja intermedia", "Segunda sección de la página de inicio"),
+                ("foto_split", "🖼️ Nuestro espacio", "Tercera sección, lado derecho"),
+                ("foto_reserva", "🖼️ Página de reservas", "Foto de fondo lateral en la reserva"),
+                ("foto_mural_banner", "🖼️ Banner inferior", "Justo encima del footer"),
             ]
 
             import urllib.parse as _ul
-            for clave_foto, label_foto in fotos_config:
-                st.markdown(f"**{label_foto}**")
-                url_actual = cfg.get(clave_foto, "")
-                fc1, fc2 = st.columns([3, 1])
-                new_url = fc1.text_input("URL actual:", value=url_actual, key=f"furl_{clave_foto}")
-                if url_actual:
-                    fc2.image(url_actual, width=100)
-                foto_upload = st.file_uploader(f"Subir nueva foto:", type=["jpg","jpeg","png","webp"], key=f"fup_{clave_foto}")
-                if foto_upload:
-                    try:
-                        ext = foto_upload.name.split(".")[-1].lower()
-                        fname = f"web/{clave_foto}.{ext}"
-                        sb9.storage.from_("assets").upload(fname, foto_upload.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                        new_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{_ul.quote(fname, safe='/')}"
-                        sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
-                        st.success(f"✅ Foto subida y guardada")
-                        st.rerun()
-                    except Exception as e:
-                        st.warning(f"Error: {e}")
-                elif new_url != url_actual:
-                    if st.button(f"💾 Guardar URL", key=f"fsave_{clave_foto}"):
-                        sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
-                        st.success("✅ URL guardada")
-                        st.rerun()
-                st.markdown("")
+            cols_foto = st.columns(2)
+            for idx, (clave_foto, label_foto, desc_foto) in enumerate(fotos_config):
+                with cols_foto[idx % 2]:
+                    st.markdown(f"**{label_foto}**")
+                    st.caption(desc_foto)
+                    url_actual = cfg.get(clave_foto, "")
+                    if url_actual:
+                        st.image(url_actual, use_container_width=True)
+                    foto_upload = st.file_uploader(f"Subir foto", type=["jpg","jpeg","png","webp"], key=f"fup_{clave_foto}", label_visibility="collapsed")
+                    if foto_upload:
+                        try:
+                            ext = foto_upload.name.split(".")[-1].lower()
+                            fname = f"web/{clave_foto}.{ext}"
+                            sb9.storage.from_("assets").upload(fname, foto_upload.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                            new_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{_ul.quote(fname, safe='/')}"
+                            sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
+                            st.success(f"✅ Foto guardada")
+                            st.rerun()
+                        except Exception as e:
+                            st.warning(f"Error: {e}")
+                    st.markdown("")
 
         # ── MENÚ ──
         with web_tab2:
@@ -1465,7 +1461,7 @@ if df.empty:
     _sb0 = get_supabase()
     _ped_pend = len((_sb0.table("pedidos").select("id").eq("estado","pendiente").execute().data or []))
     _res_pend = len((_sb0.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
-    _ped_lbl = f"🛵 Pedidos {'🔴 ' + str(_ped_pend) if _ped_pend > 0 else ''}"
+    _ped_lbl = f"🛍️ Pedidos {'🔴 ' + str(_ped_pend) if _ped_pend > 0 else ''}"
     _res_lbl = f"🍽️ Reservas {'🔴 ' + str(_res_pend) if _res_pend > 0 else ''}"
 
     _t1, _t2, _t3, _t4, _t5 = st.tabs(["👥 Turnos", "📋 Checklists", _ped_lbl, _res_lbl, "🌐 Web"])
