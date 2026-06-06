@@ -1304,9 +1304,15 @@ def render_dashboard(df):
                 for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
                     with st.expander(f"{'✅' if prod['disponible'] else '❌'} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
                         ep1, ep2 = st.columns([3,1])
-                        e_nom = ep1.text_input("Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
+                        e_nom = ep1.text_input("🇪🇸 Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
                         e_precio = ep2.number_input("€:", value=float(prod["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_{prod['id']}")
-                        e_desc = st.text_area("Descripción:", value=prod.get("descripcion") or "", key=f"ed_{prod['id']}", height=70)
+                        e_nom_en = st.text_input("🇬🇧 Name (EN):", value=prod.get("nombre_en") or "", key=f"en_en_{prod['id']}")
+                        e_nom_ca = st.text_input("🏴 Nom (CA):", value=prod.get("nombre_ca") or "", key=f"en_ca_{prod['id']}")
+                        e_nom_vi = st.text_input("🇻🇳 Tên (VI):", value=prod.get("nombre_vi") or "", key=f"en_vi_{prod['id']}")
+                        e_desc = st.text_area("🇪🇸 Descripción:", value=prod.get("descripcion") or "", key=f"ed_{prod['id']}", height=60)
+                        e_desc_en = st.text_area("🇬🇧 Description (EN):", value=prod.get("descripcion_en") or "", key=f"ed_en_{prod['id']}", height=60)
+                        e_desc_ca = st.text_area("🏴 Descripció (CA):", value=prod.get("descripcion_ca") or "", key=f"ed_ca_{prod['id']}", height=60)
+                        e_desc_vi = st.text_area("🇻🇳 Mô tả (VI):", value=prod.get("descripcion_vi") or "", key=f"ed_vi_{prod['id']}", height=60)
                         e_orden = ep2.number_input("Orden:", value=int(prod.get("orden",0)), min_value=1, key=f"eord_{prod['id']}")
                         e_disp = ep1.checkbox("Disponible", value=prod.get("disponible",True), key=f"edis_{prod['id']}")
 
@@ -1345,6 +1351,9 @@ def render_dashboard(df):
                         if sc1.button("💾 Guardar", key=f"save_prod_{prod['id']}"):
                             sb9.table("productos").update({
                                 "nombre": e_nom, "descripcion": e_desc or None,
+                                "nombre_en": e_nom_en or None, "descripcion_en": e_desc_en or None,
+                                "nombre_ca": e_nom_ca or None, "descripcion_ca": e_desc_ca or None,
+                                "nombre_vi": e_nom_vi or None, "descripcion_vi": e_desc_vi or None,
                                 "precio": float(e_precio), "foto_url": e_foto or None,
                                 "orden": int(e_orden), "disponible": e_disp
                             }).eq("id", prod["id"]).execute()
@@ -1638,10 +1647,18 @@ if df.empty:
             st.markdown("#### Categorías")
             for cat_e in cats_web_e:
                 with st.expander(f"{cat_e['orden']}. {cat_e['nombre']}"):
-                    c_nom_e = st.text_input("Nombre:", value=cat_e["nombre"], key=f"cnom_e_{cat_e['id']}")
+                    c_nom_e = st.text_input("🇪🇸 Nombre:", value=cat_e["nombre"], key=f"cnom_e_{cat_e['id']}")
+                    c_nom_en = st.text_input("🇬🇧 Name (EN):", value=cat_e.get("nombre_en") or "", key=f"cnom_en_{cat_e['id']}")
+                    c_nom_ca = st.text_input("🏴 Nom (CA):", value=cat_e.get("nombre_ca") or "", key=f"cnom_ca_{cat_e['id']}")
+                    c_nom_vi = st.text_input("🇻🇳 Tên (VI):", value=cat_e.get("nombre_vi") or "", key=f"cnom_vi_{cat_e['id']}")
                     c_act_e = st.checkbox("Activa", value=cat_e.get("activo",True), key=f"cact_e_{cat_e['id']}")
                     if st.button("💾 Guardar", key=f"save_cat_e_{cat_e['id']}"):
-                        sb9.table("categorias").update({"nombre": c_nom_e, "activo": c_act_e}).eq("id", cat_e["id"]).execute()
+                        sb9.table("categorias").update({
+                            "nombre": c_nom_e, "activo": c_act_e,
+                            "nombre_en": c_nom_en or None,
+                            "nombre_ca": c_nom_ca or None,
+                            "nombre_vi": c_nom_vi or None,
+                        }).eq("id", cat_e["id"]).execute()
                         st.success("✅ Guardado"); st.rerun()
 else:
     render_dashboard(df)
