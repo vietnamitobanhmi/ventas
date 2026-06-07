@@ -78,15 +78,19 @@ def parse_csv_epos(lines):
 
 def parse_csv_nuevo(lines):
     """Parser para nuevo POS — una fila por ticket individual."""
-    from datetime import timezone
     import re
+    import csv as csv_module
+    import io
 
-    # Detectar separador — puede ser tab o punto y coma
-    sep = "\t" if "\t" in lines[0] else ";"
+    # Unir líneas y parsear con csv.reader para manejar campos entre comillas (ej: "6,00")
+    text = "\n".join(lines)
+    sep = "\t" if "\t" in lines[0] else (";" if ";" in lines[0] else ",")
+    reader = csv_module.reader(io.StringIO(text), delimiter=sep)
     rows = []
 
-    for line in lines[1:]:
-        parts = line.strip().split(sep)
+    for i, parts in enumerate(reader):
+        if i == 0:
+            continue  # cabecera
         if len(parts) < 6:
             continue
         try:
@@ -135,22 +139,20 @@ def parse_csv(file):
 
 def save_to_supabase(rows, fmt="epos"):
     sb = get_supabase()
-    if not rows:
-        return
-    fechas = list(set(r["fecha"] for r in rows))
-
     if fmt == "epos":
-        # Borra solo los registros de Epos Now (id_ticket IS NULL) para las fechas del archivo
-        for fecha in fechas:
-            sb.table("ventas").delete().eq("fecha", fecha).is_("id_ticket", "null").execute()
+        # Epos: reemplaza TODOS los datos (comportamiento original)
+        sb.table("ventas").delete().neq("id", 0).execute()
+        for i in range(0, len(rows), 500):
+            sb.table("ventas").insert(rows[i:i+500]).execute()
     else:
-        # Borra solo los registros del nuevo POS (id_ticket IS NOT NULL) para las fechas del archivo
-        for fecha in fechas:
-            sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
-
-    # Inserta los nuevos registros
-    for i in range(0, len(rows), 500):
-        sb.table("ventas").insert(rows[i:i+500]).execute()
+        # Nuevo POS: solo inserta/actualiza los tickets del archivo
+        # Primero borra los registros del nuevo POS que solapen fechas del archivo
+        if rows:
+            fechas = list(set(r["fecha"] for r in rows))
+            for fecha in fechas:
+                sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
+        for i in range(0, len(rows), 500):
+            sb.table("ventas").insert(rows[i:i+500]).execute()
 
 
 def load_from_supabase():
