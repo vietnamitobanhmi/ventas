@@ -651,6 +651,51 @@ def render_dashboard(df):
             boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
+            # ── Desglose Mañana / Noche ──────────────────────────────────────
+            st.divider()
+            st.markdown("**Desglose por turno**")
+
+            TURNOS_DEF = {
+                "🌅 Mañana": (10, 15),   # horas 10, 11, 12, 13, 14, 15
+                "🌙 Noche":  (18, 22),   # horas 18, 19, 20, 21, 22
+            }
+
+            # Coste por hora según turnos configurados
+            emp_coste_t2 = {e["id"]: e["coste_hora"] for e in empleados_t2}
+            coste_por_hora = {}
+            for tr in turnos_t2:
+                if dow_filter_t2 is not None and tr.get("dia_semana") != dow_filter_t2:
+                    continue
+                h_ini = int(tr["hora_inicio"].split(":")[0])
+                h_fin = int(tr["hora_fin"].split(":")[0])
+                coste_slot = emp_coste_t2.get(tr["empleado_id"], 10) * 0.5
+                for h in range(h_ini * 2, h_fin * 2):
+                    hora_entera = h // 2
+                    coste_por_hora[hora_entera] = coste_por_hora.get(hora_entera, 0) + coste_slot
+            # Si no hay filtro de día, promediar entre días con turnos
+            if dow_filter_t2 is None and turnos_t2:
+                dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_t2))
+                if dias_con_turnos > 0:
+                    coste_por_hora = {h: v / dias_con_turnos for h, v in coste_por_hora.items()}
+
+            n_dias = max(df_f["fecha"].nunique(), 1)
+            cols_turno = st.columns(2)
+            for col_idx, (turno_nombre, (h_ini, h_fin)) in enumerate(TURNOS_DEF.items()):
+                horas_turno = list(range(h_ini, h_fin + 1))
+                df_turno = df_f[df_f["hora"].isin(horas_turno)]
+                ventas_brutas_t = df_turno["valor"].sum()
+                ventas_netas_t = round(ventas_brutas_t * 0.75, 2)
+                coste_t = round(sum(coste_por_hora.get(h, 0) for h in horas_turno) * n_dias, 2)
+                margen_t = round(ventas_netas_t - coste_t, 2)
+                margen_color = "normal" if margen_t >= 0 else "inverse"
+                with cols_turno[col_idx]:
+                    st.markdown(f"**{turno_nombre}** · {h_ini}:00 – {h_fin}:30")
+                    mc1, mc2, mc3 = st.columns(3)
+                    mc1.metric("Ventas netas", f"€{ventas_netas_t:,.2f}", help="Ventas brutas × 75%")
+                    mc2.metric("Coste personal", f"€{coste_t:,.2f}")
+                    mc3.metric("Margen", f"€{margen_t:,.2f}", delta_color=margen_color)
+            st.caption("Mañana: 10:00–15:30 · Noche: 18:00–22:30 · Ventas netas = ventas brutas × 75% (−25% producto)")
+
     with tab3:
         import datetime as dt_hm
         fecha_min_t3 = df["fecha"].min()
