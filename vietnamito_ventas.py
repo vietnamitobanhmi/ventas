@@ -549,7 +549,7 @@ def render_dashboard(df):
         fecha_max_t1 = df["fecha"].max()
         today_t1 = dt_dow.date.today()
         fc1a, fc1b = st.columns(2)
-        fecha_desde_t1 = fc1a.date_input("Desde:", value=fecha_min_t1, min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_desde")
+        fecha_desde_t1 = fc1a.date_input("Desde:", value=min(today_t1, fecha_max_t1), min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_desde")
         fecha_hasta_t1 = fc1b.date_input("Hasta:", value=min(today_t1, fecha_max_t1), min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_hasta")
         df_t1 = df[(df["fecha"] >= fecha_desde_t1) & (df["fecha"] <= fecha_hasta_t1)]
         if df_t1.empty:
@@ -624,7 +624,7 @@ def render_dashboard(df):
         opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
         seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
         fc2, fc3 = st.columns(2)
-        fecha_desde = fc2.date_input("Desde:", value=fecha_min_data, min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
+        fecha_desde = fc2.date_input("Desde:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
         fecha_hasta = fc3.date_input("Hasta:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_hasta")
 
         df_f = df.copy()
@@ -657,7 +657,7 @@ def render_dashboard(df):
         fecha_max_t3 = df["fecha"].max()
         today_t3 = dt_hm.date.today()
         fc3a, fc3b = st.columns(2)
-        fecha_desde_t3 = fc3a.date_input("Desde:", value=fecha_min_t3, min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_desde")
+        fecha_desde_t3 = fc3a.date_input("Desde:", value=min(today_t3, fecha_max_t3), min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_desde")
         fecha_hasta_t3 = fc3b.date_input("Hasta:", value=min(today_t3, fecha_max_t3), min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_hasta")
         df_t3 = df[(df["fecha"] >= fecha_desde_t3) & (df["fecha"] <= fecha_hasta_t3)]
         if df_t3.empty:
