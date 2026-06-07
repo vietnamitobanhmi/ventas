@@ -82,7 +82,7 @@ def parse_csv_nuevo(lines):
     import re
 
     # Detectar separador — puede ser tab o punto y coma
-    sep = "\t" if "\t" in lines[0] else ";"
+    sep = "\t" if "\t" in lines[0] else (";" if ";" in lines[0] else ",")
     rows = []
 
     for line in lines[1:]:
