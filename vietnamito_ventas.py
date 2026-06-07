@@ -544,7 +544,19 @@ def render_dashboard(df):
             st.caption(f"⚠️ El coste de personal es estimado basándose en la configuración de turnos actual, aplicada a todas las semanas del periodo. Los turnos pasados pueden haber sido diferentes.")
 
     with tab1:
-        avg_dow = calcular_promedios_dia(df)
+        import datetime as dt_dow
+        fecha_min_t1 = df["fecha"].min()
+        fecha_max_t1 = df["fecha"].max()
+        today_t1 = dt_dow.date.today()
+        fc1a, fc1b = st.columns(2)
+        fecha_desde_t1 = fc1a.date_input("Desde:", value=fecha_min_t1, min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_desde")
+        fecha_hasta_t1 = fc1b.date_input("Hasta:", value=min(today_t1, fecha_max_t1), min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_hasta")
+        df_t1 = df[(df["fecha"] >= fecha_desde_t1) & (df["fecha"] <= fecha_hasta_t1)]
+        if df_t1.empty:
+            st.warning("No hay datos para ese rango de fechas.")
+        else:
+            st.caption(f"{df_t1['fecha'].nunique()} días con datos · {fecha_desde_t1.strftime('%d/%m/%Y')} – {fecha_hasta_t1.strftime('%d/%m/%Y')}")
+        avg_dow = calcular_promedios_dia(df_t1 if not df_t1.empty else df)
         labels = [DIAS[d] for d in DIAS_ORDER]
         values = [round(avg_dow.get(d, 0), 2) for d in DIAS_ORDER]
         fig = go.Figure(go.Bar(
@@ -565,7 +577,7 @@ def render_dashboard(df):
         st.markdown("**Evolución semanal por día**")
         st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en cada semana.")
 
-        df_evo = df.copy()
+        df_evo = (df_t1 if not df_t1.empty else df).copy()
         df_evo["fecha_ts"] = pd.to_datetime(df_evo["fecha"])
         df_evo["lunes"] = df_evo["fecha_ts"] - pd.to_timedelta(df_evo["fecha_ts"].dt.weekday, unit="D")
         df_evo["semana"] = df_evo["lunes"].dt.strftime("%Y-%m-%d")
@@ -640,7 +652,19 @@ def render_dashboard(df):
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
     with tab3:
-        hm = calcular_heatmap(df)
+        import datetime as dt_hm
+        fecha_min_t3 = df["fecha"].min()
+        fecha_max_t3 = df["fecha"].max()
+        today_t3 = dt_hm.date.today()
+        fc3a, fc3b = st.columns(2)
+        fecha_desde_t3 = fc3a.date_input("Desde:", value=fecha_min_t3, min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_desde")
+        fecha_hasta_t3 = fc3b.date_input("Hasta:", value=min(today_t3, fecha_max_t3), min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_hasta")
+        df_t3 = df[(df["fecha"] >= fecha_desde_t3) & (df["fecha"] <= fecha_hasta_t3)]
+        if df_t3.empty:
+            st.warning("No hay datos para ese rango de fechas.")
+        else:
+            st.caption(f"{df_t3['fecha'].nunique()} días con datos · {fecha_desde_t3.strftime('%d/%m/%Y')} – {fecha_hasta_t3.strftime('%d/%m/%Y')}")
+        hm = calcular_heatmap(df_t3 if not df_t3.empty else df)
         pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
         pivot.index = [DIAS[d] for d in DIAS_ORDER]
         pivot.columns = [f"{h}:00" for h in pivot.columns]
