@@ -97,7 +97,7 @@ def parse_csv_nuevo(lines):
             id_ticket = parts[0].strip()
             forma_pago = parts[1].strip()
             val_str = parts[2].strip().replace(",", ".")
-            val = float(val_str)
+            val = round(float(val_str) / 1.10, 2)  # Glop exporta con IVA 10%, convertimos a neto
             if val <= 0:
                 continue
             fecha_str = parts[5].strip()
