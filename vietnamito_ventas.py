@@ -660,18 +660,15 @@ def render_dashboard(df):
                 "🌙 Noche":  (18, 22),   # horas 18, 19, 20, 21, 22
             }
 
-            # Coste por hora según turnos configurados
+            # Coste por hora según turnos configurados (misma lógica que boxplot_horario)
             emp_coste_t2 = {e["id"]: e["coste_hora"] for e in empleados_t2}
             coste_por_hora = {}
             for tr in turnos_t2:
-                if dow_filter_t2 is not None and tr.get("dia_semana") != dow_filter_t2:
+                if dow_filter_t2 is not None and int(tr["dia_semana"]) != int(dow_filter_t2):
                     continue
-                h_ini = int(tr["hora_inicio"].split(":")[0])
-                h_fin = int(tr["hora_fin"].split(":")[0])
+                h = int(tr["slot"].split(":")[0])
                 coste_slot = emp_coste_t2.get(tr["empleado_id"], 10) * 0.5
-                for h in range(h_ini * 2, h_fin * 2):
-                    hora_entera = h // 2
-                    coste_por_hora[hora_entera] = coste_por_hora.get(hora_entera, 0) + coste_slot
+                coste_por_hora[h] = coste_por_hora.get(h, 0) + coste_slot
             # Si no hay filtro de día, promediar entre días con turnos
             if dow_filter_t2 is None and turnos_t2:
                 dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_t2))
