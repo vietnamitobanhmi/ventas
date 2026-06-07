@@ -140,13 +140,13 @@ def parse_csv(file):
 def save_to_supabase(rows, fmt="epos"):
     sb = get_supabase()
     if fmt == "epos":
-        # Epos: reemplaza TODOS los datos (comportamiento original)
-        sb.table("ventas").delete().neq("id", 0).execute()
+        # Epos: borra solo sus propias filas (id_ticket IS NULL), respeta los de Glop
+        sb.table("ventas").delete().is_("id_ticket", "null").execute()
         for i in range(0, len(rows), 500):
             sb.table("ventas").insert(rows[i:i+500]).execute()
     else:
-        # Nuevo POS: solo inserta/actualiza los tickets del archivo
-        # Primero borra los registros del nuevo POS que solapen fechas del archivo
+        # Nuevo POS (Glop): solo inserta/actualiza los tickets del archivo
+        # Borra los registros de Glop que solapen fechas del archivo, respeta los de Epos
         if rows:
             fechas = list(set(r["fecha"] for r in rows))
             for fecha in fechas:
