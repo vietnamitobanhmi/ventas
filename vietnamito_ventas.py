@@ -50,7 +50,7 @@ def detect_format(lines):
         return "nuevo"
     return "epos"
 
-def parse_csv_epos(lines):
+def parse_csv_epos(lines, archivo=""):
     """Parser para Epos Now — una fila por franja horaria."""
     sep = ";"
     rows = []
@@ -71,12 +71,14 @@ def parse_csv_epos(lines):
                 "items": int(parts[7]) if parts[7].strip().isdigit() else 0,
                 "forma_pago": None,
                 "id_ticket": None,
+                "fuente": "EposNow",
+                "archivo": archivo,
             })
         except:
             continue
     return rows
 
-def parse_csv_nuevo(lines):
+def parse_csv_nuevo(lines, archivo=""):
     """Parser para nuevo POS — una fila por ticket individual."""
     import re
     import csv as csv_module
@@ -116,12 +118,15 @@ def parse_csv_nuevo(lines):
                 "items": 0,
                 "forma_pago": forma_pago,
                 "id_ticket": id_ticket,
+                "fuente": "Glop",
+                "archivo": archivo,
             })
         except:
             continue
     return rows
 
 def parse_csv(file):
+    archivo = file.name if hasattr(file, "name") else ""
     content = file.read()
     try:
         text = content.decode("utf-8-sig")
@@ -132,9 +137,9 @@ def parse_csv(file):
         return [], "desconocido"
     fmt = detect_format(lines)
     if fmt == "nuevo":
-        return parse_csv_nuevo(lines), "nuevo"
+        return parse_csv_nuevo(lines, archivo), "nuevo"
     else:
-        return parse_csv_epos(lines), "epos"
+        return parse_csv_epos(lines, archivo), "epos"
 
 
 def save_to_supabase(rows, fmt="epos"):
