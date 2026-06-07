@@ -78,15 +78,19 @@ def parse_csv_epos(lines):
 
 def parse_csv_nuevo(lines):
     """Parser para nuevo POS — una fila por ticket individual."""
-    from datetime import timezone
     import re
+    import csv as csv_module
+    import io
 
-    # Detectar separador — puede ser tab o punto y coma
+    # Unir líneas y parsear con csv.reader para manejar campos entre comillas (ej: "6,00")
+    text = "\n".join(lines)
     sep = "\t" if "\t" in lines[0] else (";" if ";" in lines[0] else ",")
+    reader = csv_module.reader(io.StringIO(text), delimiter=sep)
     rows = []
 
-    for line in lines[1:]:
-        parts = line.strip().split(sep)
+    for i, parts in enumerate(reader):
+        if i == 0:
+            continue  # cabecera
         if len(parts) < 6:
             continue
         try:
