@@ -43,14 +43,16 @@ def upload_foto(sb, file, prefix):
         sb.storage.from_("assets").update(fname, file.read(), {"content-type": f"image/{ext}"})
     return f"{SUPABASE_URL}/storage/v1/object/public/assets/{fname_encoded}"
 
-def parse_csv(file):
-    content = file.read()
-    try:
-        text = content.decode("utf-8-sig")
-    except:
-        text = content.decode("latin-1")
-    lines = [l for l in text.strip().split("\n") if l.strip()]
-    sep = ";" if ";" in lines[0] else ","
+def detect_format(lines):
+    """Detecta si el CSV es de Epos Now o del nuevo POS."""
+    header = lines[0].lower()
+    if "id documento" in header or "forma de pago" in header or "id\tdocumento" in header:
+        return "nuevo"
+    return "epos"
+
+def parse_csv_epos(lines):
+    """Parser para Epos Now — una fila por franja horaria."""
+    sep = ";"
     rows = []
     for line in lines[1:]:
         parts = line.strip().split(sep)
@@ -67,16 +69,87 @@ def parse_csv(file):
                 "valor": val,
                 "ntrans": int(parts[1]) if parts[1].strip().isdigit() else 0,
                 "items": int(parts[7]) if parts[7].strip().isdigit() else 0,
+                "forma_pago": None,
+                "id_ticket": None,
             })
         except:
             continue
     return rows
 
-def save_to_supabase(rows):
+def parse_csv_nuevo(lines):
+    """Parser para nuevo POS — una fila por ticket individual."""
+    from datetime import timezone
+    import re
+
+    # Detectar separador — puede ser tab o punto y coma
+    sep = "\t" if "\t" in lines[0] else ";"
+    rows = []
+
+    for line in lines[1:]:
+        parts = line.strip().split(sep)
+        if len(parts) < 6:
+            continue
+        try:
+            id_ticket = parts[0].strip()
+            forma_pago = parts[1].strip()
+            val_str = parts[2].strip().replace(",", ".")
+            val = float(val_str)
+            if val <= 0:
+                continue
+            fecha_str = parts[5].strip()
+            # Parse ISO 8601 con timezone: 2026-06-07T11:48:34+02:00
+            # Python < 3.11 no soporta fromisoformat con offset, usamos regex
+            m = re.match(r'(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})', fecha_str)
+            if not m:
+                continue
+            dt = datetime.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S")
+            rows.append({
+                "fecha": dt.strftime("%Y-%m-%d"),
+                "hora": dt.hour,
+                "dow": dt.weekday(),
+                "valor": val,
+                "ntrans": 1,
+                "items": 0,
+                "forma_pago": forma_pago,
+                "id_ticket": id_ticket,
+            })
+        except:
+            continue
+    return rows
+
+def parse_csv(file):
+    content = file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except:
+        text = content.decode("latin-1")
+    lines = [l for l in text.strip().split("\n") if l.strip()]
+    if not lines:
+        return [], "desconocido"
+    fmt = detect_format(lines)
+    if fmt == "nuevo":
+        return parse_csv_nuevo(lines), "nuevo"
+    else:
+        return parse_csv_epos(lines), "epos"
+
+
+def save_to_supabase(rows, fmt="epos"):
     sb = get_supabase()
-    sb.table("ventas").delete().neq("id", 0).execute()
-    for i in range(0, len(rows), 500):
-        sb.table("ventas").insert(rows[i:i+500]).execute()
+    if fmt == "epos":
+        # Epos: reemplaza TODOS los datos (comportamiento original)
+        sb.table("ventas").delete().neq("id", 0).execute()
+        for i in range(0, len(rows), 500):
+            sb.table("ventas").insert(rows[i:i+500]).execute()
+    else:
+        # Nuevo POS: solo inserta/actualiza los tickets del archivo
+        # Primero borra los registros del nuevo POS que solapen fechas del archivo
+        if rows:
+            fechas = list(set(r["fecha"] for r in rows))
+            for fecha in fechas:
+                sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
+        for i in range(0, len(rows), 500):
+            sb.table("ventas").insert(rows[i:i+500]).execute()
+
 
 def load_from_supabase():
     sb = get_supabase()
@@ -1437,19 +1510,20 @@ def render_dashboard(df):
 st.title("☕ Vietnamito — Dashboard de Ventas")
 
 uploaded = st.file_uploader(
-    "Sube un CSV nuevo de Epos Now para actualizar los datos",
+    "Sube un CSV de ventas (Epos Now o nuevo POS)",
     type=["csv"],
-    help="Descárgalo desde Epos Now → Reports → Sales Breakdown by Hour"
+    help="Compatible con Epos Now (Sales Breakdown by Hour) y el nuevo POS (por ticket)"
 )
 
 if uploaded:
     with st.spinner("Procesando y guardando en la nube..."):
-        rows = parse_csv(uploaded)
+        rows, fmt = parse_csv(uploaded)
         if rows:
-            save_to_supabase(rows)
-            st.success(f"✅ {len(rows)} registros guardados. Los datos se han actualizado.")
+            save_to_supabase(rows, fmt)
+            fmt_label = "nuevo POS (por ticket)" if fmt == "nuevo" else "Epos Now (por franja horaria)"
+            st.success(f"✅ {len(rows)} registros guardados · Formato detectado: {fmt_label}")
         else:
-            st.error("No se pudieron leer datos del CSV.")
+            st.error("No se pudieron leer datos del CSV. Verifica el formato.")
 
 with st.spinner("Cargando datos..."):
     df = load_from_supabase()
