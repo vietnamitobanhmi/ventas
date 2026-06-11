@@ -15,7 +15,87 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
+RESEND_API_KEY = "re_4yWBvobk_Le6xVuykJUA1uWYmAHeTLfuw"
+RESEND_FROM = "Vietnamito <reservas@vietnamito.es>"
+
+def enviar_email_confirmacion(reserva):
+    """Envía email de confirmación al cliente via Resend."""
+    if not reserva.get("email"):
+        return False
+    import urllib.request, json as _json
+    
+    nombre = reserva.get("nombre", "")
+    fecha = reserva.get("fecha", "")
+    hora = reserva.get("hora", "")
+    personas = reserva.get("personas", "")
+    notas = reserva.get("notas", "")
+
+    html_body = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Georgia,serif;background:#FDF6EC;margin:0;padding:0;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+    <div style="background:linear-gradient(135deg,#8B3A1A,#D85A30);padding:40px 40px 32px;text-align:center;">
+      <img src="https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png" style="height:64px;margin-bottom:16px;" alt="Vietnamito">
+      <h1 style="color:#fff;font-size:28px;font-weight:400;margin:0;font-family:Georgia,serif;">Reserva confirmada ✓</h1>
+    </div>
+    <div style="padding:40px;">
+      <p style="font-size:16px;color:#3D1C0A;margin-bottom:24px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin-bottom:28px;">
+        Tu reserva en <strong>Vietnamito</strong> ha sido confirmada. ¡Te esperamos!
+      </p>
+      <div style="background:#FDF6EC;border-radius:10px;padding:24px;margin-bottom:28px;border:1px solid rgba(216,90,48,0.15);">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">📅 Fecha</td><td style="padding:8px 0;color:#3D1C0A;font-weight:500;font-size:14px;">{fecha}</td></tr>
+          <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">🕐 Hora</td><td style="padding:8px 0;color:#3D1C0A;font-weight:500;font-size:14px;">{hora}</td></tr>
+          <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">👥 Personas</td><td style="padding:8px 0;color:#3D1C0A;font-weight:500;font-size:14px;">{personas}</td></tr>
+          {"<tr><td style='padding:8px 0;color:#7A6055;font-size:14px;'>📝 Notas</td><td style='padding:8px 0;color:#3D1C0A;font-size:14px;'>" + notas + "</td></tr>" if notas else ""}
+        </table>
+      </div>
+      <div style="background:#FFF8F0;border-left:3px solid #D85A30;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:28px;">
+        <p style="margin:0;font-size:14px;color:#5C4033;line-height:1.6;">
+          📍 <strong>Carrer Berlín 64, Barcelona</strong><br>
+          Sants – Les Corts
+        </p>
+      </div>
+      <p style="font-size:13px;color:#7A6055;line-height:1.7;margin-bottom:8px;">
+        Si necesitas modificar o cancelar tu reserva, contáctanos respondiendo a este email o llamando al <strong>+34 711 216 862</strong>.
+      </p>
+    </div>
+    <div style="background:#3D1C0A;padding:24px 40px;text-align:center;">
+      <p style="color:rgba(255,255,255,0.5);font-size:12px;margin:0;">
+        Vietnamito · Banh mi & Café · Carrer Berlín 64, Barcelona<br>
+        <span style="font-size:11px;">Tus datos se usan únicamente para gestionar tu reserva.</span>
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    payload = _json.dumps({
+        "from": RESEND_FROM,
+        "to": [reserva["email"]],
+        "subject": f"✓ Reserva confirmada — Vietnamito {fecha} {hora}",
+        "html": html_body
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status in [200, 201]
+    except Exception as e:
+        return False
+
+
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 
 DIAS = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
@@ -50,7 +130,7 @@ def detect_format(lines):
         return "nuevo"
     return "epos"
 
-def parse_csv_epos(lines, archivo=""):
+def parse_csv_epos(lines):
     """Parser para Epos Now — una fila por franja horaria."""
     sep = ";"
     rows = []
@@ -71,35 +151,29 @@ def parse_csv_epos(lines, archivo=""):
                 "items": int(parts[7]) if parts[7].strip().isdigit() else 0,
                 "forma_pago": None,
                 "id_ticket": None,
-                "fuente": "EposNow",
-                "archivo": archivo,
             })
         except:
             continue
     return rows
 
-def parse_csv_nuevo(lines, archivo=""):
+def parse_csv_nuevo(lines):
     """Parser para nuevo POS — una fila por ticket individual."""
+    from datetime import timezone
     import re
-    import csv as csv_module
-    import io
 
-    # Unir líneas y parsear con csv.reader para manejar campos entre comillas (ej: "6,00")
-    text = "\n".join(lines)
-    sep = "\t" if "\t" in lines[0] else (";" if ";" in lines[0] else ",")
-    reader = csv_module.reader(io.StringIO(text), delimiter=sep)
+    # Detectar separador — puede ser tab o punto y coma
+    sep = "\t" if "\t" in lines[0] else ";"
     rows = []
 
-    for i, parts in enumerate(reader):
-        if i == 0:
-            continue  # cabecera
+    for line in lines[1:]:
+        parts = line.strip().split(sep)
         if len(parts) < 6:
             continue
         try:
             id_ticket = parts[0].strip()
             forma_pago = parts[1].strip()
             val_str = parts[2].strip().replace(",", ".")
-            val = round(float(val_str) / 1.10, 2)  # Glop exporta con IVA 10%, convertimos a neto
+            val = float(val_str)
             if val <= 0:
                 continue
             fecha_str = parts[5].strip()
@@ -118,15 +192,12 @@ def parse_csv_nuevo(lines, archivo=""):
                 "items": 0,
                 "forma_pago": forma_pago,
                 "id_ticket": id_ticket,
-                "fuente": "Glop",
-                "archivo": archivo,
             })
         except:
             continue
     return rows
 
 def parse_csv(file):
-    archivo = file.name if hasattr(file, "name") else ""
     content = file.read()
     try:
         text = content.decode("utf-8-sig")
@@ -137,27 +208,29 @@ def parse_csv(file):
         return [], "desconocido"
     fmt = detect_format(lines)
     if fmt == "nuevo":
-        return parse_csv_nuevo(lines, archivo), "nuevo"
+        return parse_csv_nuevo(lines), "nuevo"
     else:
-        return parse_csv_epos(lines, archivo), "epos"
+        return parse_csv_epos(lines), "epos"
 
 
 def save_to_supabase(rows, fmt="epos"):
     sb = get_supabase()
+    if not rows:
+        return
+    fechas = list(set(r["fecha"] for r in rows))
+
     if fmt == "epos":
-        # Epos: borra solo sus propias filas (id_ticket IS NULL), respeta los de Glop
-        sb.table("ventas").delete().is_("id_ticket", "null").execute()
-        for i in range(0, len(rows), 500):
-            sb.table("ventas").insert(rows[i:i+500]).execute()
+        # Borra solo los registros de Epos Now (id_ticket IS NULL) para las fechas del archivo
+        for fecha in fechas:
+            sb.table("ventas").delete().eq("fecha", fecha).is_("id_ticket", "null").execute()
     else:
-        # Nuevo POS (Glop): solo inserta/actualiza los tickets del archivo
-        # Borra los registros de Glop que solapen fechas del archivo, respeta los de Epos
-        if rows:
-            fechas = list(set(r["fecha"] for r in rows))
-            for fecha in fechas:
-                sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
-        for i in range(0, len(rows), 500):
-            sb.table("ventas").insert(rows[i:i+500]).execute()
+        # Borra solo los registros del nuevo POS (id_ticket IS NOT NULL) para las fechas del archivo
+        for fecha in fechas:
+            sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
+
+    # Inserta los nuevos registros
+    for i in range(0, len(rows), 500):
+        sb.table("ventas").insert(rows[i:i+500]).execute()
 
 
 def load_from_supabase():
@@ -544,19 +617,7 @@ def render_dashboard(df):
             st.caption(f"⚠️ El coste de personal es estimado basándose en la configuración de turnos actual, aplicada a todas las semanas del periodo. Los turnos pasados pueden haber sido diferentes.")
 
     with tab1:
-        import datetime as dt_dow
-        fecha_min_t1 = df["fecha"].min()
-        fecha_max_t1 = df["fecha"].max()
-        today_t1 = dt_dow.date.today()
-        fc1a, fc1b = st.columns(2)
-        fecha_desde_t1 = fc1a.date_input("Desde:", value=min(today_t1, fecha_max_t1), min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_desde")
-        fecha_hasta_t1 = fc1b.date_input("Hasta:", value=min(today_t1, fecha_max_t1), min_value=fecha_min_t1, max_value=fecha_max_t1, key="t1_hasta")
-        df_t1 = df[(df["fecha"] >= fecha_desde_t1) & (df["fecha"] <= fecha_hasta_t1)]
-        if df_t1.empty:
-            st.warning("No hay datos para ese rango de fechas.")
-        else:
-            st.caption(f"{df_t1['fecha'].nunique()} días con datos · {fecha_desde_t1.strftime('%d/%m/%Y')} – {fecha_hasta_t1.strftime('%d/%m/%Y')}")
-        avg_dow = calcular_promedios_dia(df_t1 if not df_t1.empty else df)
+        avg_dow = calcular_promedios_dia(df)
         labels = [DIAS[d] for d in DIAS_ORDER]
         values = [round(avg_dow.get(d, 0), 2) for d in DIAS_ORDER]
         fig = go.Figure(go.Bar(
@@ -577,7 +638,7 @@ def render_dashboard(df):
         st.markdown("**Evolución semanal por día**")
         st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en cada semana.")
 
-        df_evo = (df_t1 if not df_t1.empty else df).copy()
+        df_evo = df.copy()
         df_evo["fecha_ts"] = pd.to_datetime(df_evo["fecha"])
         df_evo["lunes"] = df_evo["fecha_ts"] - pd.to_timedelta(df_evo["fecha_ts"].dt.weekday, unit="D")
         df_evo["semana"] = df_evo["lunes"].dt.strftime("%Y-%m-%d")
@@ -624,7 +685,7 @@ def render_dashboard(df):
         opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
         seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
         fc2, fc3 = st.columns(2)
-        fecha_desde = fc2.date_input("Desde:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
+        fecha_desde = fc2.date_input("Desde:", value=fecha_min_data, min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
         fecha_hasta = fc3.date_input("Hasta:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_hasta")
 
         df_f = df.copy()
@@ -651,62 +712,8 @@ def render_dashboard(df):
             boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
-            # ── Desglose Mañana / Noche ──────────────────────────────────────
-            st.divider()
-            st.markdown("**Desglose por turno**")
-
-            TURNOS_DEF = {
-                "🌅 Mañana": (10, 15),   # horas 10, 11, 12, 13, 14, 15
-                "🌙 Noche":  (18, 22),   # horas 18, 19, 20, 21, 22
-            }
-
-            # Coste por hora según turnos configurados (misma lógica que boxplot_horario)
-            emp_coste_t2 = {e["id"]: e["coste_hora"] for e in empleados_t2}
-            coste_por_hora = {}
-            for tr in turnos_t2:
-                if dow_filter_t2 is not None and int(tr["dia_semana"]) != int(dow_filter_t2):
-                    continue
-                h = int(tr["slot"].split(":")[0])
-                coste_slot = emp_coste_t2.get(tr["empleado_id"], 10) * 0.5
-                coste_por_hora[h] = coste_por_hora.get(h, 0) + coste_slot
-            # Si no hay filtro de día, promediar entre días con turnos
-            if dow_filter_t2 is None and turnos_t2:
-                dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_t2))
-                if dias_con_turnos > 0:
-                    coste_por_hora = {h: v / dias_con_turnos for h, v in coste_por_hora.items()}
-
-            n_dias = max(df_f["fecha"].nunique(), 1)
-            cols_turno = st.columns(2)
-            for col_idx, (turno_nombre, (h_ini, h_fin)) in enumerate(TURNOS_DEF.items()):
-                horas_turno = list(range(h_ini, h_fin + 1))
-                df_turno = df_f[df_f["hora"].isin(horas_turno)]
-                ventas_brutas_t = df_turno["valor"].sum()
-                ventas_netas_t = round(ventas_brutas_t * 0.75, 2)
-                coste_t = round(sum(coste_por_hora.get(h, 0) for h in horas_turno) * n_dias, 2)
-                margen_t = round(ventas_netas_t - coste_t, 2)
-                margen_color = "normal" if margen_t >= 0 else "inverse"
-                with cols_turno[col_idx]:
-                    st.markdown(f"**{turno_nombre}** · {h_ini}:00 – {h_fin}:30")
-                    mc1, mc2, mc3 = st.columns(3)
-                    mc1.metric("Ventas netas", f"€{ventas_netas_t:,.2f}", help="Ventas brutas × 75%")
-                    mc2.metric("Coste personal", f"€{coste_t:,.2f}")
-                    mc3.metric("Margen", f"€{margen_t:,.2f}", delta_color=margen_color)
-            st.caption("Mañana: 10:00–15:30 · Noche: 18:00–22:30 · Ventas netas = ventas brutas × 75% (−25% producto)")
-
     with tab3:
-        import datetime as dt_hm
-        fecha_min_t3 = df["fecha"].min()
-        fecha_max_t3 = df["fecha"].max()
-        today_t3 = dt_hm.date.today()
-        fc3a, fc3b = st.columns(2)
-        fecha_desde_t3 = fc3a.date_input("Desde:", value=min(today_t3, fecha_max_t3), min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_desde")
-        fecha_hasta_t3 = fc3b.date_input("Hasta:", value=min(today_t3, fecha_max_t3), min_value=fecha_min_t3, max_value=fecha_max_t3, key="t3_hasta")
-        df_t3 = df[(df["fecha"] >= fecha_desde_t3) & (df["fecha"] <= fecha_hasta_t3)]
-        if df_t3.empty:
-            st.warning("No hay datos para ese rango de fechas.")
-        else:
-            st.caption(f"{df_t3['fecha'].nunique()} días con datos · {fecha_desde_t3.strftime('%d/%m/%Y')} – {fecha_hasta_t3.strftime('%d/%m/%Y')}")
-        hm = calcular_heatmap(df_t3 if not df_t3.empty else df)
+        hm = calcular_heatmap(df)
         pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
         pivot.index = [DIAS[d] for d in DIAS_ORDER]
         pivot.columns = [f"{h}:00" for h in pivot.columns]
@@ -1303,7 +1310,15 @@ def render_dashboard(df):
                             if est != estado:
                                 if st.button(est.capitalize(), key=f"res_{res['id']}_{est}"):
                                     sb8.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
-                                    st.success(f"✅ Reserva #{res['id']} → {est}")
+                                    if est == "confirmada" and res.get("email"):
+                                        ok = enviar_email_confirmacion(res)
+                                        if ok:
+                                            st.success(f"✅ Reserva #{res['id']} confirmada · Email enviado a {res['email']}")
+                                        else:
+                                            st.success(f"✅ Reserva #{res['id']} confirmada")
+                                            st.warning("⚠️ No se pudo enviar el email de confirmación")
+                                    else:
+                                        st.success(f"✅ Reserva #{res['id']} → {est}")
                                     st.rerun()
                             else:
                                 st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
@@ -1362,7 +1377,6 @@ def render_dashboard(df):
                 ("foto_split", "🖼️ Nuestro espacio", "Tercera sección, lado derecho"),
                 ("foto_reserva", "🖼️ Página de reservas", "Foto de fondo lateral en la reserva"),
                 ("foto_mural_banner", "🖼️ Banner inferior", "Justo encima del footer"),
-                ("foto_mapa", "🗺️ Mapa / Cómo llegar", "Imagen del mapa en la sección de contacto"),
             ]
 
             import urllib.parse as _ul
@@ -1732,6 +1746,15 @@ if df.empty:
                         if est3 != res2["estado"]:
                             if st.button(est3.capitalize(), key=f"res2_{res2['id']}_{est3}"):
                                 sb8.table("reservas").update({"estado": est3}).eq("id", res2["id"]).execute()
+                                if est3 == "confirmada" and res2.get("email"):
+                                    ok = enviar_email_confirmacion(res2)
+                                    if ok:
+                                        st.success(f"✅ Confirmada · Email enviado a {res2['email']}")
+                                    else:
+                                        st.success("✅ Confirmada")
+                                        st.warning("⚠️ No se pudo enviar el email")
+                                else:
+                                    st.success(f"✅ → {est3}")
                                 st.rerun()
 
     with _t5:
