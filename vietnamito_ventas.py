@@ -122,6 +122,24 @@ def enviar_email_confirmacion(reserva, cfg=None):
     html = _html_base("Reserva confirmada ✓", f"{fecha} a las {hora} · {personas} personas", contenido)
     return _resend_send(reserva["email"], f"✓ Reserva confirmada — Vietnamito {fecha} {hora}", html)
 
+def enviar_email_cancelacion(reserva, cfg=None):
+    """Email de cancelación cuando se cancela la reserva desde el backoffice."""
+    if not reserva.get("email"):
+        return False
+    nombre = reserva.get("nombre", "")
+    fecha = formato_fecha_email(reserva.get("fecha", ""))
+    hora = reserva.get("hora", "")
+    personas = reserva.get("personas", "")
+    notas = reserva.get("notas", "")
+    tabla = _tabla_reserva(fecha, hora, personas, notas, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Tu reserva en <strong>Vietnamito</strong> ha sido <strong style="color:#C62828;">cancelada</strong>.</p>
+      {tabla}
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Si quieres hacer una nueva reserva o tienes alguna duda, responde a este email o llámanos al <strong>+34 711 216 862</strong>. ¡Esperamos verte pronto!</p>"""
+    html = _html_base("Reserva cancelada", f"{fecha} a las {hora}", contenido)
+    return _resend_send(reserva["email"], f"Reserva cancelada — Vietnamito {fecha} {hora}", html)
+
 
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 
@@ -1357,6 +1375,9 @@ def render_dashboard(df):
                                         else:
                                             st.success(f"✅ Reserva #{res['id']} confirmada")
                                             st.warning("⚠️ No se pudo enviar el email de confirmación")
+                                    elif est == "cancelada" and res.get("email"):
+                                        enviar_email_cancelacion(res, cfg_email)
+                                        st.success(f"✅ Reserva #{res['id']} cancelada · Email enviado a {res['email']}")
                                     else:
                                         st.success(f"✅ Reserva #{res['id']} → {est}")
                                     st.rerun()
