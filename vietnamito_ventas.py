@@ -1407,6 +1407,7 @@ def render_dashboard(df):
                 ("foto_split", "🖼️ Nuestro espacio", "Tercera sección, lado derecho"),
                 ("foto_reserva", "🖼️ Página de reservas", "Foto de fondo lateral en la reserva"),
                 ("foto_mural_banner", "🖼️ Banner inferior", "Justo encima del footer"),
+                ("foto_mapa", "🗺️ Mapa del local", "Mapa ilustrado que aparece debajo de los horarios"),
             ]
 
             import urllib.parse as _ul
