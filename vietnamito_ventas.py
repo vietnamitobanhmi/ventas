@@ -20,6 +20,16 @@ RESEND_FROM = "Vietnamito <reservas@vietnamito.es>"
 
 MAPS_URL = "https://maps.app.goo.gl/LWR4Sm5mdAfR3H7v5"
 
+def formato_fecha_email(fecha_str):
+    """Convierte '2026-06-11' a 'Jueves 11/06/2026'."""
+    try:
+        from datetime import datetime
+        dias = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+        dt = datetime.strptime(fecha_str, "%Y-%m-%d")
+        return f"{dias[dt.weekday()]} {dt.strftime('%d/%m/%Y')}"
+    except:
+        return fecha_str
+
 def _resend_send(to, subject, html_body):
     """Envía email via Resend API usando requests."""
     try:
@@ -71,7 +81,7 @@ def enviar_email_recibida(reserva, cfg=None):
     if not reserva.get("email"):
         return False
     nombre = reserva.get("nombre", "")
-    fecha = reserva.get("fecha", "")
+    fecha = formato_fecha_email(reserva.get("fecha", ""))
     hora = reserva.get("hora", "")
     personas = reserva.get("personas", "")
     notas = reserva.get("notas", "")
@@ -89,7 +99,7 @@ def enviar_email_confirmacion(reserva, cfg=None):
     if not reserva.get("email"):
         return False
     nombre = reserva.get("nombre", "")
-    fecha = reserva.get("fecha", "")
+    fecha = formato_fecha_email(reserva.get("fecha", ""))
     hora = reserva.get("hora", "")
     personas = reserva.get("personas", "")
     notas = reserva.get("notas", "")
