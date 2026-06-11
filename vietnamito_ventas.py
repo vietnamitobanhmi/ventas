@@ -15,7 +15,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-RESEND_API_KEY = st.secrets.get("RESEND_API_KEY", "")
+try:
+    RESEND_API_KEY = st.secrets["RESEND_API_KEY"]
+except Exception:
+    RESEND_API_KEY = ""
 RESEND_FROM = "Vietnamito <reservas@vietnamito.es>"
 
 MAPS_URL = "https://maps.app.goo.gl/LWR4Sm5mdAfR3H7v5"
@@ -32,6 +35,9 @@ def formato_fecha_email(fecha_str):
 
 def _resend_send(to, subject, html_body):
     """Envía email via Resend API usando requests."""
+    if not RESEND_API_KEY:
+        st.warning("⚠️ RESEND_API_KEY no configurada en Secrets.")
+        return False
     try:
         import requests as _req
         r = _req.post(
@@ -40,8 +46,12 @@ def _resend_send(to, subject, html_body):
             json={"from": RESEND_FROM, "to": [to], "subject": subject, "html": html_body},
             timeout=10
         )
-        return r.status_code in [200, 201, 202]
+        if r.status_code not in [200, 201, 202]:
+            st.warning(f"⚠️ Error Resend {r.status_code}: {r.text[:200]}")
+            return False
+        return True
     except Exception as e:
+        st.warning(f"⚠️ Error enviando email: {e}")
         return False
 
 def _html_base(titulo, subtitulo, contenido):
