@@ -18,82 +18,89 @@ st.markdown("""
 RESEND_API_KEY = "re_4yWBvobk_Le6xVuykJUA1uWYmAHeTLfuw"
 RESEND_FROM = "Vietnamito <reservas@vietnamito.es>"
 
-def enviar_email_confirmacion(reserva):
-    """Envía email de confirmación al cliente via Resend."""
+MAPS_URL = "https://maps.app.goo.gl/LWR4Sm5mdAfR3H7v5"
+
+def _resend_send(to, subject, html_body):
+    """Envía email via Resend API usando requests."""
+    try:
+        import requests as _req
+        r = _req.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+            json={"from": RESEND_FROM, "to": [to], "subject": subject, "html": html_body},
+            timeout=10
+        )
+        return r.status_code in [200, 201, 202]
+    except Exception as e:
+        return False
+
+def _html_base(titulo, subtitulo, contenido):
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:Georgia,serif;background:#FDF6EC;margin:0;padding:20px 0;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.1);">
+    <div style="background:linear-gradient(135deg,#8B3A1A,#D85A30);padding:36px 40px 28px;text-align:center;">
+      <img src="https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png" style="height:56px;margin-bottom:14px;" alt="Vietnamito">
+      <h1 style="color:#fff;font-size:24px;font-weight:400;margin:0;font-family:Georgia,serif;">{titulo}</h1>
+      <p style="color:rgba(255,255,255,0.75);font-size:14px;margin:8px 0 0;">{subtitulo}</p>
+    </div>
+    <div style="padding:36px 40px;">{contenido}</div>
+    <div style="background:#3D1C0A;padding:20px 40px;text-align:center;">
+      <a href="{MAPS_URL}" style="display:inline-block;background:#D85A30;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-family:Georgia,serif;font-size:13px;margin-bottom:14px;">📍 Ver en Google Maps</a>
+      <p style="color:rgba(255,255,255,0.4);font-size:11px;margin:0;">Vietnamito · Banh mi & Café · Carrer Berlín 64, Barcelona · Sants – Les Corts<br>Tus datos se usan únicamente para gestionar tu reserva.</p>
+    </div>
+  </div>
+</body></html>"""
+
+def _tabla_reserva(fecha, hora, personas, notas, cfg=None):
+    dir_local = (cfg or {}).get("direccion", "Carrer Berlín 64, Barcelona")
+    notas_row = f"<tr><td style='padding:8px 0;color:#7A6055;font-size:14px;vertical-align:top;'>📝 Notas</td><td style='padding:8px 0;color:#3D1C0A;font-size:14px;'>{notas}</td></tr>" if notas else ""
+    return f"""
+    <div style="background:#FDF6EC;border-radius:10px;padding:22px 24px;margin:20px 0;border:1px solid rgba(216,90,48,0.15);">
+      <table style="width:100%;border-collapse:collapse;">
+        <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">📅 Fecha</td><td style="padding:8px 0;color:#3D1C0A;font-weight:600;font-size:14px;">{fecha}</td></tr>
+        <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">🕐 Hora</td><td style="padding:8px 0;color:#3D1C0A;font-weight:600;font-size:14px;">{hora}</td></tr>
+        <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">👥 Personas</td><td style="padding:8px 0;color:#3D1C0A;font-weight:600;font-size:14px;">{personas}</td></tr>
+        {notas_row}
+        <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">📍 Dirección</td><td style="padding:8px 0;font-size:14px;"><a href="{MAPS_URL}" style="color:#D85A30;">{dir_local}</a></td></tr>
+      </table>
+    </div>"""
+
+def enviar_email_recibida(reserva, cfg=None):
+    """Email automático al recibir la solicitud — aún pendiente de confirmar."""
     if not reserva.get("email"):
         return False
-    import urllib.request, json as _json
-    
     nombre = reserva.get("nombre", "")
     fecha = reserva.get("fecha", "")
     hora = reserva.get("hora", "")
     personas = reserva.get("personas", "")
     notas = reserva.get("notas", "")
+    tabla = _tabla_reserva(fecha, hora, personas, notas, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Hemos recibido tu solicitud de reserva en <strong>Vietnamito</strong>. La revisaremos y te confirmaremos por email en breve.</p>
+      {tabla}
+      <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">¿Tienes alguna duda? Responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
+    html = _html_base("Solicitud recibida 📬", "Te confirmaremos la reserva por email", contenido)
+    return _resend_send(reserva["email"], f"Solicitud de reserva recibida — Vietnamito {fecha} {hora}", html)
 
-    html_body = f"""
-<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"></head>
-<body style="font-family:Georgia,serif;background:#FDF6EC;margin:0;padding:0;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-    <div style="background:linear-gradient(135deg,#8B3A1A,#D85A30);padding:40px 40px 32px;text-align:center;">
-      <img src="https://rwtpjqvgiiuvniixqapu.supabase.co/storage/v1/object/public/assets/Logo%20Vietnamito%20Final.png" style="height:64px;margin-bottom:16px;" alt="Vietnamito">
-      <h1 style="color:#fff;font-size:28px;font-weight:400;margin:0;font-family:Georgia,serif;">Reserva confirmada ✓</h1>
-    </div>
-    <div style="padding:40px;">
-      <p style="font-size:16px;color:#3D1C0A;margin-bottom:24px;">Hola <strong>{nombre}</strong>,</p>
-      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin-bottom:28px;">
-        Tu reserva en <strong>Vietnamito</strong> ha sido confirmada. ¡Te esperamos!
-      </p>
-      <div style="background:#FDF6EC;border-radius:10px;padding:24px;margin-bottom:28px;border:1px solid rgba(216,90,48,0.15);">
-        <table style="width:100%;border-collapse:collapse;">
-          <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">📅 Fecha</td><td style="padding:8px 0;color:#3D1C0A;font-weight:500;font-size:14px;">{fecha}</td></tr>
-          <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">🕐 Hora</td><td style="padding:8px 0;color:#3D1C0A;font-weight:500;font-size:14px;">{hora}</td></tr>
-          <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">👥 Personas</td><td style="padding:8px 0;color:#3D1C0A;font-weight:500;font-size:14px;">{personas}</td></tr>
-          {"<tr><td style='padding:8px 0;color:#7A6055;font-size:14px;'>📝 Notas</td><td style='padding:8px 0;color:#3D1C0A;font-size:14px;'>" + notas + "</td></tr>" if notas else ""}
-        </table>
-      </div>
-      <div style="background:#FFF8F0;border-left:3px solid #D85A30;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:28px;">
-        <p style="margin:0;font-size:14px;color:#5C4033;line-height:1.6;">
-          📍 <strong>Carrer Berlín 64, Barcelona</strong><br>
-          Sants – Les Corts
-        </p>
-      </div>
-      <p style="font-size:13px;color:#7A6055;line-height:1.7;margin-bottom:8px;">
-        Si necesitas modificar o cancelar tu reserva, contáctanos respondiendo a este email o llamando al <strong>+34 711 216 862</strong>.
-      </p>
-    </div>
-    <div style="background:#3D1C0A;padding:24px 40px;text-align:center;">
-      <p style="color:rgba(255,255,255,0.5);font-size:12px;margin:0;">
-        Vietnamito · Banh mi & Café · Carrer Berlín 64, Barcelona<br>
-        <span style="font-size:11px;">Tus datos se usan únicamente para gestionar tu reserva.</span>
-      </p>
-    </div>
-  </div>
-</body>
-</html>"""
-
-    payload = _json.dumps({
-        "from": RESEND_FROM,
-        "to": [reserva["email"]],
-        "subject": f"✓ Reserva confirmada — Vietnamito {fecha} {hora}",
-        "html": html_body
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req) as r:
-            return r.status in [200, 201]
-    except Exception as e:
+def enviar_email_confirmacion(reserva, cfg=None):
+    """Email de confirmación cuando se acepta la reserva desde el backoffice."""
+    if not reserva.get("email"):
         return False
+    nombre = reserva.get("nombre", "")
+    fecha = reserva.get("fecha", "")
+    hora = reserva.get("hora", "")
+    personas = reserva.get("personas", "")
+    notas = reserva.get("notas", "")
+    tabla = _tabla_reserva(fecha, hora, personas, notas, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Tu reserva en <strong>Vietnamito</strong> ha sido <strong style="color:#2E7D32;">confirmada</strong>. ¡Te esperamos!</p>
+      {tabla}
+      <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">Para modificar o cancelar tu reserva, responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
+    html = _html_base("Reserva confirmada ✓", f"{fecha} a las {hora} · {personas} personas", contenido)
+    return _resend_send(reserva["email"], f"✓ Reserva confirmada — Vietnamito {fecha} {hora}", html)
 
 
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
@@ -1261,6 +1268,16 @@ def render_dashboard(df):
         sb8 = get_supabase()
         st.markdown("### Reservas")
 
+        # Auto-enviar email de recepción a reservas nuevas pendientes sin email enviado
+        cfg_res = sb8.table("config").select("*").execute()
+        cfg_email = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
+        nuevas = sb8.table("reservas").select("*").eq("estado","pendiente").eq("email_recibida_ok", False).execute().data or []
+        for nr in nuevas:
+            if nr.get("email"):
+                ok = enviar_email_recibida(nr, cfg_email)
+                if ok:
+                    sb8.table("reservas").update({"email_recibida_ok": True}).eq("id", nr["id"]).execute()
+
         col_filt_r, col_del_r = st.columns([3,1])
         filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
         filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
@@ -1311,8 +1328,9 @@ def render_dashboard(df):
                                 if st.button(est.capitalize(), key=f"res_{res['id']}_{est}"):
                                     sb8.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
                                     if est == "confirmada" and res.get("email"):
-                                        ok = enviar_email_confirmacion(res)
+                                        ok = enviar_email_confirmacion(res, cfg_email)
                                         if ok:
+                                            sb8.table("reservas").update({"email_confirmacion_ok": True}).eq("id", res["id"]).execute()
                                             st.success(f"✅ Reserva #{res['id']} confirmada · Email enviado a {res['email']}")
                                         else:
                                             st.success(f"✅ Reserva #{res['id']} confirmada")
