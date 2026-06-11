@@ -1365,22 +1365,38 @@ def render_dashboard(df):
                     for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
                         with col:
                             if est != estado:
-                                if st.button(est.capitalize(), key=f"res_{res['id']}_{est}"):
-                                    sb8.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
-                                    if est == "confirmada" and res.get("email"):
-                                        ok = enviar_email_confirmacion(res, cfg_email)
-                                        if ok:
-                                            sb8.table("reservas").update({"email_confirmacion_ok": True}).eq("id", res["id"]).execute()
-                                            st.success(f"✅ Reserva #{res['id']} confirmada · Email enviado a {res['email']}")
+                                if est == "cancelada":
+                                    if st.button("Cancelada", key=f"res_{res['id']}_cancelada", type="secondary"):
+                                        st.session_state[f"confirm_cancel_res_{res['id']}"] = True
+                                    if st.session_state.get(f"confirm_cancel_res_{res['id']}"):
+                                        st.warning(f"¿Cancelar reserva de **{res['nombre']}**?")
+                                        yes_col, no_col = st.columns(2)
+                                        if yes_col.button("✅ Sí, cancelar", key=f"yes_cancel_res_{res['id']}"):
+                                            sb8.table("reservas").update({"estado": "cancelada"}).eq("id", res["id"]).execute()
+                                            st.session_state.pop(f"confirm_cancel_res_{res['id']}", None)
+                                            if res.get("email"):
+                                                enviar_email_cancelacion(res, cfg_email)
+                                                st.success(f"✅ Cancelada · Email enviado a {res['email']}")
+                                            else:
+                                                st.success(f"✅ Reserva #{res['id']} cancelada")
+                                            st.rerun()
+                                        if no_col.button("❌ No", key=f"no_cancel_res_{res['id']}"):
+                                            st.session_state.pop(f"confirm_cancel_res_{res['id']}", None)
+                                            st.rerun()
+                                else:
+                                    if st.button(est.capitalize(), key=f"res_{res['id']}_{est}"):
+                                        sb8.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
+                                        if est == "confirmada" and res.get("email"):
+                                            ok = enviar_email_confirmacion(res, cfg_email)
+                                            if ok:
+                                                sb8.table("reservas").update({"email_confirmacion_ok": True}).eq("id", res["id"]).execute()
+                                                st.success(f"✅ Reserva #{res['id']} confirmada · Email enviado a {res['email']}")
+                                            else:
+                                                st.success(f"✅ Reserva #{res['id']} confirmada")
+                                                st.warning("⚠️ No se pudo enviar el email de confirmación")
                                         else:
-                                            st.success(f"✅ Reserva #{res['id']} confirmada")
-                                            st.warning("⚠️ No se pudo enviar el email de confirmación")
-                                    elif est == "cancelada" and res.get("email"):
-                                        enviar_email_cancelacion(res, cfg_email)
-                                        st.success(f"✅ Reserva #{res['id']} cancelada · Email enviado a {res['email']}")
-                                    else:
-                                        st.success(f"✅ Reserva #{res['id']} → {est}")
-                                    st.rerun()
+                                            st.success(f"✅ Reserva #{res['id']} → {est}")
+                                        st.rerun()
                             else:
                                 st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
 
