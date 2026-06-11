@@ -15,7 +15,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-RESEND_API_KEY = "re_4yWBvobk_Le6xVuykJUA1uWYmAHeTLfuw"
+RESEND_API_KEY = st.secrets.get("RESEND_API_KEY", "")
 RESEND_FROM = "Vietnamito <reservas@vietnamito.es>"
 
 MAPS_URL = "https://maps.app.goo.gl/LWR4Sm5mdAfR3H7v5"
