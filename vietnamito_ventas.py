@@ -7,6 +7,9 @@ from supabase import create_client
 
 st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
 
+SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
+
 st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; }
@@ -141,6 +144,7 @@ def enviar_email_cancelacion(reserva, cfg=None):
     return _resend_send(reserva["email"], f"Reserva cancelada — Vietnamito {fecha} {hora}", html)
 
 
+SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 
 DIAS = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
@@ -611,7 +615,6 @@ def render_dashboard(df):
             semana_margen = df_rent2.groupby("semana")["valor"].sum().reset_index()
             semana_margen.columns = ["semana","ventas_brutas"]
             semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] * 0.75
-            # Coste real por semana: contar días abiertos en cada semana
             def coste_semana(semana_str):
                 lunes = pd.Timestamp(semana_str)
                 coste = 0
@@ -625,41 +628,86 @@ def render_dashboard(df):
                 return coste
             semana_margen["coste"] = semana_margen["semana"].apply(coste_semana)
             semana_margen["margen"] = semana_margen["ventas_netas"] - semana_margen["coste"]
-            semana_margen["label"] = semana_margen["semana"].apply(
-                lambda s: pd.Timestamp(s).strftime("%d/%m")
-            )
+            semana_margen["label"] = semana_margen["semana"].apply(lambda s: pd.Timestamp(s).strftime("%d/%m"))
             semana_margen = semana_margen.sort_values("semana")
 
             fig_margen = go.Figure()
-            fig_margen.add_trace(go.Bar(
-                x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2),
-                name="Ventas netas", marker_color="rgba(93,202,165,0.6)", marker_line_width=0,
-            ))
-            fig_margen.add_trace(go.Bar(
-                x=semana_margen["label"], y=semana_margen["coste"].round(2),
-                name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0,
-            ))
-            fig_margen.add_trace(go.Scatter(
-                x=semana_margen["label"], y=semana_margen["margen"].round(2),
-                name="Margen", mode="lines+markers+text",
-                line=dict(color="#F4A261", width=2),
-                marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]),
-                text=[f"€{v:+.0f}" for v in semana_margen["margen"]],
-                textposition="top center", textfont=dict(size=11),
-            ))
+            fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2), name="Ventas netas", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
+            fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste"].round(2), name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
+            fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["margen"].round(2), name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]), text=[f"€{v:+.0f}" for v in semana_margen["margen"]], textposition="top center", textfont=dict(size=11)))
             fig_margen.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-            fig_margen.update_layout(
-                title="Ventas netas vs coste personal por semana (€)",
-                yaxis_title="€", barmode="group",
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                xaxis=dict(showgrid=False),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
-                height=420, margin=dict(t=50, b=80),
-            )
+            fig_margen.update_layout(title="Ventas netas vs coste personal por semana (€)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
             st.plotly_chart(fig_margen, use_container_width=True)
 
-            st.caption(f"⚠️ El coste de personal es estimado basándose en la configuración de turnos actual, aplicada a todas las semanas del periodo. Los turnos pasados pueden haber sido diferentes.")
+            st.divider()
+
+            # ── GRÁFICA DIARIA ──
+            st.markdown("#### Rentabilidad por día")
+            st.caption("Ventas netas = ventas brutas × 75%. Coste = según turnos actuales. Solo días con ventas.")
+
+            hoy_d = dt_rent.date.today()
+            d7_ago = hoy_d - dt_rent.timedelta(days=6)
+            min_fecha = df_rent_staff["fecha"].min() if not df_rent_staff.empty else d7_ago
+            max_fecha = df_rent_staff["fecha"].max() if not df_rent_staff.empty else hoy_d
+
+            dc1, dc2 = st.columns(2)
+            fecha_desde = dc1.date_input("Desde:", value=max(d7_ago, min_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_desde")
+            fecha_hasta = dc2.date_input("Hasta:", value=min(hoy_d, max_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_hasta")
+
+            df_dia = df_rent_staff[
+                (df_rent_staff["fecha"] >= fecha_desde) &
+                (df_rent_staff["fecha"] <= fecha_hasta)
+            ].copy()
+
+            if df_dia.empty:
+                st.info("No hay datos para ese rango de fechas.")
+            else:
+                # Agrupar por día
+                dia_data = df_dia.groupby("fecha")["valor"].sum().reset_index()
+                dia_data.columns = ["fecha", "ventas_brutas"]
+                dia_data["ventas_netas"] = (dia_data["ventas_brutas"] * 0.75).round(2)
+                dia_data["dow"] = pd.to_datetime(dia_data["fecha"]).dt.weekday
+                dia_data["coste"] = dia_data["dow"].map(lambda d: coste_dia_por_dow.get(d, 0)).round(2)
+                dia_data["margen"] = (dia_data["ventas_netas"] - dia_data["coste"]).round(2)
+                dia_data["label"] = pd.to_datetime(dia_data["fecha"]).dt.strftime("%a %d/%m")
+                dia_data = dia_data.sort_values("fecha")
+
+                fig_dia = go.Figure()
+                fig_dia.add_trace(go.Bar(
+                    x=dia_data["label"], y=dia_data["ventas_netas"],
+                    name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
+                ))
+                fig_dia.add_trace(go.Bar(
+                    x=dia_data["label"], y=dia_data["coste"],
+                    name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0,
+                ))
+                fig_dia.add_trace(go.Scatter(
+                    x=dia_data["label"], y=dia_data["margen"],
+                    name="Margen", mode="lines+markers+text",
+                    line=dict(color="#F4A261", width=2.5),
+                    marker=dict(size=9, color=["#5DCAA5" if v >= 0 else "#E63946" for v in dia_data["margen"]]),
+                    text=[f"€{v:+.0f}" for v in dia_data["margen"]],
+                    textposition="top center", textfont=dict(size=11),
+                ))
+                fig_dia.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
+                fig_dia.update_layout(
+                    title=f"Rentabilidad diaria ({fecha_desde.strftime('%d/%m')} – {fecha_hasta.strftime('%d/%m/%Y')})",
+                    yaxis_title="€", barmode="group",
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                    xaxis=dict(showgrid=False, tickangle=-30),
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
+                    height=460, margin=dict(t=50, b=100),
+                )
+                st.plotly_chart(fig_dia, use_container_width=True)
+
+                # Mini tabla resumen
+                resumen_dia = dia_data[["label","ventas_netas","coste","margen"]].copy()
+                resumen_dia.columns = ["Día","Ventas netas (€)","Coste personal (€)","Margen (€)"]
+                with st.expander("Ver datos"):
+                    st.dataframe(resumen_dia, hide_index=True, use_container_width=True)
+
+            st.caption("⚠️ El coste de personal es estimado basándose en la configuración de turnos actual.")
 
     with tab1:
         avg_dow = calcular_promedios_dia(df)
