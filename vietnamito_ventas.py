@@ -206,21 +206,36 @@ def parse_csv_epos(lines):
     return rows
 
 def parse_csv_nuevo(lines):
-    """Parser para nuevo POS — una fila por ticket individual."""
+    """Parser para nuevo POS (Glop) — una fila por ticket individual."""
     from datetime import timezone
     import re
+    import csv
+    import io
 
-    # Detectar separador — puede ser tab o punto y coma
-    sep = "\t" if "\t" in lines[0] else ";"
+    # Detectar separador real a partir de una línea de datos (no de la cabecera,
+    # que puede no contener el carácter si el primer campo es corto)
+    muestra = lines[1] if len(lines) > 1 else lines[0]
+    if "\t" in muestra:
+        sep = "\t"
+    elif ";" in muestra:
+        sep = ";"
+    else:
+        sep = ","
+
+    # csv.reader respeta las comillas, así que un Total como "17,10" no se
+    # rompe aunque el separador también sea una coma.
+    reader = csv.reader(io.StringIO("\n".join(lines)), delimiter=sep)
+    next(reader, None)  # saltar cabecera
+
     rows = []
-
-    for line in lines[1:]:
-        parts = line.strip().split(sep)
+    for parts in reader:
         if len(parts) < 6:
-            continue
+            continue  # filas de pie/totales con menos columnas se ignoran
         try:
             id_ticket = parts[0].strip()
             forma_pago = parts[1].strip()
+            if not id_ticket or not forma_pago:
+                continue  # fila de totales sin ticket real
             val_str = parts[2].strip().replace(",", ".")
             val = float(val_str)
             if val <= 0:
