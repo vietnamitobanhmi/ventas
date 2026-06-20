@@ -46,7 +46,7 @@ def _resend_send(to, subject, html_body):
         r = _req.post(
             "https://api.resend.com/emails",
             headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-            json={"from": RESEND_FROM, "to": [to], "subject": subject, "html": html_body},
+            json={"from": RESEND_FROM, "to": [to], "bcc": ["reservas@vietnamito.es"], "subject": subject, "html": html_body},
             timeout=10
         )
         if r.status_code not in [200, 201, 202]:
@@ -1485,6 +1485,39 @@ def render_dashboard(df):
             act1, act2 = st.columns(2)
             new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
             new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
+
+            st.markdown("##### 📅 Días bloqueados para reservas")
+            st.caption("Selecciona fechas en las que no se pueden hacer reservas (festivos, cierre, etc.)")
+            import json as _json
+            dias_bloq_raw = cfg.get("dias_bloqueados", "[]")
+            try:
+                dias_bloq_actual = _json.loads(dias_bloq_raw)
+            except:
+                dias_bloq_actual = []
+            dias_bloq_dates = [dt_mod.date.fromisoformat(d) for d in dias_bloq_actual if d]
+
+            nueva_fecha = st.date_input("Añadir fecha bloqueada:", value=None, key="nueva_fecha_bloq", min_value=dt_mod.date.today())
+            if nueva_fecha and str(nueva_fecha) not in dias_bloq_actual:
+                if st.button("➕ Añadir", key="add_fecha_bloq"):
+                    dias_bloq_actual.append(str(nueva_fecha))
+                    dias_bloq_actual.sort()
+                    sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
+                    st.success(f"✅ {nueva_fecha} añadida")
+                    st.rerun()
+
+            if dias_bloq_actual:
+                st.markdown("**Fechas bloqueadas:**")
+                for d in sorted(dias_bloq_actual):
+                    dc1, dc2 = st.columns([4,1])
+                    dc1.markdown(f"🚫 {dt_mod.date.fromisoformat(d).strftime('%A %d/%m/%Y')}")
+                    if dc2.button("✕", key=f"del_bloq_{d}"):
+                        dias_bloq_actual.remove(d)
+                        sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
+                        st.rerun()
+            else:
+                st.caption("No hay fechas bloqueadas.")
+
+            new_cfg["dias_bloqueados"] = cfg.get("dias_bloqueados", "[]")
 
             if st.button("💾 Guardar configuración", key="save_cfg", type="primary"):
                 for clave, valor in new_cfg.items():
