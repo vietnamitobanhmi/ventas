@@ -1507,17 +1507,10 @@ def render_dashboard(df):
                         bg = "rgba(216,90,48,0.18)" if es_hoy else ("rgba(34,197,94,0.10)" if res_dia else "transparent")
                         border = "2px solid #D85A30" if es_hoy else "1px solid rgba(128,128,128,0.15)"
                         badge = f"<div style='font-size:10px;color:#22C55E;font-weight:700;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
-                        cells.append(f"""<td style='height:64px;vertical-align:top;border:{border};border-radius:6px;background:{bg};padding:4px 6px;'>
-                            <div style='font-size:13px;font-weight:600;'>{dia}</div>
-                            {badge}
-                        </td>""")
+                        cells.append(f"<td style='height:64px;vertical-align:top;border:{border};border-radius:6px;background:{bg};padding:4px 6px;'><div style='font-size:13px;font-weight:600;'>{dia}</div>{badge}</td>")
                 html_rows.append(f"<tr>{''.join(cells)}</tr>")
 
-            calendar_html = f"""
-            <table style='width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;'>
-                {''.join(html_rows)}
-            </table>
-            """
+            calendar_html = "<table style='width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;'>" + "".join(html_rows) + "</table>"
             st.markdown(calendar_html, unsafe_allow_html=True)
 
             # Selector simple para ver detalle de un día con reservas
