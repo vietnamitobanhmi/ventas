@@ -206,36 +206,21 @@ def parse_csv_epos(lines):
     return rows
 
 def parse_csv_nuevo(lines):
-    """Parser para nuevo POS (Glop) — una fila por ticket individual."""
+    """Parser para nuevo POS — una fila por ticket individual."""
     from datetime import timezone
     import re
-    import csv
-    import io
 
-    # Detectar separador real a partir de una línea de datos (no de la cabecera,
-    # que puede no contener el carácter si el primer campo es corto)
-    muestra = lines[1] if len(lines) > 1 else lines[0]
-    if "\t" in muestra:
-        sep = "\t"
-    elif ";" in muestra:
-        sep = ";"
-    else:
-        sep = ","
-
-    # csv.reader respeta las comillas, así que un Total como "17,10" no se
-    # rompe aunque el separador también sea una coma.
-    reader = csv.reader(io.StringIO("\n".join(lines)), delimiter=sep)
-    next(reader, None)  # saltar cabecera
-
+    # Detectar separador — puede ser tab o punto y coma
+    sep = "\t" if "\t" in lines[0] else ";"
     rows = []
-    for parts in reader:
+
+    for line in lines[1:]:
+        parts = line.strip().split(sep)
         if len(parts) < 6:
-            continue  # filas de pie/totales con menos columnas se ignoran
+            continue
         try:
             id_ticket = parts[0].strip()
             forma_pago = parts[1].strip()
-            if not id_ticket or not forma_pago:
-                continue  # fila de totales sin ticket real
             val_str = parts[2].strip().replace(",", ".")
             val = float(val_str)
             if val <= 0:
@@ -1368,6 +1353,7 @@ def render_dashboard(df):
 
     # ── TAB 8: Reservas ─────────────────────────────────────
     with tab8:
+        import datetime as dt_mod
         sb8 = get_supabase()
         st.markdown("### Reservas")
 
@@ -1381,87 +1367,222 @@ def render_dashboard(df):
                 if ok:
                     sb8.table("reservas").update({"email_recibida_ok": True}).eq("id", nr["id"]).execute()
 
-        col_filt_r, col_del_r = st.columns([3,1])
-        filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
-        filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
+        res_subtab1, res_subtab2, res_subtab3 = st.tabs(["📆 Próximas", "🗓️ Calendario", "📋 Lista completa"])
 
-        if col_del_r.button("🗑️ Borrar canceladas", key="del_cancelled_res"):
-            st.session_state["confirm_del_cancelled_res"] = True
-        if st.session_state.get("confirm_del_cancelled_res"):
-            st.warning("¿Borrar todas las reservas canceladas? No se puede deshacer.")
-            dc1, dc2 = st.columns(2)
-            if dc1.button("✅ Sí, borrar", key="yes_del_cancelled_res"):
-                sb8.table("reservas").delete().eq("estado", "cancelada").execute()
-                st.session_state.pop("confirm_del_cancelled_res", None)
-                st.success("✅ Reservas canceladas eliminadas")
+        def _cambiar_estado_reserva(res, est, sb_ref, cfg_email_ref, key_suffix=""):
+            """Helper reutilizable para cambiar estado + enviar email."""
+            estado_actual = res["estado"]
+            if est == estado_actual:
+                st.markdown(f"<div style='text-align:center;padding:8px;background:rgba(34,197,94,0.1);color:#22C55E;border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
+                return
+            if est == "cancelada":
+                if st.button("Cancelada", key=f"cancel_{key_suffix}_{res['id']}"):
+                    st.session_state[f"confirm_cancel_{key_suffix}_{res['id']}"] = True
+                if st.session_state.get(f"confirm_cancel_{key_suffix}_{res['id']}"):
+                    st.warning(f"¿Cancelar reserva de **{res['nombre']}**?")
+                    yc, nc = st.columns(2)
+                    if yc.button("✅ Sí", key=f"yes_cancel_{key_suffix}_{res['id']}"):
+                        sb_ref.table("reservas").update({"estado": "cancelada"}).eq("id", res["id"]).execute()
+                        st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
+                        if res.get("email"):
+                            enviar_email_cancelacion(res, cfg_email_ref)
+                            st.success(f"✅ Cancelada · Email enviado")
+                        else:
+                            st.success("✅ Cancelada")
+                        st.rerun()
+                    if nc.button("❌ No", key=f"no_cancel_{key_suffix}_{res['id']}"):
+                        st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
+                        st.rerun()
+            else:
+                if st.button(est.capitalize(), key=f"chg_{key_suffix}_{res['id']}_{est}"):
+                    sb_ref.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
+                    if est == "confirmada" and res.get("email"):
+                        ok = enviar_email_confirmacion(res, cfg_email_ref)
+                        if ok:
+                            sb_ref.table("reservas").update({"email_confirmacion_ok": True}).eq("id", res["id"]).execute()
+                            st.success(f"✅ Confirmada · Email enviado")
+                        else:
+                            st.success("✅ Confirmada")
+                            st.warning("⚠️ No se pudo enviar el email")
+                    else:
+                        st.success(f"✅ → {est}")
+                    st.rerun()
+
+        # ── SUBTAB: PRÓXIMAS ──
+        with res_subtab1:
+            hoy_r = dt_mod.date.today()
+            todas_res = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(hoy_r)).order("fecha").order("hora").execute().data or []
+
+            grupos = {}
+            for r in todas_res:
+                fecha_r = dt_mod.date.fromisoformat(r["fecha"])
+                dias_dif = (fecha_r - hoy_r).days
+                if dias_dif == 0:
+                    label = "📅 Hoy"
+                elif dias_dif == 1:
+                    label = "📅 Mañana"
+                elif dias_dif < 7:
+                    dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+                    label = f"📅 {dias_es[fecha_r.weekday()]} {fecha_r.strftime('%d/%m')}"
+                else:
+                    label = f"📅 {fecha_r.strftime('%d/%m/%Y')}"
+                grupos.setdefault((dias_dif, label), []).append(r)
+
+            if not grupos:
+                st.info("No hay próximas reservas.")
+            else:
+                for (dias_dif, label), res_grupo in sorted(grupos.items()):
+                    st.markdown(f"#### {label} · {len(res_grupo)} reserva{'s' if len(res_grupo)!=1 else ''}")
+                    for res in res_grupo:
+                        estado = res["estado"]
+                        icono = {"pendiente":"🔴","confirmada":"🟢"}.get(estado, "⚪")
+                        with st.expander(f"{icono} {res['hora']} · {res['nombre']} · {res['personas']} pax"):
+                            c1, c2 = st.columns(2)
+                            c1.markdown(f"**Teléfono:** {res['telefono']}")
+                            c1.markdown(f"**Email:** {res.get('email') or '—'}")
+                            c2.markdown(f"**Estado:** {estado}")
+                            if res.get("notas"):
+                                st.markdown(f"**Notas:** {res['notas']}")
+                            st.markdown("**Cambiar estado:**")
+                            pc1, pc2, pc3 = st.columns(3)
+                            for col, est in zip([pc1,pc2,pc3], ["pendiente","confirmada","cancelada"]):
+                                with col:
+                                    _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="prox")
+                    st.divider()
+
+        # ── SUBTAB: CALENDARIO ──
+        with res_subtab2:
+            import calendar as _cal
+
+            if "cal_res_year" not in st.session_state:
+                st.session_state.cal_res_year = dt_mod.date.today().year
+            if "cal_res_month" not in st.session_state:
+                st.session_state.cal_res_month = dt_mod.date.today().month
+
+            nc1, nc2, nc3 = st.columns([1,3,1])
+            if nc1.button("◀", key="cal_prev_month"):
+                st.session_state.cal_res_month -= 1
+                if st.session_state.cal_res_month < 1:
+                    st.session_state.cal_res_month = 12
+                    st.session_state.cal_res_year -= 1
                 st.rerun()
-            if dc2.button("❌ Cancelar", key="no_del_cancelled_res"):
-                st.session_state.pop("confirm_del_cancelled_res", None)
+            meses_es = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+            nc2.markdown(f"<h4 style='text-align:center;'>{meses_es[st.session_state.cal_res_month-1]} {st.session_state.cal_res_year}</h4>", unsafe_allow_html=True)
+            if nc3.button("▶", key="cal_next_month"):
+                st.session_state.cal_res_month += 1
+                if st.session_state.cal_res_month > 12:
+                    st.session_state.cal_res_month = 1
+                    st.session_state.cal_res_year += 1
                 st.rerun()
 
-        q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
-        if filtro_res_map[filtro_res]:
-            q2 = q2.eq("estado", filtro_res_map[filtro_res])
-        reservas = q2.limit(100).execute().data or []
-        
-        if not reservas:
-            st.info("No hay reservas con ese filtro.")
-        else:
-            for res in reservas:
-                estado = res["estado"]
-                color_map = {"pendiente": "🔴", "confirmada": "🟢", "cancelada": "⚫"}
-                icono = color_map.get(estado, "⚪")
-                
-                with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {pd.Timestamp(res['creado_at']).strftime('%d/%m %H:%M')}"):
-                    c1, c2 = st.columns(2)
-                    c1.markdown(f"**Nombre:** {res['nombre']}")
-                    c1.markdown(f"**Teléfono:** {res['telefono']}")
-                    c1.markdown(f"**Email:** {res.get('email') or '—'}")
-                    c2.markdown(f"**Fecha:** {res['fecha']} a las {res['hora']}")
-                    c2.markdown(f"**Personas:** {res['personas']}")
-                    c2.markdown(f"**Estado:** {estado}")
-                    if res.get("notas"):
-                        st.markdown(f"**Notas:** {res['notas']}")
+            y, m = st.session_state.cal_res_year, st.session_state.cal_res_month
+            primer_dia = dt_mod.date(y, m, 1)
+            ultimo_dia = dt_mod.date(y, m, _cal.monthrange(y, m)[1])
+
+            res_mes = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(primer_dia)).lte("fecha", str(ultimo_dia)).execute().data or []
+            res_por_dia = {}
+            for r in res_mes:
+                res_por_dia.setdefault(r["fecha"], []).append(r)
+
+            cal_matrix = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
+            dias_header = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
+            cols_h = st.columns(7)
+            for i, dh in enumerate(dias_header):
+                cols_h[i].markdown(f"<div style='text-align:center;font-size:11px;font-weight:600;color:#888;'>{dh}</div>", unsafe_allow_html=True)
+
+            hoy_str = str(dt_mod.date.today())
+            for semana in cal_matrix:
+                cols_w = st.columns(7)
+                for i, dia in enumerate(semana):
+                    with cols_w[i]:
+                        if dia == 0:
+                            st.markdown("<div style='height:70px;'></div>", unsafe_allow_html=True)
+                        else:
+                            fecha_str = f"{y}-{m:02d}-{dia:02d}"
+                            res_dia = res_por_dia.get(fecha_str, [])
+                            n_pax = sum(r["personas"] for r in res_dia)
+                            es_hoy = fecha_str == hoy_str
+                            bg = "rgba(216,90,48,0.15)" if es_hoy else ("rgba(34,197,94,0.08)" if res_dia else "transparent")
+                            border = "2px solid #D85A30" if es_hoy else "1px solid rgba(128,128,128,0.15)"
+                            badge = f"<div style='font-size:10px;color:#22C55E;font-weight:600;margin-top:2px;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
+                            st.markdown(f"""<div style='height:70px;border:{border};border-radius:6px;padding:4px 6px;background:{bg};'>
+                                <div style='font-size:13px;font-weight:600;'>{dia}</div>
+                                {badge}
+                                </div>""", unsafe_allow_html=True)
+                            if res_dia:
+                                if st.button(f"Ver", key=f"ver_dia_{fecha_str}", use_container_width=True):
+                                    st.session_state["cal_dia_sel"] = fecha_str
+                                    st.rerun()
+
+            dia_sel = st.session_state.get("cal_dia_sel")
+            if dia_sel and dia_sel in res_por_dia:
+                st.divider()
+                st.markdown(f"#### Reservas del {dt_mod.date.fromisoformat(dia_sel).strftime('%d/%m/%Y')}")
+                for res in sorted(res_por_dia[dia_sel], key=lambda r: r["hora"]):
+                    estado = res["estado"]
+                    icono = {"pendiente":"🔴","confirmada":"🟢"}.get(estado, "⚪")
+                    with st.expander(f"{icono} {res['hora']} · {res['nombre']} · {res['personas']} pax"):
+                        c1, c2 = st.columns(2)
+                        c1.markdown(f"**Teléfono:** {res['telefono']}")
+                        c1.markdown(f"**Email:** {res.get('email') or '—'}")
+                        c2.markdown(f"**Estado:** {estado}")
+                        if res.get("notas"):
+                            st.markdown(f"**Notas:** {res['notas']}")
+                        st.markdown("**Cambiar estado:**")
+                        pc1, pc2, pc3 = st.columns(3)
+                        for col, est in zip([pc1,pc2,pc3], ["pendiente","confirmada","cancelada"]):
+                            with col:
+                                _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="cal")
+
+        # ── SUBTAB: LISTA COMPLETA ──
+        with res_subtab3:
+            col_filt_r, col_del_r = st.columns([3,1])
+            filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
+            filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
+
+            if col_del_r.button("🗑️ Borrar canceladas", key="del_cancelled_res"):
+                st.session_state["confirm_del_cancelled_res"] = True
+            if st.session_state.get("confirm_del_cancelled_res"):
+                st.warning("¿Borrar todas las reservas canceladas? No se puede deshacer.")
+                dc1, dc2 = st.columns(2)
+                if dc1.button("✅ Sí, borrar", key="yes_del_cancelled_res"):
+                    sb8.table("reservas").delete().eq("estado", "cancelada").execute()
+                    st.session_state.pop("confirm_del_cancelled_res", None)
+                    st.success("✅ Reservas canceladas eliminadas")
+                    st.rerun()
+                if dc2.button("❌ Cancelar", key="no_del_cancelled_res"):
+                    st.session_state.pop("confirm_del_cancelled_res", None)
+                    st.rerun()
+
+            q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
+            if filtro_res_map[filtro_res]:
+                q2 = q2.eq("estado", filtro_res_map[filtro_res])
+            reservas = q2.limit(100).execute().data or []
+            
+            if not reservas:
+                st.info("No hay reservas con ese filtro.")
+            else:
+                for res in reservas:
+                    estado = res["estado"]
+                    color_map = {"pendiente": "🔴", "confirmada": "🟢", "cancelada": "⚫"}
+                    icono = color_map.get(estado, "⚪")
                     
-                    st.markdown("**Cambiar estado:**")
-                    rc1, rc2, rc3 = st.columns(3)
-                    for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
-                        with col:
-                            if est != estado:
-                                if est == "cancelada":
-                                    if st.button("Cancelada", key=f"res_{res['id']}_cancelada", type="secondary"):
-                                        st.session_state[f"confirm_cancel_res_{res['id']}"] = True
-                                    if st.session_state.get(f"confirm_cancel_res_{res['id']}"):
-                                        st.warning(f"¿Cancelar reserva de **{res['nombre']}**?")
-                                        yes_col, no_col = st.columns(2)
-                                        if yes_col.button("✅ Sí, cancelar", key=f"yes_cancel_res_{res['id']}"):
-                                            sb8.table("reservas").update({"estado": "cancelada"}).eq("id", res["id"]).execute()
-                                            st.session_state.pop(f"confirm_cancel_res_{res['id']}", None)
-                                            if res.get("email"):
-                                                enviar_email_cancelacion(res, cfg_email)
-                                                st.success(f"✅ Cancelada · Email enviado a {res['email']}")
-                                            else:
-                                                st.success(f"✅ Reserva #{res['id']} cancelada")
-                                            st.rerun()
-                                        if no_col.button("❌ No", key=f"no_cancel_res_{res['id']}"):
-                                            st.session_state.pop(f"confirm_cancel_res_{res['id']}", None)
-                                            st.rerun()
-                                else:
-                                    if st.button(est.capitalize(), key=f"res_{res['id']}_{est}"):
-                                        sb8.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
-                                        if est == "confirmada" and res.get("email"):
-                                            ok = enviar_email_confirmacion(res, cfg_email)
-                                            if ok:
-                                                sb8.table("reservas").update({"email_confirmacion_ok": True}).eq("id", res["id"]).execute()
-                                                st.success(f"✅ Reserva #{res['id']} confirmada · Email enviado a {res['email']}")
-                                            else:
-                                                st.success(f"✅ Reserva #{res['id']} confirmada")
-                                                st.warning("⚠️ No se pudo enviar el email de confirmación")
-                                        else:
-                                            st.success(f"✅ Reserva #{res['id']} → {est}")
-                                        st.rerun()
-                            else:
-                                st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
+                    with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {pd.Timestamp(res['creado_at']).strftime('%d/%m %H:%M')}"):
+                        c1, c2 = st.columns(2)
+                        c1.markdown(f"**Nombre:** {res['nombre']}")
+                        c1.markdown(f"**Teléfono:** {res['telefono']}")
+                        c1.markdown(f"**Email:** {res.get('email') or '—'}")
+                        c2.markdown(f"**Fecha:** {res['fecha']} a las {res['hora']}")
+                        c2.markdown(f"**Personas:** {res['personas']}")
+                        c2.markdown(f"**Estado:** {estado}")
+                        if res.get("notas"):
+                            st.markdown(f"**Notas:** {res['notas']}")
+                        
+                        st.markdown("**Cambiar estado:**")
+                        rc1, rc2, rc3 = st.columns(3)
+                        for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
+                            with col:
+                                _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="lista")
 
     # ── TAB 9: Web ──────────────────────────────────────────
     with tab9:
