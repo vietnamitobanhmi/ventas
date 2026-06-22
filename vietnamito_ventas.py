@@ -282,6 +282,7 @@ def save_to_supabase(rows, fmt="epos"):
         sb.table("ventas").insert(rows[i:i+500]).execute()
 
 
+@st.cache_data(ttl=60)
 def load_from_supabase():
     sb = get_supabase()
     result = sb.table("ventas").select("*").execute()
@@ -1467,7 +1468,7 @@ def render_dashboard(df):
                     st.session_state.cal_res_year -= 1
                 st.rerun()
             meses_es = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-            nc2.markdown(f"<h4 style='text-align:center;'>{meses_es[st.session_state.cal_res_month-1]} {st.session_state.cal_res_year}</h4>", unsafe_allow_html=True)
+            nc2.markdown(f"<h4 style='text-align:center;margin:0;'>{meses_es[st.session_state.cal_res_month-1]} {st.session_state.cal_res_year}</h4>", unsafe_allow_html=True)
             if nc3.button("▶", key="cal_next_month"):
                 st.session_state.cal_res_month += 1
                 if st.session_state.cal_res_month > 12:
@@ -1486,35 +1487,49 @@ def render_dashboard(df):
 
             cal_matrix = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
             dias_header = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
-            cols_h = st.columns(7)
-            for i, dh in enumerate(dias_header):
-                cols_h[i].markdown(f"<div style='text-align:center;font-size:11px;font-weight:600;color:#888;'>{dh}</div>", unsafe_allow_html=True)
-
             hoy_str = str(dt_mod.date.today())
-            for semana in cal_matrix:
-                cols_w = st.columns(7)
-                for i, dia in enumerate(semana):
-                    with cols_w[i]:
-                        if dia == 0:
-                            st.markdown("<div style='height:70px;'></div>", unsafe_allow_html=True)
-                        else:
-                            fecha_str = f"{y}-{m:02d}-{dia:02d}"
-                            res_dia = res_por_dia.get(fecha_str, [])
-                            n_pax = sum(r["personas"] for r in res_dia)
-                            es_hoy = fecha_str == hoy_str
-                            bg = "rgba(216,90,48,0.15)" if es_hoy else ("rgba(34,197,94,0.08)" if res_dia else "transparent")
-                            border = "2px solid #D85A30" if es_hoy else "1px solid rgba(128,128,128,0.15)"
-                            badge = f"<div style='font-size:10px;color:#22C55E;font-weight:600;margin-top:2px;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
-                            st.markdown(f"""<div style='height:70px;border:{border};border-radius:6px;padding:4px 6px;background:{bg};'>
-                                <div style='font-size:13px;font-weight:600;'>{dia}</div>
-                                {badge}
-                                </div>""", unsafe_allow_html=True)
-                            if res_dia:
-                                if st.button(f"Ver", key=f"ver_dia_{fecha_str}", use_container_width=True):
-                                    st.session_state["cal_dia_sel"] = fecha_str
-                                    st.rerun()
 
-            dia_sel = st.session_state.get("cal_dia_sel")
+            # Construir tabla HTML completa de una vez — evita 35+ widgets de Streamlit
+            html_rows = []
+            header_html = "".join(f"<th style='padding:6px;font-size:11px;font-weight:600;color:#888;width:14.28%;'>{dh}</th>" for dh in dias_header)
+            html_rows.append(f"<tr>{header_html}</tr>")
+
+            for semana in cal_matrix:
+                cells = []
+                for dia in semana:
+                    if dia == 0:
+                        cells.append("<td style='height:64px;'></td>")
+                    else:
+                        fecha_str = f"{y}-{m:02d}-{dia:02d}"
+                        res_dia = res_por_dia.get(fecha_str, [])
+                        n_pax = sum(r["personas"] for r in res_dia)
+                        es_hoy = fecha_str == hoy_str
+                        bg = "rgba(216,90,48,0.18)" if es_hoy else ("rgba(34,197,94,0.10)" if res_dia else "transparent")
+                        border = "2px solid #D85A30" if es_hoy else "1px solid rgba(128,128,128,0.15)"
+                        badge = f"<div style='font-size:10px;color:#22C55E;font-weight:700;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
+                        cells.append(f"""<td style='height:64px;vertical-align:top;border:{border};border-radius:6px;background:{bg};padding:4px 6px;'>
+                            <div style='font-size:13px;font-weight:600;'>{dia}</div>
+                            {badge}
+                        </td>""")
+                html_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+            calendar_html = f"""
+            <table style='width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;'>
+                {''.join(html_rows)}
+            </table>
+            """
+            st.markdown(calendar_html, unsafe_allow_html=True)
+
+            # Selector simple para ver detalle de un día con reservas
+            dias_con_res = sorted(res_por_dia.keys())
+            if dias_con_res:
+                opciones_dia = [f"{dt_mod.date.fromisoformat(d).strftime('%A %d/%m')} ({len(res_por_dia[d])} reservas)" for d in dias_con_res]
+                sel_idx = st.selectbox("Ver detalle del día:", range(len(opciones_dia)), format_func=lambda i: opciones_dia[i], key="cal_dia_selectbox")
+                dia_sel = dias_con_res[sel_idx]
+            else:
+                st.caption("No hay reservas este mes.")
+                dia_sel = None
+
             if dia_sel and dia_sel in res_por_dia:
                 st.divider()
                 st.markdown(f"#### Reservas del {dt_mod.date.fromisoformat(dia_sel).strftime('%d/%m/%Y')}")
@@ -1905,6 +1920,7 @@ if uploaded:
         rows, fmt = parse_csv(uploaded)
         if rows:
             save_to_supabase(rows, fmt)
+            load_from_supabase.clear()
             fmt_label = "nuevo POS (por ticket)" if fmt == "nuevo" else "Epos Now (por franja horaria)"
             st.success(f"✅ {len(rows)} registros guardados · Formato detectado: {fmt_label}")
         else:
