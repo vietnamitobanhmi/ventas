@@ -451,7 +451,7 @@ def render_dashboard(df):
 
         st.markdown("### Dashboard de rentabilidad")
 
-        rent_sub1, rent_sub2 = st.tabs(["📊 Análisis", "🏛️ Costes fijos mensuales"])
+        rent_sub1, rent_sub_dia, rent_sub2 = st.tabs(["📊 Análisis", "📆 Por día", "🏛️ Costes fijos mensuales"])
 
         # ─── COSTES FIJOS ───
         with rent_sub2:
@@ -512,6 +512,130 @@ def render_dashboard(df):
                         st.rerun()
                     else:
                         st.error("Concepto y importe son obligatorios.")
+
+        # ─── POR DÍA ───
+        with rent_sub_dia:
+            st.markdown("#### Análisis de un día concreto")
+
+            costes_fijos_d = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
+            total_cf_mes_d = sum(float(c["importe_sin_iva"]) for c in costes_fijos_d)
+
+            if df.empty:
+                st.info("No hay datos de ventas todavía.")
+            else:
+                fechas_disp = sorted(df["fecha"].unique(), reverse=True)
+                fecha_sel = st.selectbox(
+                    "Selecciona el día:",
+                    fechas_disp,
+                    format_func=lambda f: f"{['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][pd.Timestamp(f).weekday()]} {pd.Timestamp(f).strftime('%d/%m/%Y')}",
+                    key="dia_sel_rent"
+                )
+
+                df_dia_sel = df[df["fecha"] == fecha_sel].copy()
+
+                if df_dia_sel.empty:
+                    st.info("No hay ventas registradas para ese día.")
+                else:
+                    # Cargar turnos para calcular coste personal del día
+                    turnos_data_d = sb0.table("turnos").select("*").execute().data or []
+                    empleados_data_d = sb0.table("empleados").select("*").execute().data or []
+                    emp_coste_d = {e["id"]: e["coste_hora"] for e in empleados_data_d}
+                    dow_sel = pd.Timestamp(fecha_sel).weekday()
+
+                    # Coste personal por hora (suma todos los slots de cada hora)
+                    coste_personal_hora = {}
+                    horas_con_staff_dia = set()
+                    for tr in turnos_data_d:
+                        if int(tr["dia_semana"]) != dow_sel:
+                            continue
+                        h = int(tr["slot"].split(":")[0])
+                        c = emp_coste_d.get(tr["empleado_id"], 10) * 0.5
+                        coste_personal_hora[h] = coste_personal_hora.get(h, 0) + c
+                        horas_con_staff_dia.add(h)
+
+                    coste_personal_dia = sum(coste_personal_hora.values())
+
+                    # Coste fijo del día = total mensual / días del mes
+                    dias_en_mes = pd.Timestamp(fecha_sel).days_in_month
+                    coste_fijo_dia_sel = total_cf_mes_d / dias_en_mes if total_cf_mes_d > 0 else 0
+
+                    # Métricas del día
+                    ventas_brutas_d = df_dia_sel["valor"].sum()
+                    ventas_netas_d = ventas_brutas_d * 0.75
+                    coste_total_d = coste_personal_dia + coste_fijo_dia_sel
+                    margen_d = ventas_netas_d - coste_total_d
+                    n_tickets = df_dia_sel["ntrans"].sum() if "ntrans" in df_dia_sel.columns else len(df_dia_sel)
+                    ticket_medio = ventas_brutas_d / n_tickets if n_tickets > 0 else 0
+
+                    st.markdown("##### Resumen del día")
+                    if total_cf_mes_d > 0:
+                        md1, md2, md3, md4, md5 = st.columns(5)
+                        md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
+                        md2.metric("Ventas netas (−25%)", f"€{ventas_netas_d:,.2f}")
+                        md3.metric("Coste personal", f"€{coste_personal_dia:,.2f}")
+                        md4.metric("Coste fijo", f"€{coste_fijo_dia_sel:,.2f}", help=f"€{total_cf_mes_d:,.2f}/mes ÷ {dias_en_mes} días")
+                        dc_md = "normal" if margen_d >= 0 else "inverse"
+                        md5.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
+                    else:
+                        md1, md2, md3, md4 = st.columns(4)
+                        md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
+                        md2.metric("Ventas netas (−25%)", f"€{ventas_netas_d:,.2f}")
+                        md3.metric("Coste personal", f"€{coste_personal_dia:,.2f}")
+                        dc_md = "normal" if margen_d >= 0 else "inverse"
+                        md4.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
+
+                    extra_c1, extra_c2 = st.columns(2)
+                    extra_c1.metric("Tickets", f"{int(n_tickets):,}")
+                    extra_c2.metric("Ticket medio", f"€{ticket_medio:.2f}")
+
+                    st.divider()
+
+                    # Gráfica por hora
+                    st.markdown("##### Ventas por hora")
+                    df_hora = df_dia_sel.groupby("hora").agg(
+                        ventas=("valor", "sum"),
+                        tickets=("ntrans", "sum") if "ntrans" in df_dia_sel.columns else ("valor", "count")
+                    ).reset_index()
+
+                    # Rellenar horas sin ventas para visualización completa (apertura típica 8-23)
+                    horas_completas = sorted(set(df_hora["hora"].tolist() + list(horas_con_staff_dia)))
+                    if horas_completas:
+                        h_min, h_max = min(horas_completas), max(horas_completas)
+                        full_range = pd.DataFrame({"hora": range(h_min, h_max+1)})
+                        df_hora = full_range.merge(df_hora, on="hora", how="left").fillna(0)
+
+                    df_hora["coste_personal"] = df_hora["hora"].map(lambda h: round(coste_personal_hora.get(h, 0), 2))
+                    # Reparto del coste fijo entre las horas con staff
+                    n_horas_staff = len(horas_con_staff_dia)
+                    cf_por_hora = coste_fijo_dia_sel / n_horas_staff if n_horas_staff > 0 else 0
+                    df_hora["coste_fijo"] = df_hora["hora"].map(lambda h: round(cf_por_hora if h in horas_con_staff_dia else 0, 2))
+                    df_hora["ventas_netas"] = (df_hora["ventas"] * 0.75).round(2)
+                    df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"] - df_hora["coste_fijo"]).round(2)
+                    df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
+
+                    fig_h = go.Figure()
+                    fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.0f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
+                    fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
+                    if total_cf_mes_d > 0:
+                        fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_fijo"], name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
+                    fig_h.add_trace(go.Scatter(x=df_hora["label"], y=df_hora["margen"], name="Margen", mode="lines+markers", line=dict(color="#F4A261", width=2.5), marker=dict(size=8, color=["#5DCAA5" if v>=0 else "#E63946" for v in df_hora["margen"]])))
+                    fig_h.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
+                    fig_h.update_layout(
+                        title=f"Rentabilidad por hora — {pd.Timestamp(fecha_sel).strftime('%A %d/%m/%Y')}",
+                        yaxis_title="€", barmode="group",
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                        xaxis=dict(showgrid=False),
+                        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="left", x=0),
+                        height=440, margin=dict(t=50, b=80),
+                    )
+                    st.plotly_chart(fig_h, use_container_width=True)
+
+                    # Tabla detalle
+                    with st.expander("Ver tabla horaria"):
+                        tabla_h = df_hora[["label","ventas","ventas_netas","coste_personal","coste_fijo","margen"]].copy()
+                        tabla_h.columns = ["Hora","Ventas brutas (€)","Ventas netas (€)","Coste personal (€)","Coste fijo (€)","Margen (€)"]
+                        st.dataframe(tabla_h, hide_index=True, use_container_width=True)
 
         # ─── ANÁLISIS ───
         with rent_sub1:
