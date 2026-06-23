@@ -451,264 +451,376 @@ def render_dashboard(df):
 
         st.markdown("### Dashboard de rentabilidad")
 
-        # Periodo selector
-        periodo = st.radio("Periodo:", [
-            "Semana en curso", "Últimos 7 días",
-            "Mes en curso", "Últimos 30 días",
-            "Últimos 90 días", "Total registrado"
-        ], horizontal=True, key="rent_periodo")
+        rent_sub1, rent_sub2 = st.tabs(["📊 Análisis", "🏛️ Costes fijos mensuales"])
 
-        hoy = dt_rent.date.today()
-        if periodo == "Semana en curso":
-            inicio = hoy - dt_rent.timedelta(days=hoy.weekday())
-            fin = hoy
-        elif periodo == "Últimos 7 días":
-            inicio = hoy - dt_rent.timedelta(days=6)
-            fin = hoy
-        elif periodo == "Mes en curso":
-            inicio = hoy.replace(day=1)
-            fin = hoy
-        elif periodo == "Últimos 30 días":
-            inicio = hoy - dt_rent.timedelta(days=29)
-            fin = hoy
-        elif periodo == "Últimos 90 días":
-            inicio = hoy - dt_rent.timedelta(days=89)
-            fin = hoy
-        else:
-            inicio = df["fecha"].min()
-            fin = df["fecha"].max()
+        # ─── COSTES FIJOS ───
+        with rent_sub2:
+            st.markdown("#### Costes fijos mensuales")
+            st.caption("⚠️ Introduce los importes **SIN IVA**. Estos costes se reparten proporcionalmente entre los días del mes para calcular la rentabilidad diaria real.")
 
-        # Filtrar datos por periodo
-        df_rent = df[(df["fecha"] >= inicio) & (df["fecha"] <= fin)].copy()
+            costes_res = sb0.table("costes_fijos").select("*").eq("activo", True).order("id").execute()
+            costes_data = costes_res.data or []
 
-        if df_rent.empty:
-            st.warning("No hay datos para ese periodo.")
-        else:
-            # Cargar turnos y empleados actuales
-            turnos_data = sb0.table("turnos").select("*").execute().data or []
-            empleados_data = sb0.table("empleados").select("*").execute().data or []
-            emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
+            if costes_data:
+                total_mensual = sum(float(c["importe_sin_iva"]) for c in costes_data)
+                cm1, cm2 = st.columns(2)
+                cm1.metric("Total mensual (sin IVA)", f"€{total_mensual:,.2f}")
+                cm2.metric("Coste diario equivalente", f"€{total_mensual/30:,.2f}", help="Asumiendo 30 días/mes")
 
-            # Calcular coste de personal por slot (dow, slot) -> coste
-            # Usar slot completo (HH:MM) como key para no perder los :30
-            coste_por_slot_full = {}  # (dow, slot) -> coste total ese slot
-            horas_con_staff = set()  # (dow, hora_entera) con al menos 1 trabajador
-            for tr in turnos_data:
-                dow = int(tr["dia_semana"])
-                slot = tr["slot"]
-                h = int(slot.split(":")[0])
-                coste = emp_coste.get(tr["empleado_id"], 10) * 0.5
-                key = (dow, slot)
-                coste_por_slot_full[key] = coste_por_slot_full.get(key, 0) + coste
-                horas_con_staff.add((dow, h))
+                st.markdown("##### Conceptos activos")
+                for c in costes_data:
+                    cc1, cc2, cc3, cc4 = st.columns([3, 2, 1, 1])
+                    cc1.markdown(f"**{c['concepto']}**")
+                    cc2.markdown(f"€{float(c['importe_sin_iva']):,.2f}/mes")
+                    if cc3.button("✏️", key=f"edit_cf_{c['id']}"):
+                        st.session_state[f"editing_cf_{c['id']}"] = True
+                    if cc4.button("🗑", key=f"del_cf_{c['id']}"):
+                        st.session_state[f"confirm_del_cf_{c['id']}"] = True
 
-            # Coste total por día de la semana (suma de todos sus slots)
-            coste_por_slot = {}  # (dow,) -> coste diario total
-            for (dow, slot), coste in coste_por_slot_full.items():
-                coste_por_slot[(dow, slot)] = coste
+                    if st.session_state.get(f"confirm_del_cf_{c['id']}"):
+                        st.warning(f"¿Borrar **{c['concepto']}** (€{float(c['importe_sin_iva']):,.2f}/mes)?")
+                        yc, nc = st.columns(2)
+                        if yc.button("✅ Sí", key=f"yes_del_cf_{c['id']}"):
+                            sb0.table("costes_fijos").delete().eq("id", c["id"]).execute()
+                            st.session_state.pop(f"confirm_del_cf_{c['id']}", None)
+                            st.rerun()
+                        if nc.button("❌ No", key=f"no_del_cf_{c['id']}"):
+                            st.session_state.pop(f"confirm_del_cf_{c['id']}", None)
+                            st.rerun()
 
-            # Filtrar ventas solo en horas con staff
-            df_rent["dow"] = pd.to_datetime(df_rent["fecha"]).dt.weekday
-            df_rent_staff = df_rent[df_rent.apply(
-                lambda r: (int(r["dow"]), int(r["hora"])) in horas_con_staff, axis=1
-            )].copy()
-
-            # Calcular días únicos en el periodo para escalar coste semanal
-            n_dias = (fin - inicio).days + 1
-            n_semanas = n_dias / 7
-
-            # Días reales abiertos por dow (días con al menos una venta)
-            dias_abiertos_por_dow = {}
-            for dow_idx in range(7):
-                df_dow_check = df_rent[df_rent["dow"] == dow_idx]
-                dias_con_venta = df_dow_check.groupby("fecha")["valor"].sum()
-                dias_abiertos_por_dow[dow_idx] = int((dias_con_venta > 0).sum())
-
-            # Coste diario por dow = suma de todos sus slots
-            coste_dia_por_dow = {}
-            for (dow_idx, slot), coste in coste_por_slot.items():
-                coste_dia_por_dow[dow_idx] = coste_dia_por_dow.get(dow_idx, 0) + coste
-
-            # Coste real del periodo: coste/día × días abiertos
-            coste_periodo = sum(
-                coste_dia_por_dow.get(dow_idx, 0) * dias_abiertos_por_dow.get(dow_idx, 0)
-                for dow_idx in range(7)
-            )
-            coste_semanal = sum(coste_dia_por_dow.values())
-
-            # Ventas brutas (solo horas con staff)
-            ventas_brutas = df_rent_staff["valor"].sum()
-
-            # Ventas netas (descontando 25% coste producto)
-            ventas_netas = ventas_brutas * 0.75
-
-            # Margen final
-            margen = ventas_netas - coste_periodo
-            margen_pct = (margen / ventas_brutas * 100) if ventas_brutas > 0 else 0
-
-            # Días con datos en el periodo
-            dias_con_datos = df_rent_staff["fecha"].nunique()
-
-            # Métricas principales
-            st.markdown(f"**{inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}** · {dias_con_datos} días con ventas · {n_dias} días en periodo")
-            st.markdown("")
-
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}",
-                       help="Solo horas con personal según configuración actual")
-            col2.metric("Ventas netas (−25%)", f"€{ventas_netas:,.2f}",
-                       help="Descontado 25% de coste de producto")
-            col3.metric("Coste personal", f"€{coste_periodo:,.2f}",
-                       help="Basado en turnos y costes actuales × semanas del periodo")
-            delta_color = "normal" if margen >= 0 else "inverse"
-            col4.metric("Margen", f"€{margen:,.2f}", f"{margen_pct:.1f}% s/ventas",
-                       delta_color=delta_color)
-
-            st.markdown("")
-
-            # Semáforo visual
-            if margen > 0:
-                st.success(f"✅ **Rentable** — €{margen:,.2f} de beneficio en el periodo ({margen_pct:.1f}% sobre ventas brutas)")
+                    if st.session_state.get(f"editing_cf_{c['id']}"):
+                        ec1, ec2, ec3 = st.columns([3, 2, 1])
+                        new_concepto = ec1.text_input("Concepto", value=c["concepto"], key=f"e_concepto_{c['id']}", label_visibility="collapsed")
+                        new_importe = ec2.number_input("Importe sin IVA", value=float(c["importe_sin_iva"]), min_value=0.0, step=10.0, key=f"e_importe_{c['id']}", label_visibility="collapsed")
+                        if ec3.button("💾", key=f"save_cf_{c['id']}"):
+                            sb0.table("costes_fijos").update({"concepto": new_concepto, "importe_sin_iva": new_importe}).eq("id", c["id"]).execute()
+                            st.session_state.pop(f"editing_cf_{c['id']}", None)
+                            st.rerun()
             else:
-                st.error(f"🔴 **Pérdidas** — €{abs(margen):,.2f} de déficit en el periodo ({margen_pct:.1f}% sobre ventas brutas)")
+                st.info("No hay costes fijos configurados. Añade el primero abajo.")
 
             st.divider()
+            st.markdown("##### ➕ Añadir nuevo coste fijo")
+            with st.form("nuevo_coste_fijo", clear_on_submit=True):
+                nc1, nc2 = st.columns([3, 2])
+                nuevo_concepto = nc1.text_input("Concepto", placeholder="Alquiler, suministros, gestoría...")
+                nuevo_importe = nc2.number_input("Importe €/mes (sin IVA)", min_value=0.0, step=10.0)
+                if st.form_submit_button("➕ Añadir", type="primary"):
+                    if nuevo_concepto and nuevo_importe > 0:
+                        sb0.table("costes_fijos").insert({"concepto": nuevo_concepto, "importe_sin_iva": nuevo_importe, "activo": True}).execute()
+                        st.success(f"✅ Añadido: {nuevo_concepto} · €{nuevo_importe:,.2f}/mes")
+                        st.rerun()
+                    else:
+                        st.error("Concepto y importe son obligatorios.")
 
-            # Desglose por día de la semana
-            st.markdown("#### Desglose por día de la semana")
-            st.caption("Solo horas con personal. Ventas netas = ventas × 75%. Margen = ventas netas − coste personal.")
+        # ─── ANÁLISIS ───
+        with rent_sub1:
+            # Cargar costes fijos para usar en los cálculos
+            costes_fijos_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
+            total_costes_fijos_mes = sum(float(c["importe_sin_iva"]) for c in costes_fijos_data)
+            coste_fijo_dia = total_costes_fijos_mes / 30  # promedio diario
 
-            rows_dow = []
-            for dow_idx in range(7):
-                # Ventas de ese dow en el periodo con staff
-                df_dow = df_rent_staff[df_rent_staff["dow"] == dow_idx]
-                v_brutas = df_dow["valor"].sum()
-                v_netas = v_brutas * 0.75
+            if total_costes_fijos_mes > 0:
+                st.caption(f"💡 Costes fijos mensuales configurados: **€{total_costes_fijos_mes:,.2f}** (~€{coste_fijo_dia:,.2f}/día)")
 
-                # Coste personal ese día (por semana × semanas)
-                coste_dia_sem = sum(v for (d,h), v in coste_por_slot.items() if d == dow_idx)
-                coste_dia_periodo = coste_dia_sem * n_semanas
+            # Periodo selector
+            periodo = st.radio("Periodo:", [
+                "Semana en curso", "Últimos 7 días",
+                "Mes en curso", "Últimos 30 días",
+                "Últimos 90 días", "Total registrado"
+            ], horizontal=True, key="rent_periodo")
 
-                margen_dia = v_netas - coste_dia_periodo
-                n_dias_dow = df_dow["fecha"].nunique()
-
-                rows_dow.append({
-                    "Día": DIAS[dow_idx],
-                    "Días c/datos": n_dias_dow,
-                    "Ventas brutas": f"€{v_brutas:,.2f}",
-                    "Ventas netas": f"€{v_netas:,.2f}",
-                    "Coste personal": f"€{coste_dia_periodo:,.2f}",
-                    "Margen": f"€{margen_dia:,.2f}",
-                    "✓": "✅" if margen_dia >= 0 else "🔴"
-                })
-
-            st.dataframe(pd.DataFrame(rows_dow), hide_index=True, use_container_width=True)
-
-            st.divider()
-
-            # Evolución semanal del margen
-            st.markdown("#### Evolución semanal del margen")
-            df_rent2 = df_rent_staff.copy()
-            df_rent2["fecha_ts"] = pd.to_datetime(df_rent2["fecha"])
-            df_rent2["lunes"] = df_rent2["fecha_ts"] - pd.to_timedelta(df_rent2["fecha_ts"].dt.weekday, unit="D")
-            df_rent2["semana"] = df_rent2["lunes"].dt.strftime("%Y-%m-%d")
-
-            semana_margen = df_rent2.groupby("semana")["valor"].sum().reset_index()
-            semana_margen.columns = ["semana","ventas_brutas"]
-            semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] * 0.75
-            def coste_semana(semana_str):
-                lunes = pd.Timestamp(semana_str)
-                coste = 0
-                for d in range(7):
-                    fecha_dia = (lunes + pd.Timedelta(days=d)).date()
-                    if fecha_dia < inicio or fecha_dia > fin:
-                        continue
-                    ventas_dia = df_rent[df_rent["fecha"] == fecha_dia]["valor"].sum()
-                    if ventas_dia > 0:
-                        coste += coste_dia_por_dow.get(d, 0)
-                return coste
-            semana_margen["coste"] = semana_margen["semana"].apply(coste_semana)
-            semana_margen["margen"] = semana_margen["ventas_netas"] - semana_margen["coste"]
-            semana_margen["label"] = semana_margen["semana"].apply(lambda s: pd.Timestamp(s).strftime("%d/%m"))
-            semana_margen = semana_margen.sort_values("semana")
-
-            fig_margen = go.Figure()
-            fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2), name="Ventas netas", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
-            fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste"].round(2), name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
-            fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["margen"].round(2), name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]), text=[f"€{v:+.0f}" for v in semana_margen["margen"]], textposition="top center", textfont=dict(size=11)))
-            fig_margen.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-            fig_margen.update_layout(title="Ventas netas vs coste personal por semana (€)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
-            st.plotly_chart(fig_margen, use_container_width=True)
-
-            st.divider()
-
-            # ── GRÁFICA DIARIA ──
-            st.markdown("#### Rentabilidad por día")
-            st.caption("Ventas netas = ventas brutas × 75%. Coste = según turnos actuales. Solo días con ventas.")
-
-            hoy_d = dt_rent.date.today()
-            d7_ago = hoy_d - dt_rent.timedelta(days=6)
-            min_fecha = df_rent_staff["fecha"].min() if not df_rent_staff.empty else d7_ago
-            max_fecha = df_rent_staff["fecha"].max() if not df_rent_staff.empty else hoy_d
-
-            dc1, dc2 = st.columns(2)
-            fecha_desde = dc1.date_input("Desde:", value=max(d7_ago, min_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_desde")
-            fecha_hasta = dc2.date_input("Hasta:", value=min(hoy_d, max_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_hasta")
-
-            df_dia = df_rent_staff[
-                (df_rent_staff["fecha"] >= fecha_desde) &
-                (df_rent_staff["fecha"] <= fecha_hasta)
-            ].copy()
-
-            if df_dia.empty:
-                st.info("No hay datos para ese rango de fechas.")
+            hoy = dt_rent.date.today()
+            if periodo == "Semana en curso":
+                inicio = hoy - dt_rent.timedelta(days=hoy.weekday())
+                fin = hoy
+            elif periodo == "Últimos 7 días":
+                inicio = hoy - dt_rent.timedelta(days=6)
+                fin = hoy
+            elif periodo == "Mes en curso":
+                inicio = hoy.replace(day=1)
+                fin = hoy
+            elif periodo == "Últimos 30 días":
+                inicio = hoy - dt_rent.timedelta(days=29)
+                fin = hoy
+            elif periodo == "Últimos 90 días":
+                inicio = hoy - dt_rent.timedelta(days=89)
+                fin = hoy
             else:
-                # Agrupar por día
-                dia_data = df_dia.groupby("fecha")["valor"].sum().reset_index()
-                dia_data.columns = ["fecha", "ventas_brutas"]
-                dia_data["ventas_netas"] = (dia_data["ventas_brutas"] * 0.75).round(2)
-                dia_data["dow"] = pd.to_datetime(dia_data["fecha"]).dt.weekday
-                dia_data["coste"] = dia_data["dow"].map(lambda d: coste_dia_por_dow.get(d, 0)).round(2)
-                dia_data["margen"] = (dia_data["ventas_netas"] - dia_data["coste"]).round(2)
-                dia_data["label"] = pd.to_datetime(dia_data["fecha"]).dt.strftime("%a %d/%m")
-                dia_data = dia_data.sort_values("fecha")
+                inicio = df["fecha"].min()
+                fin = df["fecha"].max()
 
-                fig_dia = go.Figure()
-                fig_dia.add_trace(go.Bar(
-                    x=dia_data["label"], y=dia_data["ventas_netas"],
-                    name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
-                ))
-                fig_dia.add_trace(go.Bar(
-                    x=dia_data["label"], y=dia_data["coste"],
-                    name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0,
-                ))
-                fig_dia.add_trace(go.Scatter(
-                    x=dia_data["label"], y=dia_data["margen"],
-                    name="Margen", mode="lines+markers+text",
-                    line=dict(color="#F4A261", width=2.5),
-                    marker=dict(size=9, color=["#5DCAA5" if v >= 0 else "#E63946" for v in dia_data["margen"]]),
-                    text=[f"€{v:+.0f}" for v in dia_data["margen"]],
-                    textposition="top center", textfont=dict(size=11),
-                ))
-                fig_dia.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-                fig_dia.update_layout(
-                    title=f"Rentabilidad diaria ({fecha_desde.strftime('%d/%m')} – {fecha_hasta.strftime('%d/%m/%Y')})",
-                    yaxis_title="€", barmode="group",
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                    xaxis=dict(showgrid=False, tickangle=-30),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
-                    height=460, margin=dict(t=50, b=100),
+            # Filtrar datos por periodo
+            df_rent = df[(df["fecha"] >= inicio) & (df["fecha"] <= fin)].copy()
+
+            if df_rent.empty:
+                st.warning("No hay datos para ese periodo.")
+            else:
+                # Cargar turnos y empleados actuales
+                turnos_data = sb0.table("turnos").select("*").execute().data or []
+                empleados_data = sb0.table("empleados").select("*").execute().data or []
+                emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
+
+                # Calcular coste de personal por slot (dow, slot) -> coste
+                # Usar slot completo (HH:MM) como key para no perder los :30
+                coste_por_slot_full = {}  # (dow, slot) -> coste total ese slot
+                horas_con_staff = set()  # (dow, hora_entera) con al menos 1 trabajador
+                for tr in turnos_data:
+                    dow = int(tr["dia_semana"])
+                    slot = tr["slot"]
+                    h = int(slot.split(":")[0])
+                    coste = emp_coste.get(tr["empleado_id"], 10) * 0.5
+                    key = (dow, slot)
+                    coste_por_slot_full[key] = coste_por_slot_full.get(key, 0) + coste
+                    horas_con_staff.add((dow, h))
+
+                # Coste total por día de la semana (suma de todos sus slots)
+                coste_por_slot = {}  # (dow,) -> coste diario total
+                for (dow, slot), coste in coste_por_slot_full.items():
+                    coste_por_slot[(dow, slot)] = coste
+
+                # Filtrar ventas solo en horas con staff
+                df_rent["dow"] = pd.to_datetime(df_rent["fecha"]).dt.weekday
+                df_rent_staff = df_rent[df_rent.apply(
+                    lambda r: (int(r["dow"]), int(r["hora"])) in horas_con_staff, axis=1
+                )].copy()
+
+                # Calcular días únicos en el periodo para escalar coste semanal
+                n_dias = (fin - inicio).days + 1
+                n_semanas = n_dias / 7
+
+                # Días reales abiertos por dow (días con al menos una venta)
+                dias_abiertos_por_dow = {}
+                for dow_idx in range(7):
+                    df_dow_check = df_rent[df_rent["dow"] == dow_idx]
+                    dias_con_venta = df_dow_check.groupby("fecha")["valor"].sum()
+                    dias_abiertos_por_dow[dow_idx] = int((dias_con_venta > 0).sum())
+
+                # Coste diario por dow = suma de todos sus slots
+                coste_dia_por_dow = {}
+                for (dow_idx, slot), coste in coste_por_slot.items():
+                    coste_dia_por_dow[dow_idx] = coste_dia_por_dow.get(dow_idx, 0) + coste
+
+                # Coste real del periodo: coste/día × días abiertos
+                coste_periodo = sum(
+                    coste_dia_por_dow.get(dow_idx, 0) * dias_abiertos_por_dow.get(dow_idx, 0)
+                    for dow_idx in range(7)
                 )
-                st.plotly_chart(fig_dia, use_container_width=True)
+                coste_semanal = sum(coste_dia_por_dow.values())
 
-                # Mini tabla resumen
-                resumen_dia = dia_data[["label","ventas_netas","coste","margen"]].copy()
-                resumen_dia.columns = ["Día","Ventas netas (€)","Coste personal (€)","Margen (€)"]
-                with st.expander("Ver datos"):
-                    st.dataframe(resumen_dia, hide_index=True, use_container_width=True)
+                # Ventas brutas (solo horas con staff)
+                ventas_brutas = df_rent_staff["valor"].sum()
 
-            st.caption("⚠️ El coste de personal es estimado basándose en la configuración de turnos actual.")
+                # Ventas netas (descontando 25% coste producto)
+                ventas_netas = ventas_brutas * 0.75
+
+                # Margen final
+                # Coste fijo prorrateado para el periodo
+                coste_fijo_periodo = 0
+                if total_costes_fijos_mes > 0:
+                    current = inicio
+                    while current <= fin:
+                        coste_fijo_periodo += total_costes_fijos_mes / pd.Timestamp(current).days_in_month
+                        current = current + dt_rent.timedelta(days=1)
+
+                coste_total_periodo = coste_periodo + coste_fijo_periodo
+                margen = ventas_netas - coste_total_periodo
+                margen_pct = (margen / ventas_brutas * 100) if ventas_brutas > 0 else 0
+
+                # Días con datos en el periodo
+                dias_con_datos = df_rent_staff["fecha"].nunique()
+
+                # Métricas principales
+                st.markdown(f"**{inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}** · {dias_con_datos} días con ventas · {n_dias} días en periodo")
+                st.markdown("")
+
+                if total_costes_fijos_mes > 0:
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}")
+                    col2.metric("Ventas netas (−25%)", f"€{ventas_netas:,.2f}", help="Descontado 25% de coste de producto")
+                    col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Según turnos y costes actuales")
+                    col4.metric("Coste fijo", f"€{coste_fijo_periodo:,.2f}", help=f"€{total_costes_fijos_mes:,.2f}/mes prorrateado")
+                    delta_color = "normal" if margen >= 0 else "inverse"
+                    col5.metric("Margen", f"€{margen:,.2f}", f"{margen_pct:.1f}% s/ventas", delta_color=delta_color)
+                else:
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}")
+                    col2.metric("Ventas netas (−25%)", f"€{ventas_netas:,.2f}", help="Descontado 25% de coste de producto")
+                    col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Basado en turnos y costes actuales")
+                    delta_color = "normal" if margen >= 0 else "inverse"
+                    col4.metric("Margen", f"€{margen:,.2f}", f"{margen_pct:.1f}% s/ventas", delta_color=delta_color)
+
+                st.markdown("")
+
+                # Semáforo visual
+                if margen > 0:
+                    st.success(f"✅ **Rentable** — €{margen:,.2f} de beneficio en el periodo ({margen_pct:.1f}% sobre ventas brutas)")
+                else:
+                    st.error(f"🔴 **Pérdidas** — €{abs(margen):,.2f} de déficit en el periodo ({margen_pct:.1f}% sobre ventas brutas)")
+
+                st.divider()
+
+                # Desglose por día de la semana
+                st.markdown("#### Desglose por día de la semana")
+                st.caption("Solo horas con personal. Ventas netas = ventas × 75%. Margen = ventas netas − coste personal.")
+
+                rows_dow = []
+                for dow_idx in range(7):
+                    # Ventas de ese dow en el periodo con staff
+                    df_dow = df_rent_staff[df_rent_staff["dow"] == dow_idx]
+                    v_brutas = df_dow["valor"].sum()
+                    v_netas = v_brutas * 0.75
+
+                    # Coste personal ese día (por semana × semanas)
+                    coste_dia_sem = sum(v for (d,h), v in coste_por_slot.items() if d == dow_idx)
+                    coste_dia_periodo = coste_dia_sem * n_semanas
+
+                    margen_dia = v_netas - coste_dia_periodo
+                    n_dias_dow = df_dow["fecha"].nunique()
+
+                    rows_dow.append({
+                        "Día": DIAS[dow_idx],
+                        "Días c/datos": n_dias_dow,
+                        "Ventas brutas": f"€{v_brutas:,.2f}",
+                        "Ventas netas": f"€{v_netas:,.2f}",
+                        "Coste personal": f"€{coste_dia_periodo:,.2f}",
+                        "Margen": f"€{margen_dia:,.2f}",
+                        "✓": "✅" if margen_dia >= 0 else "🔴"
+                    })
+
+                st.dataframe(pd.DataFrame(rows_dow), hide_index=True, use_container_width=True)
+
+                st.divider()
+
+                # Evolución semanal del margen
+                st.markdown("#### Evolución semanal del margen")
+                df_rent2 = df_rent_staff.copy()
+                df_rent2["fecha_ts"] = pd.to_datetime(df_rent2["fecha"])
+                df_rent2["lunes"] = df_rent2["fecha_ts"] - pd.to_timedelta(df_rent2["fecha_ts"].dt.weekday, unit="D")
+                df_rent2["semana"] = df_rent2["lunes"].dt.strftime("%Y-%m-%d")
+
+                semana_margen = df_rent2.groupby("semana")["valor"].sum().reset_index()
+                semana_margen.columns = ["semana","ventas_brutas"]
+                semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] * 0.75
+                def coste_semana(semana_str):
+                    lunes = pd.Timestamp(semana_str)
+                    coste = 0
+                    for d in range(7):
+                        fecha_dia = (lunes + pd.Timedelta(days=d)).date()
+                        if fecha_dia < inicio or fecha_dia > fin:
+                            continue
+                        ventas_dia = df_rent[df_rent["fecha"] == fecha_dia]["valor"].sum()
+                        if ventas_dia > 0:
+                            coste += coste_dia_por_dow.get(d, 0)
+                    return coste
+                semana_margen["coste_personal"] = semana_margen["semana"].apply(coste_semana)
+                # Coste fijo semanal: contar días del mes que caen en esa semana dentro del rango
+                def coste_fijo_semana(semana_str):
+                    if total_costes_fijos_mes == 0:
+                        return 0
+                    lunes = pd.Timestamp(semana_str)
+                    cf = 0
+                    for d in range(7):
+                        fd = (lunes + pd.Timedelta(days=d)).date()
+                        if fd < inicio or fd > fin:
+                            continue
+                        cf += total_costes_fijos_mes / pd.Timestamp(fd).days_in_month
+                    return round(cf, 2)
+                semana_margen["coste_fijo"] = semana_margen["semana"].apply(coste_fijo_semana)
+                semana_margen["coste"] = semana_margen["coste_personal"] + semana_margen["coste_fijo"]
+                semana_margen["margen"] = semana_margen["ventas_netas"] - semana_margen["coste"]
+                semana_margen["label"] = semana_margen["semana"].apply(lambda s: pd.Timestamp(s).strftime("%d/%m"))
+                semana_margen = semana_margen.sort_values("semana")
+
+                fig_margen = go.Figure()
+                fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2), name="Ventas netas", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
+                fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_personal"].round(2), name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
+                if total_costes_fijos_mes > 0:
+                    fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_fijo"].round(2), name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
+                fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["margen"].round(2), name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]), text=[f"€{v:+.0f}" for v in semana_margen["margen"]], textposition="top center", textfont=dict(size=11)))
+                fig_margen.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
+                fig_margen.update_layout(title="Ventas netas vs costes por semana (€)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
+                st.plotly_chart(fig_margen, use_container_width=True)
+
+                st.divider()
+
+                # ── GRÁFICA DIARIA ──
+                st.markdown("#### Rentabilidad por día")
+                st.caption("Ventas netas = ventas brutas × 75%. Coste = según turnos actuales. Solo días con ventas.")
+
+                hoy_d = dt_rent.date.today()
+                d7_ago = hoy_d - dt_rent.timedelta(days=6)
+                min_fecha = df_rent_staff["fecha"].min() if not df_rent_staff.empty else d7_ago
+                max_fecha = df_rent_staff["fecha"].max() if not df_rent_staff.empty else hoy_d
+
+                dc1, dc2 = st.columns(2)
+                fecha_desde = dc1.date_input("Desde:", value=max(d7_ago, min_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_desde")
+                fecha_hasta = dc2.date_input("Hasta:", value=min(hoy_d, max_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_hasta")
+
+                df_dia = df_rent_staff[
+                    (df_rent_staff["fecha"] >= fecha_desde) &
+                    (df_rent_staff["fecha"] <= fecha_hasta)
+                ].copy()
+
+                if df_dia.empty:
+                    st.info("No hay datos para ese rango de fechas.")
+                else:
+                    # Agrupar por día
+                    dia_data = df_dia.groupby("fecha")["valor"].sum().reset_index()
+                    dia_data.columns = ["fecha", "ventas_brutas"]
+                    dia_data["ventas_netas"] = (dia_data["ventas_brutas"] * 0.75).round(2)
+                    dia_data["dow"] = pd.to_datetime(dia_data["fecha"]).dt.weekday
+                    dia_data["coste_personal"] = dia_data["dow"].map(lambda d: coste_dia_por_dow.get(d, 0)).round(2)
+                    # Contribución diaria a costes fijos (importe_mensual / días del mes correspondiente)
+                    dia_data["coste_fijo"] = pd.to_datetime(dia_data["fecha"]).apply(
+                        lambda d: round(total_costes_fijos_mes / pd.Timestamp(d).days_in_month, 2)
+                    )
+                    dia_data["coste"] = (dia_data["coste_personal"] + dia_data["coste_fijo"]).round(2)
+                    dia_data["margen"] = (dia_data["ventas_netas"] - dia_data["coste"]).round(2)
+                    dia_data["label"] = pd.to_datetime(dia_data["fecha"]).dt.strftime("%a %d/%m")
+                    dia_data = dia_data.sort_values("fecha")
+
+                    fig_dia = go.Figure()
+                    fig_dia.add_trace(go.Bar(
+                        x=dia_data["label"], y=dia_data["ventas_netas"],
+                        name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
+                    ))
+                    fig_dia.add_trace(go.Bar(
+                        x=dia_data["label"], y=dia_data["coste_personal"],
+                        name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0,
+                    ))
+                    if total_costes_fijos_mes > 0:
+                        fig_dia.add_trace(go.Bar(
+                            x=dia_data["label"], y=dia_data["coste_fijo"],
+                            name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0,
+                        ))
+                    fig_dia.add_trace(go.Scatter(
+                        x=dia_data["label"], y=dia_data["margen"],
+                        name="Margen", mode="lines+markers+text",
+                        line=dict(color="#F4A261", width=2.5),
+                        marker=dict(size=9, color=["#5DCAA5" if v >= 0 else "#E63946" for v in dia_data["margen"]]),
+                        text=[f"€{v:+.0f}" for v in dia_data["margen"]],
+                        textposition="top center", textfont=dict(size=11),
+                    ))
+                    fig_dia.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
+                    fig_dia.update_layout(
+                        title=f"Rentabilidad diaria ({fecha_desde.strftime('%d/%m')} – {fecha_hasta.strftime('%d/%m/%Y')})",
+                        yaxis_title="€", barmode="group",
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                        xaxis=dict(showgrid=False, tickangle=-30),
+                        legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
+                        height=460, margin=dict(t=50, b=100),
+                    )
+                    st.plotly_chart(fig_dia, use_container_width=True)
+
+                    # Mini tabla resumen
+                    resumen_dia = dia_data[["label","ventas_netas","coste_personal","coste_fijo","coste","margen"]].copy()
+                    resumen_dia.columns = ["Día","Ventas netas (€)","Coste personal (€)","Coste fijo (€)","Coste total (€)","Margen (€)"]
+                    with st.expander("Ver datos"):
+                        st.dataframe(resumen_dia, hide_index=True, use_container_width=True)
+
+                st.caption("⚠️ El coste de personal es estimado basándose en la configuración de turnos actual.")
 
     with tab1:
         avg_dow = calcular_promedios_dia(df)
