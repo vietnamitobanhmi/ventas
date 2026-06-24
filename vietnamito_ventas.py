@@ -206,28 +206,40 @@ def parse_csv_epos(lines):
     return rows
 
 def parse_csv_nuevo(lines):
-    """Parser para nuevo POS — una fila por ticket individual."""
+    """Parser para nuevo POS — una fila por ticket individual. Soporta CSV (con comillas), TSV y SCSV."""
     from datetime import timezone
-    import re
+    import re, csv, io
 
-    # Detectar separador — puede ser tab o punto y coma
-    sep = "\t" if "\t" in lines[0] else ";"
+    # Detectar separador — puede ser tab, coma o punto y coma
+    primera = lines[0]
+    if "\t" in primera:
+        sep = "\t"
+    elif primera.count(",") > primera.count(";"):
+        sep = ","
+    else:
+        sep = ";"
+
     rows = []
+    # Usar csv.reader que maneja comillas correctamente
+    reader = csv.reader(io.StringIO("\n".join(lines)), delimiter=sep, quotechar='"')
+    parsed_lines = list(reader)
 
-    for line in lines[1:]:
-        parts = line.strip().split(sep)
+    for parts in parsed_lines[1:]:  # saltar cabecera
         if len(parts) < 6:
             continue
         try:
             id_ticket = parts[0].strip()
+            if not id_ticket:
+                continue
             forma_pago = parts[1].strip()
+            # Total: puede venir como "6,00" o "6.00" o "6"
             val_str = parts[2].strip().replace(",", ".")
             val = float(val_str)
             if val <= 0:
+                # Ignorar líneas con total 0 o negativo (abonos/devoluciones, vacías)
                 continue
             fecha_str = parts[5].strip()
-            # Parse ISO 8601 con timezone: 2026-06-07T11:48:34+02:00
-            # Python < 3.11 no soporta fromisoformat con offset, usamos regex
+            # Parse ISO 8601: 2026-06-07T11:48:34+02:00
             m = re.match(r'(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})', fecha_str)
             if not m:
                 continue
@@ -242,7 +254,7 @@ def parse_csv_nuevo(lines):
                 "forma_pago": forma_pago,
                 "id_ticket": id_ticket,
             })
-        except:
+        except Exception:
             continue
     return rows
 
