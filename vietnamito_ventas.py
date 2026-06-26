@@ -685,18 +685,17 @@ def render_dashboard(df):
                     df_hora["coste_personal"] = df_hora["hora"].map(lambda h: round(coste_personal_hora_total.get(h, 0), 2))
                     df_hora["coste_fijo"] = df_hora["hora"].map(lambda h: round(cf_por_hora_total.get(h, 0), 2))
                     df_hora["ventas_netas"] = (df_hora["ventas"] * 0.75).round(2)
-                    df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"] - df_hora["coste_fijo"]).round(2)
+                    # Margen por hora SIN coste fijo (el reparto por horas no es significativo)
+                    df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"]).round(2)
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
 
                     fig_h = go.Figure()
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.0f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
-                    if total_cf_mes_d > 0:
-                        fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_fijo"], name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
                     fig_h.add_trace(go.Scatter(x=df_hora["label"], y=df_hora["margen"], name="Margen", mode="lines+markers", line=dict(color="#F4A261", width=2.5), marker=dict(size=8, color=["#5DCAA5" if v>=0 else "#E63946" for v in df_hora["margen"]])))
                     fig_h.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                     fig_h.update_layout(
-                        title=f"Rentabilidad por hora — {titulo_periodo}",
+                        title=f"Rentabilidad por hora (sin coste fijo) — {titulo_periodo}",
                         yaxis_title="€", barmode="group",
                         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                         yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
@@ -708,9 +707,113 @@ def render_dashboard(df):
 
                     # Tabla detalle
                     with st.expander("Ver tabla horaria"):
-                        tabla_h = df_hora[["label","ventas","ventas_netas","coste_personal","coste_fijo","margen"]].copy()
-                        tabla_h.columns = ["Hora","Ventas brutas (€)","Ventas netas (€)","Coste personal (€)","Coste fijo (€)","Margen (€)"]
+                        tabla_h = df_hora[["label","ventas","ventas_netas","coste_personal","margen"]].copy()
+                        tabla_h.columns = ["Hora","Ventas brutas (€)","Ventas netas (€)","Coste personal (€)","Margen (€)"]
                         st.dataframe(tabla_h, hide_index=True, use_container_width=True)
+
+                    # ─── GRÁFICA POR DÍA DE LA SEMANA × FRANJA ───
+                    st.divider()
+                    st.markdown("##### Margen por día de la semana — mañana vs tarde")
+                    st.caption("Mañana: 9h–17h · Tarde: 18h–23h. Aquí sí se incluye el coste fijo prorrateado.")
+
+                    # Para cada día con ventas en el periodo, calcular margen mañana/tarde
+                    # incluyendo coste personal real (turnos de ese dow) + coste fijo del día
+                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "coste_fijo_m": 0, "coste_fijo_t": 0, "n_dias": 0} for dow in range(7)}
+
+                    df_periodo_copy = df_periodo.copy()
+                    df_periodo_copy["dow_calc"] = pd.to_datetime(df_periodo_copy["fecha"]).dt.weekday
+
+                    # Ventas por día y franja
+                    for fd in dias_con_ventas:
+                        dow_d = pd.Timestamp(fd).weekday()
+                        df_d = df_periodo_copy[df_periodo_copy["fecha"] == fd]
+                        ventas_m_d = df_d[(df_d["hora"] >= 9) & (df_d["hora"] <= 17)]["valor"].sum()
+                        ventas_t_d = df_d[(df_d["hora"] >= 18) & (df_d["hora"] <= 23)]["valor"].sum()
+                        dow_data[dow_d]["ventas_m"] += ventas_m_d
+                        dow_data[dow_d]["ventas_t"] += ventas_t_d
+                        dow_data[dow_d]["n_dias"] += 1
+
+                        # Coste personal de ese día por franja
+                        for tr in turnos_data_d:
+                            if int(tr["dia_semana"]) != dow_d:
+                                continue
+                            h = int(tr["slot"].split(":")[0])
+                            c = emp_coste_d.get(tr["empleado_id"], 10) * 0.5
+                            if 9 <= h <= 17:
+                                dow_data[dow_d]["coste_personal_m"] += c
+                            elif 18 <= h <= 23:
+                                dow_data[dow_d]["coste_personal_t"] += c
+
+                        # Coste fijo de ese día — repartir 50/50 entre mañana y tarde si ambas tienen actividad,
+                        # o todo a la franja activa
+                        if total_cf_mes_d > 0:
+                            dias_en_mes_fd = pd.Timestamp(fd).days_in_month
+                            cf_dia = total_cf_mes_d / dias_en_mes_fd
+                            tiene_m = ventas_m_d > 0 or dow_data[dow_d]["coste_personal_m"] > 0
+                            tiene_t = ventas_t_d > 0 or dow_data[dow_d]["coste_personal_t"] > 0
+                            if tiene_m and tiene_t:
+                                dow_data[dow_d]["coste_fijo_m"] += cf_dia / 2
+                                dow_data[dow_d]["coste_fijo_t"] += cf_dia / 2
+                            elif tiene_m:
+                                dow_data[dow_d]["coste_fijo_m"] += cf_dia
+                            elif tiene_t:
+                                dow_data[dow_d]["coste_fijo_t"] += cf_dia
+                            else:
+                                dow_data[dow_d]["coste_fijo_m"] += cf_dia / 2
+                                dow_data[dow_d]["coste_fijo_t"] += cf_dia / 2
+
+                    dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+                    margen_manana = []
+                    margen_tarde = []
+                    labels_dow = []
+                    for dow in range(7):
+                        d = dow_data[dow]
+                        margen_m = (d["ventas_m"] * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"]
+                        margen_t = (d["ventas_t"] * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"]
+                        margen_manana.append(round(margen_m, 2))
+                        margen_tarde.append(round(margen_t, 2))
+                        label_d = dias_es[dow]
+                        if d["n_dias"] > 0:
+                            label_d += f"<br><span style='font-size:10px;color:#888'>({d['n_dias']}d)</span>"
+                        labels_dow.append(label_d)
+
+                    fig_dow = go.Figure()
+                    fig_dow.add_trace(go.Bar(
+                        x=labels_dow, y=margen_manana, name="Mañana (9h-17h)",
+                        marker_color=["rgba(93,202,165,0.85)" if v >= 0 else "rgba(230,57,70,0.85)" for v in margen_manana],
+                        marker_line_width=0,
+                        text=[f"€{v:+.0f}" if v != 0 else "" for v in margen_manana], textposition="outside",
+                    ))
+                    fig_dow.add_trace(go.Bar(
+                        x=labels_dow, y=margen_tarde, name="Tarde (18h-23h)",
+                        marker_color=["rgba(244,162,97,0.85)" if v >= 0 else "rgba(230,57,70,0.55)" for v in margen_tarde],
+                        marker_line_width=0,
+                        text=[f"€{v:+.0f}" if v != 0 else "" for v in margen_tarde], textposition="outside",
+                    ))
+                    fig_dow.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
+                    fig_dow.update_layout(
+                        title=f"Margen por día de la semana × franja — {titulo_periodo}",
+                        yaxis_title="€ margen", barmode="group",
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                        xaxis=dict(showgrid=False),
+                        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="left", x=0),
+                        height=440, margin=dict(t=50, b=80),
+                    )
+                    st.plotly_chart(fig_dow, use_container_width=True)
+
+                    with st.expander("Ver tabla por día de la semana"):
+                        tabla_dow_rows = []
+                        for dow in range(7):
+                            d = dow_data[dow]
+                            tabla_dow_rows.append({
+                                "Día": dias_es[dow],
+                                "Días en periodo": d["n_dias"],
+                                "Margen mañana (€)": round((d["ventas_m"] * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"], 2),
+                                "Margen tarde (€)": round((d["ventas_t"] * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"], 2),
+                                "Margen total (€)": round(margen_manana[dow] + margen_tarde[dow], 2),
+                            })
+                        st.dataframe(pd.DataFrame(tabla_dow_rows), hide_index=True, use_container_width=True)
 
         # ─── ANÁLISIS ───
         with rent_sub1:
