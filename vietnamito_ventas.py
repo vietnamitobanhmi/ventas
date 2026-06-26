@@ -144,6 +144,86 @@ def enviar_email_cancelacion(reserva, cfg=None):
     return _resend_send(reserva["email"], f"Reserva cancelada — Vietnamito {fecha} {hora}", html)
 
 
+# ── Emails de PEDIDOS ──
+def _tabla_pedido(ped, items, cfg=None):
+    """Tabla resumen del pedido para emails."""
+    rows = ""
+    for it in items:
+        subtotal = float(it["cantidad"]) * float(it["precio_unitario"])
+        rows += f"""<tr><td style="padding:8px 12px;border-bottom:1px solid #EEDCC8;color:#5C4033;font-size:14px;">{it['cantidad']}× {it['nombre_producto']}</td><td style="padding:8px 12px;border-bottom:1px solid #EEDCC8;text-align:right;color:#5C4033;font-size:14px;">€{subtotal:.2f}</td></tr>"""
+    notas_html = ""
+    if ped.get("notas"):
+        notas_html = f"""<tr><td colspan="2" style="padding:10px 12px;background:#FFF6E5;color:#5C4033;font-size:13px;font-style:italic;">📝 {ped['notas']}</td></tr>"""
+    return f"""
+      <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#FFFCF6;border:1px solid #EEDCC8;border-radius:8px;overflow:hidden;">
+        <tr><td style="padding:12px;background:#FFF3E0;color:#3D1C0A;font-size:13px;"><strong>🕐 Recogida:</strong> {ped.get('hora_recogida','—')}</td><td style="padding:12px;background:#FFF3E0;color:#3D1C0A;font-size:13px;text-align:right;"><strong>#{ped.get('id','')}</strong></td></tr>
+        {rows}
+        {notas_html}
+        <tr><td style="padding:12px;color:#3D1C0A;font-size:15px;font-weight:600;">Total</td><td style="padding:12px;text-align:right;color:#3D1C0A;font-size:15px;font-weight:600;">€{float(ped.get('total',0)):.2f}</td></tr>
+      </table>"""
+
+
+def enviar_email_pedido_recibido(ped, items, cfg=None):
+    """Email automático al recibir el pedido — aún pendiente de aceptar."""
+    if not ped.get("email"):
+        return False
+    nombre = ped.get("nombre", "")
+    tabla = _tabla_pedido(ped, items, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Hemos recibido tu pedido en <strong>Vietnamito</strong>. Lo revisaremos y te confirmaremos por email en breve si podemos prepararlo a tiempo.</p>
+      {tabla}
+      <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">¿Tienes alguna duda? Responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
+    html = _html_base("Pedido recibido 📬", "Te confirmaremos en breve", contenido)
+    return _resend_send(ped["email"], f"Pedido recibido — Vietnamito #{ped.get('id','')}", html)
+
+
+def enviar_email_pedido_aceptado(ped, items, cfg=None):
+    """Email de aceptación — el pedido entra en cocina."""
+    if not ped.get("email"):
+        return False
+    nombre = ped.get("nombre", "")
+    tabla = _tabla_pedido(ped, items, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Tu pedido en <strong>Vietnamito</strong> ha sido <strong style="color:#2E7D32;">aceptado</strong> y lo estamos preparando.</p>
+      {tabla}
+      <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">Te esperamos a la hora de recogida indicada. Para cualquier cambio, responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
+    html = _html_base("Pedido aceptado ✓", f"Recogida: {ped.get('hora_recogida','')}", contenido)
+    return _resend_send(ped["email"], f"✓ Pedido aceptado — Vietnamito #{ped.get('id','')}", html)
+
+
+def enviar_email_pedido_rechazado(ped, items, cfg=None):
+    """Email cuando se rechaza el pedido."""
+    if not ped.get("email"):
+        return False
+    nombre = ped.get("nombre", "")
+    tabla = _tabla_pedido(ped, items, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Lo sentimos mucho, pero no podemos atender tu pedido en este momento. Puede ser por falta de stock, exceso de demanda en esta franja horaria, o porque la hora de recogida no es viable.</p>
+      {tabla}
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Esperamos verte pronto en el restaurante o que vuelvas a hacer un pedido más adelante. Si quieres, llámanos al <strong>+34 711 216 862</strong> y vemos qué podemos hacer.</p>"""
+    html = _html_base("Pedido no aceptado", "Disculpa las molestias", contenido)
+    return _resend_send(ped["email"], f"Pedido no aceptado — Vietnamito #{ped.get('id','')}", html)
+
+
+def enviar_email_pedido_cancelado(ped, items, cfg=None):
+    """Email cuando se cancela un pedido ya aceptado."""
+    if not ped.get("email"):
+        return False
+    nombre = ped.get("nombre", "")
+    tabla = _tabla_pedido(ped, items, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Tu pedido en <strong>Vietnamito</strong> ha sido <strong style="color:#C62828;">cancelado</strong>.</p>
+      {tabla}
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Lo sentimos mucho. Para más información, responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
+    html = _html_base("Pedido cancelado", "", contenido)
+    return _resend_send(ped["email"], f"Pedido cancelado — Vietnamito #{ped.get('id','')}", html)
+
+
+
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 
@@ -437,7 +517,7 @@ def render_dashboard(df):
     st.divider()
 
     sb_counts = get_supabase()
-    ped_pend = len((sb_counts.table("pedidos").select("id").eq("estado","pendiente").execute().data or []))
+    ped_pend = len((sb_counts.table("pedidos").select("id").eq("estado","solicitado").execute().data or []))
     res_pend = len((sb_counts.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
 
     ped_label = f"🛍️ Pedidos {'🔴 ' + str(ped_pend) if ped_pend > 0 else ''}"
@@ -1700,71 +1780,156 @@ def render_dashboard(df):
 
     # ── TAB 7: Pedidos ──────────────────────────────────────
     with tab7:
+        import datetime as dt_mod
         sb7 = get_supabase()
         st.markdown("### Pedidos")
 
-        col_filt_p, col_del_p = st.columns([3, 1])
-        filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados"], key="filtro_ped")
-        filtro_map = {"Todos": None, "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado"}
+        # Auto-enviar email de recepción a pedidos solicitados sin email enviado
+        cfg_p = sb7.table("config").select("*").execute()
+        cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
+        nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
+        for np_ in nuevos_ped:
+            if np_.get("email"):
+                items_np = sb7.table("pedido_items").select("*").eq("pedido_id", np_["id"]).execute().data or []
+                ok_em = enviar_email_pedido_recibido(np_, items_np, cfg_ped)
+                if ok_em:
+                    sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
 
-        if col_del_p.button("🗑️ Borrar cancelados", key="del_cancelled_ped"):
-            st.session_state["confirm_del_cancelled_ped"] = True
-        if st.session_state.get("confirm_del_cancelled_ped"):
-            st.warning("¿Borrar todos los pedidos cancelados? No se puede deshacer.")
-            dp1, dp2 = st.columns(2)
-            if dp1.button("✅ Sí, borrar", key="yes_del_cancelled_ped"):
-                ped_ids = [p["id"] for p in (sb7.table("pedidos").select("id").eq("estado","cancelado").execute().data or [])]
-                if ped_ids:
-                    sb7.table("pedido_items").delete().in_("pedido_id", ped_ids).execute()
-                    sb7.table("pedidos").delete().eq("estado", "cancelado").execute()
-                st.session_state.pop("confirm_del_cancelled_ped", None)
-                st.success("✅ Pedidos cancelados eliminados")
-                st.rerun()
-            if dp2.button("❌ Cancelar", key="no_del_cancelled_ped"):
-                st.session_state.pop("confirm_del_cancelled_ped", None)
-                st.rerun()
+        ped_sub1, ped_sub2, ped_sub3 = st.tabs(["📥 Solicitados", "🔥 Activos", "📋 Todos"])
 
-        q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
-        if filtro_map[filtro_ped]:
-            q = q.eq("estado", filtro_map[filtro_ped])
-        pedidos = q.limit(100).execute().data or []
-        
-        if not pedidos:
-            st.info("No hay pedidos con ese filtro.")
-        else:
-            for ped in pedidos:
-                items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
-                productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-                
-                estado = ped["estado"]
-                color_map = {"pendiente": "🔴", "preparando": "🟡", "listo": "🟢", "entregado": "✅", "cancelado": "⚫"}
-                icono = color_map.get(estado, "⚪")
-                
-                with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{ped['total']:.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
-                    c1, c2 = st.columns(2)
-                    c1.markdown(f"**Nombre:** {ped['nombre']}")
-                    c1.markdown(f"**Teléfono:** {ped['telefono']}")
-                    c1.markdown(f"**Email:** {ped.get('email') or '—'}")
-                    c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
-                    c2.markdown(f"**Total:** €{ped['total']:.2f}")
-                    c2.markdown(f"**Estado:** {estado}")
-                    c2.markdown(f"**Fecha:** {pd.Timestamp(ped['creado_at']).strftime('%d/%m/%Y %H:%M')}")
-                    if ped.get("notas"):
-                        st.markdown(f"**Notas:** {ped['notas']}")
-                    st.markdown(f"**Productos:** {productos_str}")
-                    
-                    st.markdown("**Cambiar estado:**")
-                    estados = ["pendiente", "preparando", "listo", "entregado", "cancelado"]
-                    cols = st.columns(len(estados))
-                    for i, est in enumerate(estados):
-                        with cols[i]:
-                            if est != estado:
-                                if st.button(est.capitalize(), key=f"ped_{ped['id']}_{est}"):
-                                    sb7.table("pedidos").update({"estado": est}).eq("id", ped["id"]).execute()
-                                    st.success(f"✅ Pedido #{ped['id']} → {est}")
-                                    st.rerun()
+        def _render_pedido_completo(ped, items_res):
+            productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**Nombre:** {ped['nombre']}")
+            c1.markdown(f"**Teléfono:** {ped['telefono']}")
+            c1.markdown(f"**Email:** {ped.get('email') or '—'}")
+            c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
+            c2.markdown(f"**Total:** €{float(ped['total']):.2f}")
+            c2.markdown(f"**Estado:** {ped['estado']}")
+            c2.markdown(f"**Solicitado:** {pd.Timestamp(ped['creado_at']).strftime('%d/%m/%Y %H:%M')}")
+            if ped.get("notas"):
+                st.markdown(f"**Notas:** {ped['notas']}")
+            st.markdown(f"**Productos:** {productos_str}")
+
+        # ─── SOLICITADOS — aceptar/rechazar ───
+        with ped_sub1:
+            solicitados = sb7.table("pedidos").select("*").eq("estado","solicitado").order("creado_at", desc=True).execute().data or []
+            if not solicitados:
+                st.info("No hay pedidos pendientes de aceptar.")
+            else:
+                st.caption(f"{len(solicitados)} pedido{'s' if len(solicitados)!=1 else ''} esperando tu aprobación.")
+                for ped in solicitados:
+                    items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                    productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+                    with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%H:%M')}", expanded=True):
+                        _render_pedido_completo(ped, items_res)
+                        st.markdown("")
+                        ac1, ac2 = st.columns(2)
+                        if ac1.button("✅ Aceptar pedido", key=f"acept_{ped['id']}", type="primary", use_container_width=True):
+                            sb7.table("pedidos").update({"estado": "pendiente"}).eq("id", ped["id"]).execute()
+                            if ped.get("email"):
+                                ok2 = enviar_email_pedido_aceptado({**ped, "id": ped["id"]}, items_res, cfg_ped)
+                                if ok2:
+                                    sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ped["id"]).execute()
+                                    st.success(f"✅ Pedido #{ped['id']} aceptado · Email enviado")
+                                else:
+                                    st.success(f"✅ Pedido #{ped['id']} aceptado")
+                                    st.warning("⚠️ No se pudo enviar el email")
                             else:
-                                st.markdown(f"<div style='text-align:center;padding:8px;background:var(--color-background-info);color:var(--color-text-info);border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
+                                st.success(f"✅ Pedido #{ped['id']} aceptado (sin email del cliente)")
+                            st.rerun()
+                        if ac2.button("❌ Rechazar", key=f"rechazar_{ped['id']}", use_container_width=True):
+                            st.session_state[f"confirm_rechazar_{ped['id']}"] = True
+                        if st.session_state.get(f"confirm_rechazar_{ped['id']}"):
+                            st.warning(f"¿Rechazar pedido de **{ped['nombre']}**? Se enviará un email avisando.")
+                            yc, nc = st.columns(2)
+                            if yc.button("✅ Sí, rechazar", key=f"yes_rechazar_{ped['id']}"):
+                                sb7.table("pedidos").update({"estado": "rechazado"}).eq("id", ped["id"]).execute()
+                                st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
+                                if ped.get("email"):
+                                    enviar_email_pedido_rechazado(ped, items_res, cfg_ped)
+                                    st.success(f"❌ Pedido rechazado · Email enviado")
+                                else:
+                                    st.success("❌ Pedido rechazado")
+                                st.rerun()
+                            if nc.button("Cancelar", key=f"no_rechazar_{ped['id']}"):
+                                st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
+                                st.rerun()
+
+        # ─── ACTIVOS — solo ver estado + cancelar ───
+        with ped_sub2:
+            activos = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo"]).order("creado_at", desc=True).execute().data or []
+            if not activos:
+                st.info("No hay pedidos activos en cocina.")
+            else:
+                st.caption(f"{len(activos)} pedido{'s' if len(activos)!=1 else ''} en curso. El estado se gestiona desde el KDS.")
+                estado_emoji = {"pendiente":"🔴 Pendiente","preparando":"🟡 Preparando","listo":"🟢 Listo"}
+                for ped in activos:
+                    items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                    with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']}"):
+                        _render_pedido_completo(ped, items_res)
+                        st.markdown("")
+                        st.caption("Para mover entre estados (pendiente → preparando → listo → entregado) usa el KDS.")
+                        if st.button("🚫 Cancelar pedido", key=f"cancel_active_{ped['id']}"):
+                            st.session_state[f"confirm_cancel_active_{ped['id']}"] = True
+                        if st.session_state.get(f"confirm_cancel_active_{ped['id']}"):
+                            st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email.")
+                            yc2, nc2 = st.columns(2)
+                            if yc2.button("✅ Sí, cancelar", key=f"yes_cancel_active_{ped['id']}"):
+                                sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
+                                st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
+                                if ped.get("email"):
+                                    enviar_email_pedido_cancelado(ped, items_res, cfg_ped)
+                                    st.success(f"🚫 Cancelado · Email enviado")
+                                else:
+                                    st.success("🚫 Cancelado")
+                                st.rerun()
+                            if nc2.button("No", key=f"no_cancel_active_{ped['id']}"):
+                                st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
+                                st.rerun()
+
+        # ─── TODOS — vista histórica con filtro ───
+        with ped_sub3:
+            col_filt_p, col_del_p = st.columns([3, 1])
+            filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Solicitados", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados", "Rechazados"], key="filtro_ped")
+            filtro_map = {"Todos": None, "Solicitados": "solicitado", "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado", "Rechazados": "rechazado"}
+
+            if col_del_p.button("🗑️ Borrar finalizados", key="del_finalizados_ped", help="Borra cancelados, rechazados y entregados de más de 7 días"):
+                st.session_state["confirm_del_finalizados"] = True
+            if st.session_state.get("confirm_del_finalizados"):
+                st.warning("¿Borrar pedidos cancelados, rechazados y entregados de más de 7 días? No se puede deshacer.")
+                df1, df2 = st.columns(2)
+                if df1.button("✅ Sí", key="yes_del_finalizados"):
+                    sb7.table("pedido_items").delete().in_("pedido_id", [p["id"] for p in (sb7.table("pedidos").select("id").in_("estado",["cancelado","rechazado"]).execute().data or [])]).execute()
+                    sb7.table("pedidos").delete().in_("estado", ["cancelado","rechazado"]).execute()
+                    hace7 = (dt_mod.datetime.now() - dt_mod.timedelta(days=7)).isoformat()
+                    old_entreg = sb7.table("pedidos").select("id").eq("estado","entregado").lt("creado_at", hace7).execute().data or []
+                    if old_entreg:
+                        sb7.table("pedido_items").delete().in_("pedido_id", [p["id"] for p in old_entreg]).execute()
+                        sb7.table("pedidos").delete().eq("estado","entregado").lt("creado_at", hace7).execute()
+                    st.session_state.pop("confirm_del_finalizados", None)
+                    st.success("✅ Limpieza completada")
+                    st.rerun()
+                if df2.button("❌", key="no_del_finalizados"):
+                    st.session_state.pop("confirm_del_finalizados", None)
+                    st.rerun()
+
+            q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
+            if filtro_map[filtro_ped]:
+                q = q.eq("estado", filtro_map[filtro_ped])
+            pedidos = q.limit(100).execute().data or []
+            
+            if not pedidos:
+                st.info("No hay pedidos con ese filtro.")
+            else:
+                for ped in pedidos:
+                    items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                    productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+                    estado = ped["estado"]
+                    color_map = {"solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
+                    icono = color_map.get(estado, "⚪")
+                    with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
+                        _render_pedido_completo(ped, items_res)
 
     # ── TAB 8: Reservas ─────────────────────────────────────
     with tab8:
@@ -2341,7 +2506,7 @@ if df.empty:
     st.divider()
     # Mostrar pestañas de gestión completas aunque no haya datos de ventas
     _sb0 = get_supabase()
-    _ped_pend = len((_sb0.table("pedidos").select("id").eq("estado","pendiente").execute().data or []))
+    _ped_pend = len((_sb0.table("pedidos").select("id").eq("estado","solicitado").execute().data or []))
     _res_pend = len((_sb0.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
     _ped_lbl = f"🛍️ Pedidos {'🔴 ' + str(_ped_pend) if _ped_pend > 0 else ''}"
     _res_lbl = f"🍽️ Reservas {'🔴 ' + str(_res_pend) if _res_pend > 0 else ''}"
