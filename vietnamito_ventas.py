@@ -527,7 +527,8 @@ def render_dashboard(df):
 
         # ─── POR DÍA ───
         with rent_sub_dia:
-            st.markdown("#### Análisis de un día concreto")
+            st.markdown("#### Rentabilidad por hora")
+            st.caption("Selecciona un día concreto o un periodo para ver la rentabilidad agregada por franja horaria.")
 
             costes_fijos_d = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
             total_cf_mes_d = sum(float(c["importe_sin_iva"]) for c in costes_fijos_d)
@@ -535,92 +536,154 @@ def render_dashboard(df):
             if df.empty:
                 st.info("No hay datos de ventas todavía.")
             else:
-                fechas_disp = sorted(df["fecha"].unique(), reverse=True)
-                fecha_sel = st.selectbox(
-                    "Selecciona el día:",
-                    fechas_disp,
-                    format_func=lambda f: f"{['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][pd.Timestamp(f).weekday()]} {pd.Timestamp(f).strftime('%d/%m/%Y')}",
-                    key="dia_sel_rent"
-                )
+                hoy_dh = dt_rent.date.today()
+                min_fecha_d = df["fecha"].min()
+                max_fecha_d = df["fecha"].max()
 
-                df_dia_sel = df[df["fecha"] == fecha_sel].copy()
+                periodo_dia = st.radio("Periodo:", [
+                    "Día concreto", "Esta semana", "Últimos 7 días",
+                    "Mes en curso", "Últimos 30 días", "Últimos 60 días",
+                    "Últimos 90 días", "Todo el histórico", "Personalizado"
+                ], horizontal=True, key="periodo_por_dia")
 
-                if df_dia_sel.empty:
-                    st.info("No hay ventas registradas para ese día.")
+                # Determinar rango
+                if periodo_dia == "Día concreto":
+                    fechas_disp = sorted(df["fecha"].unique(), reverse=True)
+                    fecha_concreta = st.selectbox(
+                        "Selecciona el día:",
+                        fechas_disp,
+                        format_func=lambda f: f"{['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][pd.Timestamp(f).weekday()]} {pd.Timestamp(f).strftime('%d/%m/%Y')}",
+                        key="dia_sel_rent"
+                    )
+                    inicio_d = fin_d = fecha_concreta
+                elif periodo_dia == "Esta semana":
+                    inicio_d = hoy_dh - dt_rent.timedelta(days=hoy_dh.weekday())
+                    fin_d = hoy_dh
+                elif periodo_dia == "Últimos 7 días":
+                    inicio_d = hoy_dh - dt_rent.timedelta(days=6)
+                    fin_d = hoy_dh
+                elif periodo_dia == "Mes en curso":
+                    inicio_d = hoy_dh.replace(day=1)
+                    fin_d = hoy_dh
+                elif periodo_dia == "Últimos 30 días":
+                    inicio_d = hoy_dh - dt_rent.timedelta(days=29)
+                    fin_d = hoy_dh
+                elif periodo_dia == "Últimos 60 días":
+                    inicio_d = hoy_dh - dt_rent.timedelta(days=59)
+                    fin_d = hoy_dh
+                elif periodo_dia == "Últimos 90 días":
+                    inicio_d = hoy_dh - dt_rent.timedelta(days=89)
+                    fin_d = hoy_dh
+                elif periodo_dia == "Todo el histórico":
+                    inicio_d = min_fecha_d
+                    fin_d = max_fecha_d
+                else:  # Personalizado
+                    rng_c1, rng_c2 = st.columns(2)
+                    inicio_d = rng_c1.date_input("Desde:", value=max(hoy_dh - dt_rent.timedelta(days=6), min_fecha_d), min_value=min_fecha_d, max_value=max_fecha_d, key="dh_desde")
+                    fin_d = rng_c2.date_input("Hasta:", value=min(hoy_dh, max_fecha_d), min_value=min_fecha_d, max_value=max_fecha_d, key="dh_hasta")
+
+                df_periodo = df[(df["fecha"] >= inicio_d) & (df["fecha"] <= fin_d)].copy()
+
+                if df_periodo.empty:
+                    st.info("No hay ventas registradas para ese periodo.")
                 else:
-                    # Cargar turnos para calcular coste personal del día
+                    # Cargar turnos para calcular coste personal por día de la semana
                     turnos_data_d = sb0.table("turnos").select("*").execute().data or []
                     empleados_data_d = sb0.table("empleados").select("*").execute().data or []
                     emp_coste_d = {e["id"]: e["coste_hora"] for e in empleados_data_d}
-                    dow_sel = pd.Timestamp(fecha_sel).weekday()
 
-                    # Coste personal por hora (suma todos los slots de cada hora)
-                    coste_personal_hora = {}
-                    horas_con_staff_dia = set()
-                    for tr in turnos_data_d:
-                        if int(tr["dia_semana"]) != dow_sel:
-                            continue
-                        h = int(tr["slot"].split(":")[0])
-                        c = emp_coste_d.get(tr["empleado_id"], 10) * 0.5
-                        coste_personal_hora[h] = coste_personal_hora.get(h, 0) + c
-                        horas_con_staff_dia.add(h)
+                    # Días distintos con ventas en el periodo
+                    dias_con_ventas = df_periodo["fecha"].unique()
+                    n_dias_con_ventas = len(dias_con_ventas)
 
-                    coste_personal_dia = sum(coste_personal_hora.values())
+                    # Coste personal: sumar por cada día (según su día de la semana) y luego acumular por hora
+                    coste_personal_hora_total = {}  # hora → coste personal acumulado en todo el periodo
+                    horas_con_staff_total = set()
+                    coste_personal_total = 0
 
-                    # Coste fijo del día = total mensual / días del mes
-                    dias_en_mes = pd.Timestamp(fecha_sel).days_in_month
-                    coste_fijo_dia_sel = total_cf_mes_d / dias_en_mes if total_cf_mes_d > 0 else 0
+                    for fd in dias_con_ventas:
+                        dow_d = pd.Timestamp(fd).weekday()
+                        for tr in turnos_data_d:
+                            if int(tr["dia_semana"]) != dow_d:
+                                continue
+                            h = int(tr["slot"].split(":")[0])
+                            c = emp_coste_d.get(tr["empleado_id"], 10) * 0.5
+                            coste_personal_hora_total[h] = coste_personal_hora_total.get(h, 0) + c
+                            horas_con_staff_total.add(h)
+                            coste_personal_total += c
 
-                    # Métricas del día
-                    ventas_brutas_d = df_dia_sel["valor"].sum()
+                    # Coste fijo: prorrateado para cada día del periodo
+                    coste_fijo_total = 0
+                    cf_por_hora_total = {}  # hora → coste fijo acumulado
+                    if total_cf_mes_d > 0:
+                        for fd in dias_con_ventas:
+                            dias_en_mes_fd = pd.Timestamp(fd).days_in_month
+                            cf_dia = total_cf_mes_d / dias_en_mes_fd
+                            coste_fijo_total += cf_dia
+                            # Repartir el coste fijo del día entre las horas con staff de ese día concreto
+                            dow_d = pd.Timestamp(fd).weekday()
+                            horas_staff_dia = set()
+                            for tr in turnos_data_d:
+                                if int(tr["dia_semana"]) == dow_d:
+                                    horas_staff_dia.add(int(tr["slot"].split(":")[0]))
+                            if horas_staff_dia:
+                                cf_por_hora_dia = cf_dia / len(horas_staff_dia)
+                                for h in horas_staff_dia:
+                                    cf_por_hora_total[h] = cf_por_hora_total.get(h, 0) + cf_por_hora_dia
+
+                    # Métricas del periodo
+                    ventas_brutas_d = df_periodo["valor"].sum()
                     ventas_netas_d = ventas_brutas_d * 0.75
-                    coste_total_d = coste_personal_dia + coste_fijo_dia_sel
+                    coste_total_d = coste_personal_total + coste_fijo_total
                     margen_d = ventas_netas_d - coste_total_d
-                    n_tickets = df_dia_sel["ntrans"].sum() if "ntrans" in df_dia_sel.columns else len(df_dia_sel)
+                    n_tickets = df_periodo["ntrans"].sum() if "ntrans" in df_periodo.columns else len(df_periodo)
                     ticket_medio = ventas_brutas_d / n_tickets if n_tickets > 0 else 0
 
-                    st.markdown("##### Resumen del día")
+                    if inicio_d == fin_d:
+                        titulo_periodo = pd.Timestamp(inicio_d).strftime('%A %d/%m/%Y')
+                    else:
+                        titulo_periodo = f"{pd.Timestamp(inicio_d).strftime('%d/%m/%Y')} → {pd.Timestamp(fin_d).strftime('%d/%m/%Y')} · {n_dias_con_ventas} día{'s' if n_dias_con_ventas!=1 else ''} con ventas"
+
+                    st.markdown(f"##### Resumen — {titulo_periodo}")
                     if total_cf_mes_d > 0:
                         md1, md2, md3, md4, md5 = st.columns(5)
                         md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
                         md2.metric("Ventas netas (−25%)", f"€{ventas_netas_d:,.2f}")
-                        md3.metric("Coste personal", f"€{coste_personal_dia:,.2f}")
-                        md4.metric("Coste fijo", f"€{coste_fijo_dia_sel:,.2f}", help=f"€{total_cf_mes_d:,.2f}/mes ÷ {dias_en_mes} días")
+                        md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
+                        md4.metric("Coste fijo", f"€{coste_fijo_total:,.2f}", help=f"Prorrateado proporcionalmente por días")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md5.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
                     else:
                         md1, md2, md3, md4 = st.columns(4)
                         md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
                         md2.metric("Ventas netas (−25%)", f"€{ventas_netas_d:,.2f}")
-                        md3.metric("Coste personal", f"€{coste_personal_dia:,.2f}")
+                        md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md4.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
 
-                    extra_c1, extra_c2 = st.columns(2)
+                    extra_c1, extra_c2, extra_c3 = st.columns(3)
                     extra_c1.metric("Tickets", f"{int(n_tickets):,}")
                     extra_c2.metric("Ticket medio", f"€{ticket_medio:.2f}")
+                    if n_dias_con_ventas > 1:
+                        extra_c3.metric("Promedio ventas/día", f"€{ventas_brutas_d/n_dias_con_ventas:,.2f}")
 
                     st.divider()
 
-                    # Gráfica por hora
-                    st.markdown("##### Ventas por hora")
-                    df_hora = df_dia_sel.groupby("hora").agg(
+                    # Gráfica por hora (agregada en todo el periodo)
+                    st.markdown("##### Ventas por hora (acumulado en el periodo)")
+                    df_hora = df_periodo.groupby("hora").agg(
                         ventas=("valor", "sum"),
-                        tickets=("ntrans", "sum") if "ntrans" in df_dia_sel.columns else ("valor", "count")
                     ).reset_index()
 
-                    # Rellenar horas sin ventas para visualización completa (apertura típica 8-23)
-                    horas_completas = sorted(set(df_hora["hora"].tolist() + list(horas_con_staff_dia)))
+                    # Rellenar horas sin ventas
+                    horas_completas = sorted(set(df_hora["hora"].tolist() + list(horas_con_staff_total)))
                     if horas_completas:
                         h_min, h_max = min(horas_completas), max(horas_completas)
                         full_range = pd.DataFrame({"hora": range(h_min, h_max+1)})
                         df_hora = full_range.merge(df_hora, on="hora", how="left").fillna(0)
 
-                    df_hora["coste_personal"] = df_hora["hora"].map(lambda h: round(coste_personal_hora.get(h, 0), 2))
-                    # Reparto del coste fijo entre las horas con staff
-                    n_horas_staff = len(horas_con_staff_dia)
-                    cf_por_hora = coste_fijo_dia_sel / n_horas_staff if n_horas_staff > 0 else 0
-                    df_hora["coste_fijo"] = df_hora["hora"].map(lambda h: round(cf_por_hora if h in horas_con_staff_dia else 0, 2))
+                    df_hora["coste_personal"] = df_hora["hora"].map(lambda h: round(coste_personal_hora_total.get(h, 0), 2))
+                    df_hora["coste_fijo"] = df_hora["hora"].map(lambda h: round(cf_por_hora_total.get(h, 0), 2))
                     df_hora["ventas_netas"] = (df_hora["ventas"] * 0.75).round(2)
                     df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"] - df_hora["coste_fijo"]).round(2)
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
@@ -633,7 +696,7 @@ def render_dashboard(df):
                     fig_h.add_trace(go.Scatter(x=df_hora["label"], y=df_hora["margen"], name="Margen", mode="lines+markers", line=dict(color="#F4A261", width=2.5), marker=dict(size=8, color=["#5DCAA5" if v>=0 else "#E63946" for v in df_hora["margen"]])))
                     fig_h.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                     fig_h.update_layout(
-                        title=f"Rentabilidad por hora — {pd.Timestamp(fecha_sel).strftime('%A %d/%m/%Y')}",
+                        title=f"Rentabilidad por hora — {titulo_periodo}",
                         yaxis_title="€", barmode="group",
                         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                         yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
