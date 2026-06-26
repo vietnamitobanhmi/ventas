@@ -1788,14 +1788,33 @@ def render_dashboard(df):
         cfg_p = sb7.table("config").select("*").execute()
         cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
         nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
-        for np_ in nuevos_ped:
-            if np_.get("email"):
-                items_np = sb7.table("pedido_items").select("*").eq("pedido_id", np_["id"]).execute().data or []
-                ok_em = enviar_email_pedido_recibido(np_, items_np, cfg_ped)
-                if ok_em:
-                    sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
+        if nuevos_ped:
+            ids_nuevos = [np_["id"] for np_ in nuevos_ped]
+            items_nuevos_bulk = sb7.table("pedido_items").select("*").in_("pedido_id", ids_nuevos).execute().data or []
+            items_nuevos_por_id = {}
+            for it in items_nuevos_bulk:
+                items_nuevos_por_id.setdefault(it["pedido_id"], []).append(it)
+            for np_ in nuevos_ped:
+                if np_.get("email"):
+                    items_np = items_nuevos_por_id.get(np_["id"], [])
+                    ok_em = enviar_email_pedido_recibido(np_, items_np, cfg_ped)
+                    if ok_em:
+                        sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
 
         ped_sub1, ped_sub2, ped_sub3 = st.tabs(["📥 Solicitados", "🔥 Activos", "📋 Todos"])
+
+        def _items_de(pedido_id, items_por_pedido):
+            return items_por_pedido.get(pedido_id, [])
+
+        def _bulk_items(pedido_ids):
+            """Trae todos los items de una lista de pedido_ids en una sola query, agrupados por pedido_id."""
+            if not pedido_ids:
+                return {}
+            res = sb7.table("pedido_items").select("*").in_("pedido_id", pedido_ids).execute().data or []
+            grupos = {}
+            for it in res:
+                grupos.setdefault(it["pedido_id"], []).append(it)
+            return grupos
 
         def _render_pedido_completo(ped, items_res):
             productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
@@ -1818,8 +1837,9 @@ def render_dashboard(df):
                 st.info("No hay pedidos pendientes de aceptar.")
             else:
                 st.caption(f"{len(solicitados)} pedido{'s' if len(solicitados)!=1 else ''} esperando tu aprobación.")
+                items_bulk_s = _bulk_items([p["id"] for p in solicitados])
                 for ped in solicitados:
-                    items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                    items_res = items_bulk_s.get(ped["id"], [])
                     productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
                     with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%H:%M')}", expanded=True):
                         _render_pedido_completo(ped, items_res)
@@ -1864,8 +1884,9 @@ def render_dashboard(df):
             else:
                 st.caption(f"{len(activos)} pedido{'s' if len(activos)!=1 else ''} en curso. El estado se gestiona desde el KDS.")
                 estado_emoji = {"pendiente":"🔴 Pendiente","preparando":"🟡 Preparando","listo":"🟢 Listo"}
+                items_bulk_a = _bulk_items([p["id"] for p in activos])
                 for ped in activos:
-                    items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                    items_res = items_bulk_a.get(ped["id"], [])
                     with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']}"):
                         _render_pedido_completo(ped, items_res)
                         st.markdown("")
@@ -1922,8 +1943,9 @@ def render_dashboard(df):
             if not pedidos:
                 st.info("No hay pedidos con ese filtro.")
             else:
+                items_bulk_t = _bulk_items([p["id"] for p in pedidos])
                 for ped in pedidos:
-                    items_res = sb7.table("pedido_items").select("*").eq("pedido_id", ped["id"]).execute().data or []
+                    items_res = items_bulk_t.get(ped["id"], [])
                     productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
                     estado = ped["estado"]
                     color_map = {"solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
