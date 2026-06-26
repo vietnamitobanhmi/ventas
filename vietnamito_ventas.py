@@ -1930,6 +1930,26 @@ def render_dashboard(df):
                     icono = color_map.get(estado, "⚪")
                     with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
                         _render_pedido_completo(ped, items_res)
+                        # Botón cancelar solo para estados activos (no para cancelado/rechazado/entregado)
+                        if estado in ["solicitado", "pendiente", "preparando", "listo"]:
+                            st.markdown("")
+                            if st.button("🚫 Cancelar pedido", key=f"cancel_todos_{ped['id']}"):
+                                st.session_state[f"confirm_cancel_todos_{ped['id']}"] = True
+                            if st.session_state.get(f"confirm_cancel_todos_{ped['id']}"):
+                                st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email avisando.")
+                                yc3, nc3 = st.columns(2)
+                                if yc3.button("✅ Sí, cancelar", key=f"yes_cancel_todos_{ped['id']}"):
+                                    sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
+                                    st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
+                                    if ped.get("email"):
+                                        enviar_email_pedido_cancelado(ped, items_res, cfg_ped)
+                                        st.success(f"🚫 Cancelado · Email enviado")
+                                    else:
+                                        st.success("🚫 Cancelado")
+                                    st.rerun()
+                                if nc3.button("No", key=f"no_cancel_todos_{ped['id']}"):
+                                    st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
+                                    st.rerun()
 
     # ── TAB 8: Reservas ─────────────────────────────────────
     with tab8:
