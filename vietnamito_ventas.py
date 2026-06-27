@@ -1787,19 +1787,66 @@ def render_dashboard(df):
         # Auto-enviar email de recepción a pedidos solicitados sin email enviado
         cfg_p = sb7.table("config").select("*").execute()
         cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
+
+        # ── Auto-emails: detecta cambios de estado pendientes de notificar ──
+        # 1) Pedidos recién recibidos (solicitado, sin email_recibido_ok)
         nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
-        if nuevos_ped:
-            ids_nuevos = [np_["id"] for np_ in nuevos_ped]
-            items_nuevos_bulk = sb7.table("pedido_items").select("*").in_("pedido_id", ids_nuevos).execute().data or []
-            items_nuevos_por_id = {}
-            for it in items_nuevos_bulk:
-                items_nuevos_por_id.setdefault(it["pedido_id"], []).append(it)
-            for np_ in nuevos_ped:
-                if np_.get("email"):
-                    items_np = items_nuevos_por_id.get(np_["id"], [])
-                    ok_em = enviar_email_pedido_recibido(np_, items_np, cfg_ped)
-                    if ok_em:
-                        sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
+        # 2) Pedidos aceptados (pendiente/preparando/listo/entregado, sin email_confirmacion_ok)
+        aceptados_ped = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo","entregado"]).eq("email_confirmacion_ok", False).execute().data or []
+        # 3) Pedidos rechazados (sin email_rechazo_ok)
+        rechazados_ped = sb7.table("pedidos").select("*").eq("estado","rechazado").eq("email_rechazo_ok", False).execute().data or []
+        # 4) Pedidos cancelados (sin email_cancelacion_ok)
+        cancelados_ped = sb7.table("pedidos").select("*").eq("estado","cancelado").eq("email_cancelacion_ok", False).execute().data or []
+
+        # Bulk de items para todos los pedidos que necesitan emails
+        todos_ids_email = [p["id"] for p in (nuevos_ped + aceptados_ped + rechazados_ped + cancelados_ped)]
+        items_email_por_id = {}
+        if todos_ids_email:
+            items_bulk_email = sb7.table("pedido_items").select("*").in_("pedido_id", todos_ids_email).execute().data or []
+            for it in items_bulk_email:
+                items_email_por_id.setdefault(it["pedido_id"], []).append(it)
+
+        emails_enviados_count = 0
+
+        for np_ in nuevos_ped:
+            if np_.get("email"):
+                items_np = items_email_por_id.get(np_["id"], [])
+                if enviar_email_pedido_recibido(np_, items_np, cfg_ped):
+                    sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
+                    emails_enviados_count += 1
+            else:
+                # sin email del cliente — marcar como "no aplica" para no reintentar
+                sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
+
+        for ap in aceptados_ped:
+            if ap.get("email"):
+                items_ap = items_email_por_id.get(ap["id"], [])
+                if enviar_email_pedido_aceptado(ap, items_ap, cfg_ped):
+                    sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
+                    emails_enviados_count += 1
+            else:
+                sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
+
+        for rp in rechazados_ped:
+            if rp.get("email"):
+                items_rp = items_email_por_id.get(rp["id"], [])
+                if enviar_email_pedido_rechazado(rp, items_rp, cfg_ped):
+                    sb7.table("pedidos").update({"email_rechazo_ok": True}).eq("id", rp["id"]).execute()
+                    emails_enviados_count += 1
+            else:
+                sb7.table("pedidos").update({"email_rechazo_ok": True}).eq("id", rp["id"]).execute()
+
+        for cp in cancelados_ped:
+            if cp.get("email"):
+                items_cp = items_email_por_id.get(cp["id"], [])
+                if enviar_email_pedido_cancelado(cp, items_cp, cfg_ped):
+                    sb7.table("pedidos").update({"email_cancelacion_ok": True}).eq("id", cp["id"]).execute()
+                    emails_enviados_count += 1
+            else:
+                sb7.table("pedidos").update({"email_cancelacion_ok": True}).eq("id", cp["id"]).execute()
+
+        if emails_enviados_count > 0:
+            st.toast(f"📧 {emails_enviados_count} email{'s' if emails_enviados_count!=1 else ''} enviado{'s' if emails_enviados_count!=1 else ''} automáticamente")
 
         ped_sub1, ped_sub2, ped_sub3 = st.tabs(["📥 Solicitados", "🔥 Activos", "📋 Todos"])
 
@@ -1847,30 +1894,17 @@ def render_dashboard(df):
                         ac1, ac2 = st.columns(2)
                         if ac1.button("✅ Aceptar pedido", key=f"acept_{ped['id']}", type="primary", use_container_width=True):
                             sb7.table("pedidos").update({"estado": "pendiente"}).eq("id", ped["id"]).execute()
-                            if ped.get("email"):
-                                ok2 = enviar_email_pedido_aceptado({**ped, "id": ped["id"]}, items_res, cfg_ped)
-                                if ok2:
-                                    sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ped["id"]).execute()
-                                    st.success(f"✅ Pedido #{ped['id']} aceptado · Email enviado")
-                                else:
-                                    st.success(f"✅ Pedido #{ped['id']} aceptado")
-                                    st.warning("⚠️ No se pudo enviar el email")
-                            else:
-                                st.success(f"✅ Pedido #{ped['id']} aceptado (sin email del cliente)")
+                            st.success(f"✅ Pedido #{ped['id']} aceptado")
                             st.rerun()
                         if ac2.button("❌ Rechazar", key=f"rechazar_{ped['id']}", use_container_width=True):
                             st.session_state[f"confirm_rechazar_{ped['id']}"] = True
                         if st.session_state.get(f"confirm_rechazar_{ped['id']}"):
-                            st.warning(f"¿Rechazar pedido de **{ped['nombre']}**? Se enviará un email avisando.")
+                            st.warning(f"¿Rechazar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
                             yc, nc = st.columns(2)
                             if yc.button("✅ Sí, rechazar", key=f"yes_rechazar_{ped['id']}"):
                                 sb7.table("pedidos").update({"estado": "rechazado"}).eq("id", ped["id"]).execute()
                                 st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
-                                if ped.get("email"):
-                                    enviar_email_pedido_rechazado(ped, items_res, cfg_ped)
-                                    st.success(f"❌ Pedido rechazado · Email enviado")
-                                else:
-                                    st.success("❌ Pedido rechazado")
+                                st.success("❌ Pedido rechazado")
                                 st.rerun()
                             if nc.button("Cancelar", key=f"no_rechazar_{ped['id']}"):
                                 st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
@@ -1894,16 +1928,12 @@ def render_dashboard(df):
                         if st.button("🚫 Cancelar pedido", key=f"cancel_active_{ped['id']}"):
                             st.session_state[f"confirm_cancel_active_{ped['id']}"] = True
                         if st.session_state.get(f"confirm_cancel_active_{ped['id']}"):
-                            st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email.")
+                            st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
                             yc2, nc2 = st.columns(2)
                             if yc2.button("✅ Sí, cancelar", key=f"yes_cancel_active_{ped['id']}"):
                                 sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
                                 st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
-                                if ped.get("email"):
-                                    enviar_email_pedido_cancelado(ped, items_res, cfg_ped)
-                                    st.success(f"🚫 Cancelado · Email enviado")
-                                else:
-                                    st.success("🚫 Cancelado")
+                                st.success("🚫 Cancelado")
                                 st.rerun()
                             if nc2.button("No", key=f"no_cancel_active_{ped['id']}"):
                                 st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
@@ -1958,16 +1988,12 @@ def render_dashboard(df):
                             if st.button("🚫 Cancelar pedido", key=f"cancel_todos_{ped['id']}"):
                                 st.session_state[f"confirm_cancel_todos_{ped['id']}"] = True
                             if st.session_state.get(f"confirm_cancel_todos_{ped['id']}"):
-                                st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email avisando.")
+                                st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
                                 yc3, nc3 = st.columns(2)
                                 if yc3.button("✅ Sí, cancelar", key=f"yes_cancel_todos_{ped['id']}"):
                                     sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
                                     st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
-                                    if ped.get("email"):
-                                        enviar_email_pedido_cancelado(ped, items_res, cfg_ped)
-                                        st.success(f"🚫 Cancelado · Email enviado")
-                                    else:
-                                        st.success("🚫 Cancelado")
+                                    st.success("🚫 Cancelado")
                                     st.rerun()
                                 if nc3.button("No", key=f"no_cancel_todos_{ped['id']}"):
                                     st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
