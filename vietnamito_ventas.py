@@ -208,6 +208,21 @@ def enviar_email_pedido_rechazado(ped, items, cfg=None):
     return _resend_send(ped["email"], f"Pedido no aceptado — Vietnamito #{ped.get('id','')}", html)
 
 
+def enviar_email_pedido_listo(ped, items, cfg=None):
+    """Email cuando el pedido pasa a estado listo."""
+    if not ped.get("email"):
+        return False
+    nombre = ped.get("nombre", "")
+    tabla = _tabla_pedido(ped, items, cfg)
+    contenido = f"""
+      <p style="font-size:16px;color:#3D1C0A;margin:0 0 16px;">Hola <strong>{nombre}</strong>,</p>
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">¡Tu pedido en <strong>Vietnamito</strong> está <strong style="color:#2E7D32;">listo para recoger</strong>! 🥖</p>
+      {tabla}
+      <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Te esperamos en <strong>Carrer Berlín 64, Barcelona</strong>. Si necesitas algo, llámanos al <strong>+34 711 216 862</strong>.</p>"""
+    html = _html_base("¡Tu pedido está listo! 🥖", "Ven a recogerlo cuando quieras", contenido)
+    return _resend_send(ped["email"], f"🥖 Pedido listo para recoger — Vietnamito #{ped.get('id','')}", html)
+
+
 def enviar_email_pedido_cancelado(ped, items, cfg=None):
     """Email cuando se cancela un pedido ya aceptado."""
     if not ped.get("email"):
@@ -1793,13 +1808,15 @@ def render_dashboard(df):
         nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
         # 2) Pedidos aceptados (pendiente/preparando/listo/entregado, sin email_confirmacion_ok)
         aceptados_ped = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo","entregado"]).eq("email_confirmacion_ok", False).execute().data or []
+        # 2b) Pedidos en estado listo (sin email_listo_ok)
+        listos_ped = sb7.table("pedidos").select("*").eq("estado","listo").eq("email_listo_ok", False).execute().data or []
         # 3) Pedidos rechazados (sin email_rechazo_ok)
         rechazados_ped = sb7.table("pedidos").select("*").eq("estado","rechazado").eq("email_rechazo_ok", False).execute().data or []
         # 4) Pedidos cancelados (sin email_cancelacion_ok)
         cancelados_ped = sb7.table("pedidos").select("*").eq("estado","cancelado").eq("email_cancelacion_ok", False).execute().data or []
 
         # Bulk de items para todos los pedidos que necesitan emails
-        todos_ids_email = [p["id"] for p in (nuevos_ped + aceptados_ped + rechazados_ped + cancelados_ped)]
+        todos_ids_email = [p["id"] for p in (nuevos_ped + aceptados_ped + listos_ped + rechazados_ped + cancelados_ped)]
         items_email_por_id = {}
         if todos_ids_email:
             items_bulk_email = sb7.table("pedido_items").select("*").in_("pedido_id", todos_ids_email).execute().data or []
@@ -1826,6 +1843,15 @@ def render_dashboard(df):
                     emails_enviados_count += 1
             else:
                 sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
+
+        for lp in listos_ped:
+            if lp.get("email"):
+                items_lp = items_email_por_id.get(lp["id"], [])
+                if enviar_email_pedido_listo(lp, items_lp, cfg_ped):
+                    sb7.table("pedidos").update({"email_listo_ok": True}).eq("id", lp["id"]).execute()
+                    emails_enviados_count += 1
+            else:
+                sb7.table("pedidos").update({"email_listo_ok": True}).eq("id", lp["id"]).execute()
 
         for rp in rechazados_ped:
             if rp.get("email"):
