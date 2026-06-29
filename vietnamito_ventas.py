@@ -975,6 +975,21 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             # Filtrar datos por periodo
             df_rent = df[(df["fecha"] >= inicio) & (df["fecha"] <= fin)].copy()
 
+            # 🔍 DEBUG temporal — borrar después
+            with st.expander("🔍 DEBUG (temporal)"):
+                st.write(f"**Periodo seleccionado:** {periodo}")
+                st.write(f"**Fecha inicio:** {inicio} (tipo: {type(inicio).__name__})")
+                st.write(f"**Fecha fin:** {fin} (tipo: {type(fin).__name__})")
+                st.write(f"**df total:** {len(df)} filas")
+                st.write(f"**df_rent (filtrado):** {len(df_rent)} filas")
+                if not df_rent.empty:
+                    st.write(f"**Fechas únicas en df_rent:** {sorted(df_rent['fecha'].unique())}")
+                    st.write(f"**Suma valor df_rent:** €{df_rent['valor'].sum():,.2f}")
+                st.write(f"**Tipo de df['fecha'].iloc[0]:** {type(df['fecha'].iloc[0]).__name__ if len(df)>0 else 'vacío'}")
+                if len(df)>0:
+                    junio = df[(df['fecha'].astype(str) >= '2026-06-01') & (df['fecha'].astype(str) <= '2026-06-29')]
+                    st.write(f"**Test con comparación string '2026-06-01'..'2026-06-29':** {len(junio)} filas, €{junio['valor'].sum():,.2f}")
+
             if df_rent.empty:
                 st.warning("No hay datos para ese periodo.")
             else:
