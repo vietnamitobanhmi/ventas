@@ -1475,23 +1475,22 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         empleados = emp_res.data if emp_res.data else []
 
         st.markdown("### Empleados")
-        st.caption("Edita nombres y coste/hora. Los turnos se eliminan automáticamente al borrar un empleado.")
+        st.caption("Edita nombres y coste/hora. Los cambios se guardan al pulsar el botón al final. Los turnos se eliminan automáticamente al borrar un empleado.")
 
-        header = st.columns([3, 2, 1, 1])
+        header = st.columns([3, 2, 1])
         header[0].markdown("**Nombre**")
         header[1].markdown("**€/hora**")
-        header[2].markdown("**Guardar**")
-        header[3].markdown("**Eliminar**")
+        header[2].markdown("**Eliminar**")
 
+        cambios_emp = []  # acumula cambios pendientes
         for emp in empleados:
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            c1, c2, c3 = st.columns([3, 2, 1])
             nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom_{emp['id']}")
             nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos_{emp['id']}")
-            if c3.button("💾", key=f"saveemp_{emp['id']}"):
-                sb.table("empleados").update({"nombre": nuevo_nombre, "coste_hora": nuevo_coste}).eq("id", emp["id"]).execute()
-                st.success(f"✅ {nuevo_nombre} guardado")
-                st.rerun()
-            if c4.button("🗑️", key=f"delemp_{emp['id']}"):
+            # Detectar si hay cambios respecto a BBDD
+            if nuevo_nombre != emp["nombre"] or float(nuevo_coste) != float(emp["coste_hora"]):
+                cambios_emp.append({"id": emp["id"], "nombre": nuevo_nombre, "coste_hora": nuevo_coste, "orig": emp["nombre"]})
+            if c3.button("🗑️", key=f"delemp_{emp['id']}"):
                 st.session_state[f"confirm_del_{emp['id']}"] = True
             if st.session_state.get(f"confirm_del_{emp['id']}"):
                 st.warning(f"¿Seguro que quieres eliminar a **{emp['nombre']}** y todos sus turnos?")
@@ -1505,6 +1504,18 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 if conf2.button("❌ Cancelar", key=f"no_del_{emp['id']}"):
                     st.session_state.pop(f"confirm_del_{emp['id']}", None)
                     st.rerun()
+
+        # Botón único de guardado para empleados
+        st.markdown("")
+        if cambios_emp:
+            preview = ", ".join([f"{c['orig']}" for c in cambios_emp])
+            st.info(f"📝 Cambios pendientes en: **{preview}**")
+        col_save_emp, _ = st.columns([2, 5])
+        if col_save_emp.button("💾 Guardar empleados", key="save_all_emp", type="primary", disabled=len(cambios_emp)==0, use_container_width=True):
+            for c in cambios_emp:
+                sb.table("empleados").update({"nombre": c["nombre"], "coste_hora": c["coste_hora"]}).eq("id", c["id"]).execute()
+            st.success(f"✅ {len(cambios_emp)} empleado{'s' if len(cambios_emp)!=1 else ''} guardado{'s' if len(cambios_emp)!=1 else ''}")
+            st.rerun()
 
         st.markdown("")
         with st.expander("➕ Añadir empleado"):
@@ -1564,6 +1575,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
 
         dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
+        # Recolectar los edits de cada día para guardar todo de golpe al final
+        ediciones_por_dow = {}
+        horas_por_dow = {}
 
         for di, dow in enumerate(DIAS_ORDER):
             with dias_tabs[di]:
@@ -1585,22 +1599,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     column_config={"Hora": st.column_config.TextColumn("Hora", disabled=True)},
                     height=min(400, len(slots) * 35 + 40),
                 )
-
-                if st.button(f"💾 Guardar turnos {DIAS[dow]}", key=f"saveturno_{dow}", type="primary"):
-                    sb.table("turnos").delete().eq("dia_semana", dow).execute()
-                    to_insert = []
-                    for _, row in edited.iterrows():
-                        slot = row["Hora"]
-                        for eid in emp_ids:
-                            col_name = emp_nombres.get(eid, f"Emp {eid}")
-                            if row.get(col_name, False):
-                                to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
-                    if to_insert:
-                        sb.table("turnos").insert(to_insert).execute()
-                    turnos_res = sb.table("turnos").select("*").execute()
-                    turnos_set = set((tr["empleado_id"], tr["dia_semana"], tr["slot"]) for tr in (turnos_res.data or []))
-                    st.success(f"✅ {len(to_insert)} slots guardados para {DIAS[dow]}")
-                    st.rerun()
+                ediciones_por_dow[dow] = edited
 
                 horas_dia = {}
                 for _, row in edited.iterrows():
@@ -1608,6 +1607,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         col_name = emp_nombres.get(eid, f"Emp {eid}")
                         if row.get(col_name, False):
                             horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
+                horas_por_dow[dow] = horas_dia
                 if any(horas_dia.values()):
                     st.markdown("**Resumen del día:**")
                     res_cols = st.columns(len(emp_ids))
@@ -1616,7 +1616,29 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         coste = h * emp_coste.get(eid, 10)
                         res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
 
-                st.divider()
+        # ── Botón único de guardar TODOS los turnos ──
+        st.divider()
+        st.markdown("#### Guardar cambios en turnos")
+        st.caption("Cambia los turnos en cualquier día de la semana. Cuando termines, pulsa el botón para guardar todos los cambios de una vez.")
+        col_save_t, _ = st.columns([2, 4])
+        if col_save_t.button("💾 Guardar TODOS los turnos", key="save_all_turnos", type="primary", use_container_width=True):
+            total_insertados = 0
+            for dow, edited in ediciones_por_dow.items():
+                sb.table("turnos").delete().eq("dia_semana", dow).execute()
+                to_insert = []
+                for _, row in edited.iterrows():
+                    slot = row["Hora"]
+                    for eid in emp_ids:
+                        col_name = emp_nombres.get(eid, f"Emp {eid}")
+                        if row.get(col_name, False):
+                            to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
+                if to_insert:
+                    sb.table("turnos").insert(to_insert).execute()
+                    total_insertados += len(to_insert)
+            st.success(f"✅ {total_insertados} slots guardados en total (toda la semana)")
+            st.rerun()
+
+        st.divider()
 
         st.markdown("### Resumen semanal")
         turnos_all = sb.table("turnos").select("*").execute().data or []
