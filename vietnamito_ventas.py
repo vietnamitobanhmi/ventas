@@ -785,7 +785,7 @@ def render_dashboard(df):
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
 
                     fig_h = go.Figure()
-                    fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.0f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
+                    fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.2f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
                     fig_h.add_trace(go.Scatter(x=df_hora["label"], y=df_hora["margen"], name="Margen", mode="lines+markers", line=dict(color="#F4A261", width=2.5), marker=dict(size=8, color=["#5DCAA5" if v>=0 else "#E63946" for v in df_hora["margen"]])))
                     fig_h.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
@@ -1225,7 +1225,7 @@ def render_dashboard(df):
         values = [round(avg_dow.get(d, 0), 2) for d in DIAS_ORDER]
         fig = go.Figure(go.Bar(
             x=labels, y=values, marker_color=COLORS, marker_line_width=0,
-            text=[f"€{v:.0f}" for v in values], textposition="outside",
+            text=[f"€{v:.2f}" for v in values], textposition="outside",
         ))
         fig.update_layout(
             title="Venta media por día de la semana (€, IVA incl.)", yaxis_title="€ promedio",
@@ -1387,7 +1387,7 @@ def render_dashboard(df):
                 x=avg_semana["label"], y=avg_semana["avg_franja"],
                 mode="lines+markers+text", line=dict(color="#5DCAA5", width=2),
                 marker=dict(size=8, color="#5DCAA5"),
-                text=[f"€{v:.0f}" for v in avg_semana["avg_franja"]],
+                text=[f"€{v:.2f}" for v in avg_semana["avg_franja"]],
                 textposition="top center", textfont=dict(size=11),
             ))
             fig5.update_layout(
@@ -1408,7 +1408,7 @@ def render_dashboard(df):
             fig6 = go.Figure(go.Bar(
                 x=total_semana["label"], y=total_semana["valor"].round(2),
                 marker_color=bar_colors, marker_line_width=0,
-                text=[f"€{v:.0f}" for v in total_semana["valor"]], textposition="outside",
+                text=[f"€{v:.2f}" for v in total_semana["valor"]], textposition="outside",
             ))
             fig6.update_layout(
                 title="Total de ventas por semana (€, IVA incl.)",
