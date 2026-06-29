@@ -1001,7 +1001,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 for (dow, slot), coste in coste_por_slot_full.items():
                     coste_por_slot[(dow, slot)] = coste
 
-                # Filtrar ventas solo en horas con staff
+                # Filtrar ventas solo en horas con staff (solo para mostrar en gráficas detalladas)
                 df_rent["dow"] = pd.to_datetime(df_rent["fecha"]).dt.weekday
                 df_rent_staff = df_rent[df_rent.apply(
                     lambda r: (int(r["dow"]), int(r["hora"])) in horas_con_staff, axis=1
@@ -1011,7 +1011,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 n_dias = (fin - inicio).days + 1
                 n_semanas = n_dias / 7
 
-                # Días reales abiertos por dow (días con al menos una venta)
+                # Días reales abiertos por dow (días con al menos una venta) — usar TODAS las ventas
                 dias_abiertos_por_dow = {}
                 for dow_idx in range(7):
                     df_dow_check = df_rent[df_rent["dow"] == dow_idx]
@@ -1030,10 +1030,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 )
                 coste_semanal = sum(coste_dia_por_dow.values())
 
-                # Ventas brutas (solo horas con staff)
-                ventas_brutas = df_rent_staff["valor"].sum()
+                # Ventas brutas — TODAS las ventas del periodo (no filtramos por staff)
+                ventas_brutas = df_rent["valor"].sum()
 
-                # Ventas netas (descontando 25% coste producto)
+                # Ventas netas (sin IVA, sin coste producto)
                 ventas_netas = ventas_brutas / 1.10 * 0.75
 
                 # Margen final
@@ -1049,8 +1049,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 margen = ventas_netas - coste_total_periodo
                 margen_pct = (margen / ventas_brutas * 100) if ventas_brutas > 0 else 0
 
-                # Días con datos en el periodo
-                dias_con_datos = df_rent_staff["fecha"].nunique()
+                # Días con ventas — usar TODAS las ventas
+                dias_con_datos = df_rent[df_rent["valor"] > 0]["fecha"].nunique()
 
                 # Métricas principales
                 st.markdown(f"**{inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}** · {dias_con_datos} días con ventas · {n_dias} días en periodo")
@@ -1084,25 +1084,31 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
                 # Desglose por día de la semana
                 st.markdown("#### Desglose por día de la semana")
-                st.caption("Solo horas con personal. Ventas netas = ventas × 75%. Margen = ventas netas − coste personal.")
+                st.caption("Ventas brutas con IVA, ventas netas sin IVA y sin coste producto. Coste personal = coste diario × días reales abiertos ese dow en el periodo.")
 
                 rows_dow = []
+                suma_ventas_brutas_dow = 0
+                suma_coste_personal_dow = 0
                 for dow_idx in range(7):
-                    # Ventas de ese dow en el periodo con staff
-                    df_dow = df_rent_staff[df_rent_staff["dow"] == dow_idx]
+                    # Ventas de ese dow en el periodo (TODAS, no solo horas con staff)
+                    df_dow = df_rent[df_rent["dow"] == dow_idx]
                     v_brutas = df_dow["valor"].sum()
                     v_netas = v_brutas / 1.10 * 0.75
 
-                    # Coste personal ese día (por semana × semanas)
-                    coste_dia_sem = sum(v for (d,h), v in coste_por_slot.items() if d == dow_idx)
-                    coste_dia_periodo = coste_dia_sem * n_semanas
+                    # Coste personal ese día: coste/día × días reales abiertos ese dow
+                    coste_dia_sem = coste_dia_por_dow.get(dow_idx, 0)
+                    n_dias_dow_abiertos = dias_abiertos_por_dow.get(dow_idx, 0)
+                    coste_dia_periodo = coste_dia_sem * n_dias_dow_abiertos
 
                     margen_dia = v_netas - coste_dia_periodo
-                    n_dias_dow = df_dow["fecha"].nunique()
+                    n_dias_dow = df_dow[df_dow["valor"] > 0]["fecha"].nunique()
+
+                    suma_ventas_brutas_dow += v_brutas
+                    suma_coste_personal_dow += coste_dia_periodo
 
                     rows_dow.append({
                         "Día": DIAS[dow_idx],
-                        "Días c/datos": n_dias_dow,
+                        "Días c/ventas": n_dias_dow,
                         "Ventas brutas": f"€{v_brutas:,.2f}",
                         "Ventas netas": f"€{v_netas:,.2f}",
                         "Coste personal": f"€{coste_dia_periodo:,.2f}",
@@ -1112,11 +1118,17 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
                 st.dataframe(pd.DataFrame(rows_dow), hide_index=True, use_container_width=True)
 
+                # Aviso de consistencia: la suma debería cuadrar con los totales superiores
+                if abs(suma_ventas_brutas_dow - ventas_brutas) > 0.5:
+                    st.warning(f"⚠️ Suma desglose dow ventas: €{suma_ventas_brutas_dow:,.2f} vs total: €{ventas_brutas:,.2f}")
+                if abs(suma_coste_personal_dow - coste_periodo) > 0.5:
+                    st.warning(f"⚠️ Suma desglose dow coste personal: €{suma_coste_personal_dow:,.2f} vs total: €{coste_periodo:,.2f}")
+
                 st.divider()
 
                 # Evolución semanal del margen
                 st.markdown("#### Evolución semanal del margen")
-                df_rent2 = df_rent_staff.copy()
+                df_rent2 = df_rent.copy()
                 df_rent2["fecha_ts"] = pd.to_datetime(df_rent2["fecha"])
                 df_rent2["lunes"] = df_rent2["fecha_ts"] - pd.to_timedelta(df_rent2["fecha_ts"].dt.weekday, unit="D")
                 df_rent2["semana"] = df_rent2["lunes"].dt.strftime("%Y-%m-%d")
