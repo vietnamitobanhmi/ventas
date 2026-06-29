@@ -450,7 +450,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
             text=hover, hovertemplate="%{text}<extra></extra>",
         ))
     fig.update_layout(
-        title=titulo, yaxis_title="€ ventas", xaxis_title="Hora",
+        title=titulo, yaxis_title="€ ventas brutas (con IVA)", xaxis_title="Hora",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, ymax] if ymax else None),
         xaxis=dict(showgrid=False), showlegend=False, height=480, margin=dict(t=60, b=20),
@@ -484,7 +484,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         horas_labels = [f"{h}:00" for h in horas_comunes]
 
         fig_rent = go.Figure()
-        fig_rent.add_trace(go.Bar(x=horas_labels, y=ventas_vals, name="Ventas promedio", marker_color="rgba(93,202,165,0.5)", marker_line_width=0))
+        fig_rent.add_trace(go.Bar(x=horas_labels, y=ventas_vals, name="Ventas netas promedio (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.5)", marker_line_width=0))
         fig_rent.add_trace(go.Bar(x=horas_labels, y=coste_vals, name="Coste personal", marker_color="rgba(230,57,70,0.5)", marker_line_width=0))
         fig_rent.add_trace(go.Scatter(
             x=horas_labels, y=margen_vals, name="Margen",
@@ -495,7 +495,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         ))
         fig_rent.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
         fig_rent.update_layout(
-            title="Ventas netas (−25% producto) vs coste de personal por franja horaria",
+            title="Ventas netas (sin IVA, sin coste producto) vs coste de personal — por franja horaria",
             yaxis_title="€", xaxis_title="Hora",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
@@ -767,16 +767,16 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.markdown(f"##### Resumen — {titulo_periodo}")
                     if total_cf_mes_d > 0:
                         md1, md2, md3, md4, md5 = st.columns(5)
-                        md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
-                        md2.metric("Ventas netas", f"€{ventas_netas_d:,.2f}")
+                        md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}", help="Total facturado al cliente, IVA del 10% incluido")
+                        md2.metric("Ventas netas", f"€{ventas_netas_d:,.2f}", help="Sin IVA (10%) y sin coste de producto (25%)")
                         md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
                         md4.metric("Coste fijo", f"€{coste_fijo_total:,.2f}", help=f"Prorrateado proporcionalmente por días")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md5.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
                     else:
                         md1, md2, md3, md4 = st.columns(4)
-                        md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
-                        md2.metric("Ventas netas", f"€{ventas_netas_d:,.2f}")
+                        md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}", help="Total facturado al cliente, IVA del 10% incluido")
+                        md2.metric("Ventas netas", f"€{ventas_netas_d:,.2f}", help="Sin IVA (10%) y sin coste de producto (25%)")
                         md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md4.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
@@ -790,7 +790,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.divider()
 
                     # Gráfica por hora (agregada en todo el periodo)
-                    st.markdown("##### Ventas por hora (acumulado en el periodo)")
+                    st.markdown("##### Ventas netas por hora (sin IVA, sin coste producto) — acumulado en el periodo")
                     df_hora = df_periodo.groupby("hora").agg(
                         ventas=("valor", "sum"),
                     ).reset_index()
@@ -810,7 +810,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
 
                     fig_h = go.Figure()
-                    fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.2f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
+                    fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.2f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
                     fig_h.add_trace(go.Scatter(x=df_hora["label"], y=df_hora["margen"], name="Margen", mode="lines+markers", line=dict(color="#F4A261", width=2.5), marker=dict(size=8, color=["#5DCAA5" if v>=0 else "#E63946" for v in df_hora["margen"]])))
                     fig_h.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
@@ -1058,7 +1058,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
                 if total_costes_fijos_mes > 0:
                     col1, col2, col3, col4, col5 = st.columns(5)
-                    col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}")
+                    col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}", help="Total facturado al cliente, IVA del 10% incluido")
                     col2.metric("Ventas netas", f"€{ventas_netas:,.2f}", help="Sin IVA (10%) y sin coste de producto (25%)")
                     col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Según turnos y costes actuales")
                     col4.metric("Coste fijo", f"€{coste_fijo_periodo:,.2f}", help=f"€{total_costes_fijos_mes:,.2f}/mes prorrateado")
@@ -1066,7 +1066,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     col5.metric("Margen", f"€{margen:,.2f}", f"{margen_pct:.1f}% s/ventas", delta_color=delta_color)
                 else:
                     col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}")
+                    col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}", help="Total facturado al cliente, IVA del 10% incluido")
                     col2.metric("Ventas netas", f"€{ventas_netas:,.2f}", help="Sin IVA (10%) y sin coste de producto (25%)")
                     col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Basado en turnos y costes actuales")
                     delta_color = "normal" if margen >= 0 else "inverse"
@@ -1155,13 +1155,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 semana_margen = semana_margen.sort_values("semana")
 
                 fig_margen = go.Figure()
-                fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2), name="Ventas netas", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
+                fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2), name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
                 fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_personal"].round(2), name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
                 if total_costes_fijos_mes > 0:
                     fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_fijo"].round(2), name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
                 fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["margen"].round(2), name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]), text=[f"€{v:+.0f}" for v in semana_margen["margen"]], textposition="top center", textfont=dict(size=11)))
                 fig_margen.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-                fig_margen.update_layout(title="Ventas netas vs costes por semana (€)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
+                fig_margen.update_layout(title="Ventas netas (sin IVA, sin coste producto) vs costes — por semana (€)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
                 st.plotly_chart(fig_margen, use_container_width=True)
 
                 st.divider()
@@ -1205,7 +1205,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     fig_dia = go.Figure()
                     fig_dia.add_trace(go.Bar(
                         x=dia_data["label"], y=dia_data["ventas_netas"],
-                        name="Ventas netas", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
+                        name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
                     ))
                     fig_dia.add_trace(go.Bar(
                         x=dia_data["label"], y=dia_data["coste_personal"],
@@ -1253,7 +1253,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             text=[f"€{v:.2f}" for v in values], textposition="outside",
         ))
         fig.update_layout(
-            title="Venta media por día de la semana (€, IVA incl.)", yaxis_title="€ promedio",
+            title="Venta media por día de la semana — ventas brutas (con IVA)", yaxis_title="€ promedio (con IVA)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
             xaxis=dict(showgrid=False), showlegend=False, height=400, margin=dict(t=50, b=20),
@@ -1294,8 +1294,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             ))
 
         fig_evo.update_layout(
-            title="Evolución de ventas por día de la semana (€, IVA incl.)",
-            yaxis_title="€ ventas", xaxis_title="Semana (lunes)",
+            title="Evolución de ventas por día de la semana — ventas brutas (con IVA)",
+            yaxis_title="€ brutas (con IVA)", xaxis_title="Semana (lunes)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
             xaxis=dict(showgrid=False, tickangle=-30),
@@ -1337,7 +1337,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             dow_filter_t2 = None
             if seleccion != "Todos los días":
                 dow_filter_t2 = [d for d in DIAS_ORDER if DIAS[d] == seleccion][0]
-            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} (€, IVA incl.)",
+            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} — ventas brutas (con IVA)",
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
     with tab3:
@@ -1347,10 +1347,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         pivot.columns = [f"{h}:00" for h in pivot.columns]
         fig3 = px.imshow(
             pivot, color_continuous_scale=[[0, "#E1F5EE"], [0.5, "#1D9E75"], [1, "#04342C"]],
-            aspect="auto", text_auto=".0f", labels={"color": "€ promedio"},
+            aspect="auto", text_auto=".0f", labels={"color": "€ promedio (con IVA)"},
         )
         fig3.update_layout(
-            title="Venta media por día y franja horaria (€, IVA incl.)",
+            title="Venta media por día y franja horaria — ventas brutas (con IVA)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             height=350, margin=dict(t=50, b=20), xaxis_title="Hora", yaxis_title="",
         )
@@ -1389,8 +1389,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     marker=dict(size=7, color=color), connectgaps=False,
                 ))
             fig4.update_layout(
-                title="Ventas por día de semana — comparativa semanal (€, IVA incl.)",
-                yaxis_title="€ ventas", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                title="Ventas por día de semana — comparativa semanal — ventas brutas (con IVA)",
+                yaxis_title="€ brutas (con IVA)", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, 1200]),
                 xaxis=dict(showgrid=False),
                 legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
@@ -1416,8 +1416,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 textposition="top center", textfont=dict(size=11),
             ))
             fig5.update_layout(
-                title="Evolución del promedio de ventas por franja horaria trabajada (€, IVA incl.)",
-                yaxis_title="€ promedio/franja", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                title="Evolución del promedio de ventas por franja horaria trabajada — ventas brutas (con IVA)",
+                yaxis_title="€ promedio/franja (con IVA)", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
                 xaxis=dict(showgrid=False, tickangle=-30),
                 showlegend=False, height=350, margin=dict(t=50, b=80),
@@ -1436,8 +1436,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 text=[f"€{v:.2f}" for v in total_semana["valor"]], textposition="outside",
             ))
             fig6.update_layout(
-                title="Total de ventas por semana (€, IVA incl.)",
-                yaxis_title="€ total", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                title="Total de ventas por semana — ventas brutas (con IVA)",
+                yaxis_title="€ total (con IVA)", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
                 xaxis=dict(showgrid=False, tickangle=-30),
                 showlegend=False, height=380, margin=dict(t=50, b=80),
