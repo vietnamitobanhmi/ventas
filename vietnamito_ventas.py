@@ -392,10 +392,21 @@ def save_to_supabase(rows, fmt="epos"):
 @st.cache_data(ttl=60)
 def load_from_supabase():
     sb = get_supabase()
-    result = sb.table("ventas").select("*").execute()
-    if not result.data:
+    # Paginar para superar el límite de 1000 filas de PostgREST
+    all_rows = []
+    page_size = 1000
+    offset = 0
+    while True:
+        res = sb.table("ventas").select("*").order("fecha", desc=False).range(offset, offset + page_size - 1).execute()
+        if not res.data:
+            break
+        all_rows.extend(res.data)
+        if len(res.data) < page_size:
+            break
+        offset += page_size
+    if not all_rows:
         return pd.DataFrame()
-    df = pd.DataFrame(result.data)
+    df = pd.DataFrame(all_rows)
     df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
     return df
 
@@ -974,21 +985,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
             # Filtrar datos por periodo
             df_rent = df[(df["fecha"] >= inicio) & (df["fecha"] <= fin)].copy()
-
-            # 🔍 DEBUG temporal — borrar después
-            with st.expander("🔍 DEBUG (temporal)"):
-                st.write(f"**Periodo seleccionado:** {periodo}")
-                st.write(f"**Fecha inicio:** {inicio} (tipo: {type(inicio).__name__})")
-                st.write(f"**Fecha fin:** {fin} (tipo: {type(fin).__name__})")
-                st.write(f"**df total:** {len(df)} filas")
-                st.write(f"**df_rent (filtrado):** {len(df_rent)} filas")
-                if not df_rent.empty:
-                    st.write(f"**Fechas únicas en df_rent:** {sorted(df_rent['fecha'].unique())}")
-                    st.write(f"**Suma valor df_rent:** €{df_rent['valor'].sum():,.2f}")
-                st.write(f"**Tipo de df['fecha'].iloc[0]:** {type(df['fecha'].iloc[0]).__name__ if len(df)>0 else 'vacío'}")
-                if len(df)>0:
-                    junio = df[(df['fecha'].astype(str) >= '2026-06-01') & (df['fecha'].astype(str) <= '2026-06-29')]
-                    st.write(f"**Test con comparación string '2026-06-01'..'2026-06-29':** {len(junio)} filas, €{junio['valor'].sum():,.2f}")
 
             if df_rent.empty:
                 st.warning("No hay datos para ese periodo.")
