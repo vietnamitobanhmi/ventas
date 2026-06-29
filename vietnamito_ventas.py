@@ -477,7 +477,7 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
 
         avg_ventas = dia_hora.groupby("hora")["valor"].mean()
         horas_comunes = sorted(avg_ventas.index)
-        ventas_vals = [avg_ventas.get(h, 0) * 0.75 for h in horas_comunes]
+        ventas_vals = [avg_ventas.get(h, 0) / 1.10 * 0.75 for h in horas_comunes]
         coste_vals = [coste_hora.get(h, 0) for h in horas_comunes]
         margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
         margen_colors = ["#5DCAA5" if m >= 0 else "#E63946" for m in margen_vals]
@@ -557,6 +557,31 @@ def render_dashboard(df):
         sb0 = get_supabase()
 
         st.markdown("### Dashboard de rentabilidad")
+
+        with st.expander("ℹ️ ¿Cómo se calcula la rentabilidad?"):
+            st.markdown("""
+El cálculo sigue este orden de descuentos:
+
+**1. Ventas brutas** → suma total facturada al cliente (IVA del 10% incluido, tal como aparece en el ticket).
+
+**2. Ventas sin IVA** = `Ventas brutas ÷ 1.10`
+El IVA del 10% **no es dinero del negocio**: lo cobras al cliente y se lo entregas a Hacienda. Solo el 90,91% del importe del ticket es ingreso real.
+
+**3. Ventas netas** = `Ventas sin IVA × 0.75`
+Asumimos un **25% de coste de producto** (materia prima, ingredientes, envases) que se descuenta del importe sin IVA. Es una aproximación estándar para fast-casual.
+
+> **Equivalente directo:** `Ventas netas = Ventas brutas × 0.6818` (es decir, ÷1.10 ×0.75)
+> Un ticket de **€10,00** → sin IVA **€9,09** → ventas netas **€6,82**
+
+**4. Coste personal** → suma de las horas trabajadas según los turnos configurados, multiplicado por el coste/hora de cada empleado. Se calcula por franja de 30 min.
+
+**5. Coste fijo** → costes fijos mensuales (alquiler, suministros, gestoría, etc.) divididos entre los días del mes y prorrateados por día. Configurables en la sub-pestaña 🏛️ **Costes fijos mensuales**.
+
+**6. Margen** = `Ventas netas − Coste personal − Coste fijo`
+Es lo que queda después de pagar a Hacienda, el producto, el personal y los gastos fijos. Si es positivo (verde), el negocio es rentable. Si es negativo (rojo), pierde dinero.
+
+> 💡 Las barras "Ventas netas" en las gráficas ya tienen descontado el IVA y el coste de producto.
+            """)
 
         rent_sub1, rent_sub_dia, rent_sub2 = st.tabs(["📊 Análisis", "📆 Por día", "🏛️ Costes fijos mensuales"])
 
@@ -728,7 +753,7 @@ def render_dashboard(df):
 
                     # Métricas del periodo
                     ventas_brutas_d = df_periodo["valor"].sum()
-                    ventas_netas_d = ventas_brutas_d * 0.75
+                    ventas_netas_d = ventas_brutas_d / 1.10 * 0.75
                     coste_total_d = coste_personal_total + coste_fijo_total
                     margen_d = ventas_netas_d - coste_total_d
                     n_tickets = df_periodo["ntrans"].sum() if "ntrans" in df_periodo.columns else len(df_periodo)
@@ -743,7 +768,7 @@ def render_dashboard(df):
                     if total_cf_mes_d > 0:
                         md1, md2, md3, md4, md5 = st.columns(5)
                         md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
-                        md2.metric("Ventas netas (−25%)", f"€{ventas_netas_d:,.2f}")
+                        md2.metric("Ventas netas", f"€{ventas_netas_d:,.2f}")
                         md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
                         md4.metric("Coste fijo", f"€{coste_fijo_total:,.2f}", help=f"Prorrateado proporcionalmente por días")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
@@ -751,7 +776,7 @@ def render_dashboard(df):
                     else:
                         md1, md2, md3, md4 = st.columns(4)
                         md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}")
-                        md2.metric("Ventas netas (−25%)", f"€{ventas_netas_d:,.2f}")
+                        md2.metric("Ventas netas", f"€{ventas_netas_d:,.2f}")
                         md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md4.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
@@ -779,7 +804,7 @@ def render_dashboard(df):
 
                     df_hora["coste_personal"] = df_hora["hora"].map(lambda h: round(coste_personal_hora_total.get(h, 0), 2))
                     df_hora["coste_fijo"] = df_hora["hora"].map(lambda h: round(cf_por_hora_total.get(h, 0), 2))
-                    df_hora["ventas_netas"] = (df_hora["ventas"] * 0.75).round(2)
+                    df_hora["ventas_netas"] = (df_hora["ventas"] / 1.10 * 0.75).round(2)
                     # Margen por hora SIN coste fijo (el reparto por horas no es significativo)
                     df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"]).round(2)
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
@@ -863,8 +888,8 @@ def render_dashboard(df):
                     labels_dow = []
                     for dow in range(7):
                         d = dow_data[dow]
-                        margen_m = (d["ventas_m"] * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"]
-                        margen_t = (d["ventas_t"] * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"]
+                        margen_m = (d["ventas_m"] / 1.10 * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"]
+                        margen_t = (d["ventas_t"] / 1.10 * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"]
                         margen_manana.append(round(margen_m, 2))
                         margen_tarde.append(round(margen_t, 2))
                         label_d = dias_es[dow]
@@ -904,8 +929,8 @@ def render_dashboard(df):
                             tabla_dow_rows.append({
                                 "Día": dias_es[dow],
                                 "Días en periodo": d["n_dias"],
-                                "Margen mañana (€)": round((d["ventas_m"] * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"], 2),
-                                "Margen tarde (€)": round((d["ventas_t"] * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"], 2),
+                                "Margen mañana (€)": round((d["ventas_m"] / 1.10 * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"], 2),
+                                "Margen tarde (€)": round((d["ventas_t"] / 1.10 * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"], 2),
                                 "Margen total (€)": round(margen_manana[dow] + margen_tarde[dow], 2),
                             })
                         st.dataframe(pd.DataFrame(tabla_dow_rows), hide_index=True, use_container_width=True)
@@ -1009,7 +1034,7 @@ def render_dashboard(df):
                 ventas_brutas = df_rent_staff["valor"].sum()
 
                 # Ventas netas (descontando 25% coste producto)
-                ventas_netas = ventas_brutas * 0.75
+                ventas_netas = ventas_brutas / 1.10 * 0.75
 
                 # Margen final
                 # Coste fijo prorrateado para el periodo
@@ -1034,7 +1059,7 @@ def render_dashboard(df):
                 if total_costes_fijos_mes > 0:
                     col1, col2, col3, col4, col5 = st.columns(5)
                     col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}")
-                    col2.metric("Ventas netas (−25%)", f"€{ventas_netas:,.2f}", help="Descontado 25% de coste de producto")
+                    col2.metric("Ventas netas", f"€{ventas_netas:,.2f}", help="Sin IVA (10%) y sin coste de producto (25%)")
                     col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Según turnos y costes actuales")
                     col4.metric("Coste fijo", f"€{coste_fijo_periodo:,.2f}", help=f"€{total_costes_fijos_mes:,.2f}/mes prorrateado")
                     delta_color = "normal" if margen >= 0 else "inverse"
@@ -1042,7 +1067,7 @@ def render_dashboard(df):
                 else:
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}")
-                    col2.metric("Ventas netas (−25%)", f"€{ventas_netas:,.2f}", help="Descontado 25% de coste de producto")
+                    col2.metric("Ventas netas", f"€{ventas_netas:,.2f}", help="Sin IVA (10%) y sin coste de producto (25%)")
                     col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Basado en turnos y costes actuales")
                     delta_color = "normal" if margen >= 0 else "inverse"
                     col4.metric("Margen", f"€{margen:,.2f}", f"{margen_pct:.1f}% s/ventas", delta_color=delta_color)
@@ -1066,7 +1091,7 @@ def render_dashboard(df):
                     # Ventas de ese dow en el periodo con staff
                     df_dow = df_rent_staff[df_rent_staff["dow"] == dow_idx]
                     v_brutas = df_dow["valor"].sum()
-                    v_netas = v_brutas * 0.75
+                    v_netas = v_brutas / 1.10 * 0.75
 
                     # Coste personal ese día (por semana × semanas)
                     coste_dia_sem = sum(v for (d,h), v in coste_por_slot.items() if d == dow_idx)
@@ -1098,7 +1123,7 @@ def render_dashboard(df):
 
                 semana_margen = df_rent2.groupby("semana")["valor"].sum().reset_index()
                 semana_margen.columns = ["semana","ventas_brutas"]
-                semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] * 0.75
+                semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] / 1.10 * 0.75
                 def coste_semana(semana_str):
                     lunes = pd.Timestamp(semana_str)
                     coste = 0
@@ -1165,7 +1190,7 @@ def render_dashboard(df):
                     # Agrupar por día
                     dia_data = df_dia.groupby("fecha")["valor"].sum().reset_index()
                     dia_data.columns = ["fecha", "ventas_brutas"]
-                    dia_data["ventas_netas"] = (dia_data["ventas_brutas"] * 0.75).round(2)
+                    dia_data["ventas_netas"] = (dia_data["ventas_brutas"] / 1.10 * 0.75).round(2)
                     dia_data["dow"] = pd.to_datetime(dia_data["fecha"]).dt.weekday
                     dia_data["coste_personal"] = dia_data["dow"].map(lambda d: coste_dia_por_dow.get(d, 0)).round(2)
                     # Contribución diaria a costes fijos (importe_mensual / días del mes correspondiente)
