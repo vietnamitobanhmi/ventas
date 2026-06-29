@@ -3,6 +3,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+TZ_MADRID = ZoneInfo("Europe/Madrid")
+
+def hoy_madrid():
+    """Devuelve la fecha de HOY en zona horaria Europe/Madrid (no UTC del servidor)."""
+    return datetime.now(TZ_MADRID).date()
 from supabase import create_client
 
 st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
@@ -667,7 +673,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             if df.empty:
                 st.info("No hay datos de ventas todavía.")
             else:
-                hoy_dh = dt_rent.date.today()
+                hoy_dh = hoy_madrid()
                 min_fecha_d = df["fecha"].min()
                 max_fecha_d = df["fecha"].max()
 
@@ -963,7 +969,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 "Últimos 90 días", "Total registrado"
             ], horizontal=True, key="rent_periodo")
 
-            hoy = dt_rent.date.today()
+            hoy = hoy_madrid()
             if periodo == "Semana en curso":
                 inicio = hoy - dt_rent.timedelta(days=hoy.weekday())
                 fin = hoy
@@ -1193,7 +1199,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 st.markdown("#### Rentabilidad por día")
                 st.caption("Ventas netas = ventas brutas × 75%. Coste = según turnos actuales. Solo días con ventas.")
 
-                hoy_d = dt_rent.date.today()
+                hoy_d = hoy_madrid()
                 d7_ago = hoy_d - dt_rent.timedelta(days=6)
                 min_fecha = df_rent_staff["fecha"].min() if not df_rent_staff.empty else d7_ago
                 max_fecha = df_rent_staff["fecha"].max() if not df_rent_staff.empty else hoy_d
@@ -1331,7 +1337,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         import datetime as dt_franja
         fecha_min_data = df["fecha"].min()
         fecha_max_data = df["fecha"].max()
-        today = dt_franja.date.today()
+        today = hoy_madrid()
 
         opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
         seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
@@ -2154,7 +2160,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
         # ── SUBTAB: PRÓXIMAS ──
         with res_subtab1:
-            hoy_r = dt_mod.date.today()
+            hoy_r = hoy_madrid()
             todas_res = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(hoy_r)).order("fecha").order("hora").execute().data or []
 
             grupos = {}
@@ -2199,9 +2205,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             import calendar as _cal
 
             if "cal_res_year" not in st.session_state:
-                st.session_state.cal_res_year = dt_mod.date.today().year
+                st.session_state.cal_res_year = hoy_madrid().year
             if "cal_res_month" not in st.session_state:
-                st.session_state.cal_res_month = dt_mod.date.today().month
+                st.session_state.cal_res_month = hoy_madrid().month
 
             nc1, nc2, nc3 = st.columns([1,3,1])
             if nc1.button("◀", key="cal_prev_month"):
@@ -2230,7 +2236,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
             cal_matrix = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
             dias_header = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
-            hoy_str = str(dt_mod.date.today())
+            hoy_str = str(hoy_madrid())
 
             # Construir tabla HTML completa de una vez — evita 35+ widgets de Streamlit
             html_rows = []
@@ -2383,7 +2389,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 dias_bloq_actual = []
             dias_bloq_dates = [dt_mod.date.fromisoformat(d) for d in dias_bloq_actual if d]
 
-            nueva_fecha = st.date_input("Añadir fecha bloqueada:", value=None, key="nueva_fecha_bloq", min_value=dt_mod.date.today())
+            nueva_fecha = st.date_input("Añadir fecha bloqueada:", value=None, key="nueva_fecha_bloq", min_value=hoy_madrid())
             if nueva_fecha and str(nueva_fecha) not in dias_bloq_actual:
                 if st.button("➕ Añadir", key="add_fecha_bloq"):
                     dias_bloq_actual.append(str(nueva_fecha))
