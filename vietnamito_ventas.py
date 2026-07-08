@@ -556,11 +556,16 @@ def render_kds_msg_tab():
 
     # Mensaje personalizado
     st.markdown("**Mensaje personalizado:**")
+    # Si el flag de limpieza está activo, limpiamos ANTES de crear el widget
+    if st.session_state.get("kds_msg_clear"):
+        st.session_state["kds_custom_msg"] = ""
+        st.session_state.pop("kds_msg_clear", None)
+
     custom_msg = st.text_area("Escribe el mensaje", key="kds_custom_msg", height=100, placeholder="Ej: Necesito que salgas 5 min a por hielo")
     if st.button("📤 Enviar mensaje personalizado", key="send_custom_msg", type="primary", disabled=not custom_msg.strip()):
         sb_kds.table("kds_mensajes").insert({"mensaje": custom_msg.strip()}).execute()
+        st.session_state["kds_msg_clear"] = True
         st.success("✅ Mensaje enviado al KDS")
-        st.session_state["kds_custom_msg"] = ""
         st.rerun()
 
     st.markdown("---")
