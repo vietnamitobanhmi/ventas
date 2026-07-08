@@ -531,6 +531,52 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
         st.dataframe(resumen, hide_index=True, use_container_width=True)
 
+def render_kds_msg_tab():
+    """Pestaña para enviar mensajes al KDS con alarma sonora."""
+    sb_kds = get_supabase()
+    st.markdown("### Enviar mensaje al KDS")
+    st.caption("El mensaje aparecerá en la tablet del KDS con un sonido persistente hasta que alguien pulse 'OK, entendido'.")
+
+    # Mensajes rápidos
+    st.markdown("**Mensajes rápidos:**")
+    cols_q = st.columns(4)
+    quick_msgs = [
+        ("⏸️ Pausar pedidos 15 min", "PAUSA · No aceptéis pedidos durante los próximos 15 minutos"),
+        ("🍞 Sin pan", "¡Se ha acabado el pan! Rechazar pedidos que necesiten bocadillo"),
+        ("📞 Llamar al dueño", "David quiere hablar contigo. Llámalo en cuanto puedas."),
+        ("🚨 Emergencia — mira el móvil", "Emergencia · Revisa el WhatsApp o teléfono ahora"),
+    ]
+    for i, (label, msg) in enumerate(quick_msgs):
+        if cols_q[i].button(label, key=f"qmsg_{i}", use_container_width=True):
+            sb_kds.table("kds_mensajes").insert({"mensaje": msg}).execute()
+            st.success(f"✅ Mensaje enviado al KDS")
+            st.rerun()
+
+    st.markdown("---")
+
+    # Mensaje personalizado
+    st.markdown("**Mensaje personalizado:**")
+    custom_msg = st.text_area("Escribe el mensaje", key="kds_custom_msg", height=100, placeholder="Ej: Necesito que salgas 5 min a por hielo")
+    if st.button("📤 Enviar mensaje personalizado", key="send_custom_msg", type="primary", disabled=not custom_msg.strip()):
+        sb_kds.table("kds_mensajes").insert({"mensaje": custom_msg.strip()}).execute()
+        st.success("✅ Mensaje enviado al KDS")
+        st.session_state["kds_custom_msg"] = ""
+        st.rerun()
+
+    st.markdown("---")
+
+    # Historial de mensajes recientes
+    st.markdown("**Historial reciente:**")
+    hist = sb_kds.table("kds_mensajes").select("*").order("creado_at", desc=True).limit(10).execute().data or []
+    if not hist:
+        st.info("Aún no se ha enviado ningún mensaje.")
+    else:
+        for m in hist:
+            icono = "✅" if m.get("atendido") else "⏳"
+            estado_txt = f"atendido {pd.Timestamp(m['atendido_at']).strftime('%d/%m %H:%M')}" if m.get("atendido") else "esperando"
+            st.markdown(f"{icono} **{pd.Timestamp(m['creado_at']).strftime('%d/%m %H:%M')}** — {m['mensaje']} · _{estado_txt}_")
+
+
 def render_dashboard(df):
     fecha_min = df["fecha"].min()
     fecha_max = df["fecha"].max()
@@ -555,7 +601,7 @@ def render_dashboard(df):
     ped_label = f"🛍️ Pedidos {'🔴 ' + str(ped_pend) if ped_pend > 0 else ''}"
     res_label = f"🍽️ Reservas {'🔴 ' + str(res_pend) if res_pend > 0 else ''}"
 
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "💰 Rentabilidad",
         "📅 Por día de semana",
         "🕐 Por franja horaria",
@@ -566,6 +612,7 @@ def render_dashboard(df):
         ped_label,
         res_label,
         "🌐 Web",
+        "📢 KDS",
     ])
 
     # ── TAB 0: Rentabilidad ─────────────────────────────────
@@ -826,13 +873,15 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"]).round(2)
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
 
+                    df_hora["break_even"] = (df_hora["coste_personal"] + df_hora["coste_fijo"]).round(2)
+
                     fig_h = go.Figure()
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.2f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
                     fig_h.add_trace(go.Scatter(x=df_hora["label"], y=df_hora["margen"], name="Margen", mode="lines+markers", line=dict(color="#F4A261", width=2.5), marker=dict(size=8, color=["#5DCAA5" if v>=0 else "#E63946" for v in df_hora["margen"]])))
                     fig_h.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                     fig_h.update_layout(
-                        title=f"Rentabilidad por hora (sin coste fijo) — {titulo_periodo}",
+                        title=f"Ventas netas vs coste de personal por hora — {titulo_periodo}",
                         yaxis_title="€", barmode="group",
                         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                         yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
@@ -1188,9 +1237,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_personal"].round(2), name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
                 if total_costes_fijos_mes > 0:
                     fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_fijo"].round(2), name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
+                fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["coste"].round(2), name="Break-even semanal (personal + fijo)", mode="lines", line=dict(color="#8B5CF6", width=2, dash="dash"), hovertemplate="Break-even: €%{y:.2f}<extra></extra>"))
                 fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["margen"].round(2), name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]), text=[f"€{v:+.0f}" for v in semana_margen["margen"]], textposition="top center", textfont=dict(size=11)))
                 fig_margen.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-                fig_margen.update_layout(title="Ventas netas (sin IVA, sin coste producto) vs costes — por semana (€)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
+                fig_margen.update_layout(title="Ventas netas vs costes por semana — línea morada: break-even semanal (personal + fijo prorrateado)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
                 st.plotly_chart(fig_margen, use_container_width=True)
 
                 st.divider()
@@ -1246,6 +1296,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0,
                         ))
                     fig_dia.add_trace(go.Scatter(
+                        x=dia_data["label"], y=dia_data["coste"],
+                        name="Break-even diario (personal + fijo)", mode="lines",
+                        line=dict(color="#8B5CF6", width=2, dash="dash"),
+                        hovertemplate="Break-even: €%{y:.2f}<extra></extra>",
+                    ))
+                    fig_dia.add_trace(go.Scatter(
                         x=dia_data["label"], y=dia_data["margen"],
                         name="Margen", mode="lines+markers+text",
                         line=dict(color="#F4A261", width=2.5),
@@ -1255,7 +1311,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     ))
                     fig_dia.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                     fig_dia.update_layout(
-                        title=f"Rentabilidad diaria ({fecha_desde.strftime('%d/%m')} – {fecha_hasta.strftime('%d/%m/%Y')})",
+                        title=f"Rentabilidad diaria — línea morada: break-even (personal + fijo prorrateado) — {fecha_desde.strftime('%d/%m')} → {fecha_hasta.strftime('%d/%m/%Y')}",
                         yaxis_title="€", barmode="group",
                         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                         yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
@@ -2101,6 +2157,24 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
                                     st.rerun()
 
+                        # Botón "Borrar sin email" — disponible en TODOS los estados
+                        st.markdown("")
+                        st.caption("⚠️ Uso administrativo — no notifica al cliente")
+                        if st.button("🗑️ Borrar pedido (sin enviar email)", key=f"delete_silent_{ped['id']}"):
+                            st.session_state[f"confirm_del_silent_{ped['id']}"] = True
+                        if st.session_state.get(f"confirm_del_silent_{ped['id']}"):
+                            st.error(f"⚠️ ¿Borrar el pedido de **{ped['nombre']}** (€{float(ped['total']):.2f}) SIN notificar al cliente? Esto no se puede deshacer.")
+                            yds, nds = st.columns(2)
+                            if yds.button("✅ Sí, borrar silenciosamente", key=f"yes_del_silent_{ped['id']}"):
+                                sb7.table("pedido_items").delete().eq("pedido_id", ped["id"]).execute()
+                                sb7.table("pedidos").delete().eq("id", ped["id"]).execute()
+                                st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
+                                st.success(f"🗑️ Pedido #{ped['id']} borrado (sin notificar)")
+                                st.rerun()
+                            if nds.button("No", key=f"no_del_silent_{ped['id']}"):
+                                st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
+                                st.rerun()
+
     # ── TAB 8: Reservas ─────────────────────────────────────
     with tab8:
         import datetime as dt_mod
@@ -2645,6 +2719,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
                             st.rerun()
 
+    with tab10:
+        render_kds_msg_tab()
+
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
 
@@ -2681,7 +2758,7 @@ if df.empty:
     _ped_lbl = f"🛍️ Pedidos {'🔴 ' + str(_ped_pend) if _ped_pend > 0 else ''}"
     _res_lbl = f"🍽️ Reservas {'🔴 ' + str(_res_pend) if _res_pend > 0 else ''}"
 
-    _t1, _t2, _t3, _t4, _t5 = st.tabs(["👥 Turnos", "📋 Checklists", _ped_lbl, _res_lbl, "🌐 Web"])
+    _t1, _t2, _t3, _t4, _t5, _t6 = st.tabs(["👥 Turnos", "📋 Checklists", _ped_lbl, _res_lbl, "🌐 Web", "📢 KDS"])
 
     # Reutilizar el mismo código de las pestañas del dashboard
     # Para ello creamos un df vacío con las columnas necesarias
@@ -2882,5 +2959,9 @@ if df.empty:
                             "nombre_vi": c_nom_vi or None,
                         }).eq("id", cat_e["id"]).execute()
                         st.success("✅ Guardado"); st.rerun()
+
+    with _t6:
+        render_kds_msg_tab()
+
 else:
     render_dashboard(df)
