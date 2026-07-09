@@ -2218,15 +2218,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         sb8 = get_supabase()
         st.markdown("### Reservas")
 
-        # Auto-enviar email de recepción a reservas nuevas pendientes sin email enviado
+        # Los emails de reservas (recibida/confirmada/rechazada/cancelada) los envía
+        # automáticamente la Edge Function `send-reserva-email` vía Database Webhook.
         cfg_res = sb8.table("config").select("*").execute()
         cfg_email = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
-        nuevas = sb8.table("reservas").select("*").eq("estado","pendiente").eq("email_recibida_ok", False).execute().data or []
-        for nr in nuevas:
-            if nr.get("email"):
-                ok = enviar_email_recibida(nr, cfg_email)
-                if ok:
-                    sb8.table("reservas").update({"email_recibida_ok": True}).eq("id", nr["id"]).execute()
 
         res_subtab1, res_subtab2, res_subtab3 = st.tabs(["📆 Próximas", "🗓️ Calendario", "📋 Lista completa"])
 
@@ -2240,16 +2235,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 if st.button("Cancelada", key=f"cancel_{key_suffix}_{res['id']}"):
                     st.session_state[f"confirm_cancel_{key_suffix}_{res['id']}"] = True
                 if st.session_state.get(f"confirm_cancel_{key_suffix}_{res['id']}"):
-                    st.warning(f"¿Cancelar reserva de **{res['nombre']}**?")
+                    st.warning(f"¿Cancelar reserva de **{res['nombre']}**? Se enviará email al cliente.")
                     yc, nc = st.columns(2)
                     if yc.button("✅ Sí", key=f"yes_cancel_{key_suffix}_{res['id']}"):
                         sb_ref.table("reservas").update({"estado": "cancelada"}).eq("id", res["id"]).execute()
                         st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
-                        if res.get("email"):
-                            enviar_email_cancelacion(res, cfg_email_ref)
-                            st.success(f"✅ Cancelada · Email enviado")
-                        else:
-                            st.success("✅ Cancelada")
+                        st.success("✅ Cancelada · El email se envía automáticamente")
                         st.rerun()
                     if nc.button("❌ No", key=f"no_cancel_{key_suffix}_{res['id']}"):
                         st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
@@ -2258,13 +2249,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 if st.button(est.capitalize(), key=f"chg_{key_suffix}_{res['id']}_{est}"):
                     sb_ref.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
                     if est == "confirmada" and res.get("email"):
-                        ok = enviar_email_confirmacion(res, cfg_email_ref)
-                        if ok:
-                            sb_ref.table("reservas").update({"email_confirmacion_ok": True}).eq("id", res["id"]).execute()
-                            st.success(f"✅ Confirmada · Email enviado")
-                        else:
-                            st.success("✅ Confirmada")
-                            st.warning("⚠️ No se pudo enviar el email")
+                        st.success("✅ Confirmada · El email se envía automáticamente")
                     else:
                         st.success(f"✅ → {est}")
                     st.rerun()
@@ -2914,12 +2899,7 @@ if df.empty:
                             if st.button(est3.capitalize(), key=f"res2_{res2['id']}_{est3}"):
                                 sb8.table("reservas").update({"estado": est3}).eq("id", res2["id"]).execute()
                                 if est3 == "confirmada" and res2.get("email"):
-                                    ok = enviar_email_confirmacion(res2)
-                                    if ok:
-                                        st.success(f"✅ Confirmada · Email enviado a {res2['email']}")
-                                    else:
-                                        st.success("✅ Confirmada")
-                                        st.warning("⚠️ No se pudo enviar el email")
+                                    st.success("✅ Confirmada · El email se envía automáticamente")
                                 else:
                                     st.success(f"✅ → {est3}")
                                 st.rerun()
