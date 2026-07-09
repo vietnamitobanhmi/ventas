@@ -14,18 +14,36 @@ from supabase import create_client
 st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
 
 # ── AUTENTICACIÓN ──
+import hashlib
+
+def _auth_token(pwd: str) -> str:
+    """Token derivado de la contraseña (no expone la contraseña en la URL)."""
+    return hashlib.sha256(("vietnamito_bo_salt::" + pwd).encode()).hexdigest()[:32]
+
 def check_password():
-    """Devuelve True si el usuario ha introducido la contraseña correcta."""
+    """Devuelve True si el usuario está autenticado (sesión, URL token o login)."""
+    correct_pwd = st.secrets.get("backoffice_password", "cambiame_en_secrets")
+    expected_token = _auth_token(correct_pwd)
+
+    # 1. Ya validado en esta sesión
+    if st.session_state.get("password_correct"):
+        # Asegurar que el token está en la URL para persistir tras refresh
+        if st.query_params.get("auth") != expected_token:
+            st.query_params["auth"] = expected_token
+        return True
+
+    # 2. Token válido en la URL (persiste entre sesiones/refresh/marcadores)
+    if st.query_params.get("auth") == expected_token:
+        st.session_state["password_correct"] = True
+        return True
+
     def password_entered():
-        if st.session_state.get("password") == st.secrets.get("backoffice_password", "cambiame_en_secrets"):
+        if st.session_state.get("password") == correct_pwd:
             st.session_state["password_correct"] = True
             # Borrar la contraseña de session_state para no dejarla en memoria
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
-
-    if st.session_state.get("password_correct"):
-        return True
 
     # Mostrar pantalla de login
     st.markdown("""
