@@ -13,6 +13,38 @@ from supabase import create_client
 
 st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
 
+# ── AUTENTICACIÓN ──
+def check_password():
+    """Devuelve True si el usuario ha introducido la contraseña correcta."""
+    def password_entered():
+        if st.session_state.get("password") == st.secrets.get("backoffice_password", "cambiame_en_secrets"):
+            st.session_state["password_correct"] = True
+            # Borrar la contraseña de session_state para no dejarla en memoria
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if st.session_state.get("password_correct"):
+        return True
+
+    # Mostrar pantalla de login
+    st.markdown("""
+    <div style="max-width:400px;margin:80px auto;padding:40px;background:var(--background-color, #fff);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.08);text-align:center;">
+      <h1 style="margin:0 0 8px;font-size:24px;">☕ Vietnamito</h1>
+      <p style="color:#666;margin:0 0 24px;font-size:14px;">Backoffice — Acceso restringido</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
+    if st.session_state.get("password_correct") is False:
+        st.error("❌ Contraseña incorrecta")
+    st.caption("Este backoffice contiene datos confidenciales del negocio. Solo personal autorizado.")
+    return False
+
+if not check_password():
+    st.stop()
+
+# ── FIN AUTENTICACIÓN ──
+
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 
