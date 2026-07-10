@@ -581,10 +581,44 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
         st.dataframe(resumen, hide_index=True, use_container_width=True)
 
+def _kds_recibido_badge(row):
+    """Badge de acuse de recibo del KDS para un registro con kds_recibido/kds_recibido_at."""
+    if row.get("kds_recibido"):
+        try:
+            ts = pd.Timestamp(row["kds_recibido_at"]).tz_convert("Europe/Madrid").strftime("%d/%m %H:%M")
+        except Exception:
+            ts = ""
+        return f"📡 Recibido en KDS {ts}"
+    return "🔴 NO recibido en KDS todavía"
+
+
+def render_kds_online_status(sb):
+    """Indicador de si el KDS está conectado (heartbeat < 90s)."""
+    try:
+        status = sb.table("kds_status").select("*").eq("id", 1).execute().data
+        if status:
+            last_seen = pd.Timestamp(status[0]["last_seen"])
+            ahora = pd.Timestamp.now(tz="UTC")
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.tz_localize("UTC")
+            delta_s = (ahora - last_seen).total_seconds()
+            if delta_s < 90:
+                st.success(f"🟢 KDS conectado (último latido hace {int(delta_s)}s)")
+            elif delta_s < 3600:
+                st.error(f"🔴 KDS desconectado — último latido hace {int(delta_s/60)} min")
+            else:
+                st.error(f"🔴 KDS desconectado — último latido {last_seen.tz_convert('Europe/Madrid').strftime('%d/%m %H:%M')}")
+        else:
+            st.warning("⚠️ Sin datos de estado del KDS (¿tabla kds_status creada?)")
+    except Exception:
+        st.warning("⚠️ No se pudo comprobar el estado del KDS")
+
+
 def render_kds_msg_tab():
     """Pestaña para enviar mensajes al KDS con alarma sonora."""
     sb_kds = get_supabase()
     st.markdown("### Enviar mensaje al KDS")
+    render_kds_online_status(sb_kds)
     st.caption("El mensaje aparecerá en la tablet del KDS con un sonido persistente hasta que alguien pulse 'OK, entendido'.")
 
     # Mensajes rápidos
@@ -629,7 +663,8 @@ def render_kds_msg_tab():
         for m in hist:
             icono = "✅" if m.get("atendido") else "⏳"
             estado_txt = f"atendido {pd.Timestamp(m['atendido_at']).strftime('%d/%m %H:%M')}" if m.get("atendido") else "esperando"
-            st.markdown(f"{icono} **{pd.Timestamp(m['creado_at']).strftime('%d/%m %H:%M')}** — {m['mensaje']} · _{estado_txt}_")
+            recibido_txt = _kds_recibido_badge(m)
+            st.markdown(f"{icono} **{pd.Timestamp(m['creado_at']).strftime('%d/%m %H:%M')}** — {m['mensaje']} · _{estado_txt}_ · {recibido_txt}")
 
 
 def render_dashboard(df):
@@ -2102,6 +2137,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     items_res = items_bulk_s.get(ped["id"], [])
                     productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
                     with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%H:%M')}", expanded=True):
+                        st.caption(_kds_recibido_badge(ped))
                         _render_pedido_completo(ped, items_res)
                         st.markdown("")
                         ac1, ac2 = st.columns(2)
@@ -2135,6 +2171,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 for ped in activos:
                     items_res = items_bulk_a.get(ped["id"], [])
                     with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']}"):
+                        st.caption(_kds_recibido_badge(ped))
                         _render_pedido_completo(ped, items_res)
                         st.markdown("")
                         st.caption("Para mover entre estados (pendiente → preparando → listo → entregado) usa el KDS.")
@@ -2194,6 +2231,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     color_map = {"solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
                     icono = color_map.get(estado, "⚪")
                     with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
+                        st.caption(_kds_recibido_badge(ped))
                         _render_pedido_completo(ped, items_res)
                         # Botón cancelar solo para estados activos (no para cancelado/rechazado/entregado)
                         if estado in ["solicitado", "pendiente", "preparando", "listo"]:
@@ -2301,6 +2339,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         estado = res["estado"]
                         icono = {"pendiente":"🔴","confirmada":"🟢"}.get(estado, "⚪")
                         with st.expander(f"{icono} {res['hora']} · {res['nombre']} · {res['personas']} pax"):
+                            st.caption(_kds_recibido_badge(res))
                             c1, c2 = st.columns(2)
                             c1.markdown(f"**Teléfono:** {res['telefono']}")
                             c1.markdown(f"**Email:** {res.get('email') or '—'}")
