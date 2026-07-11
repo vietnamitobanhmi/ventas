@@ -740,16 +740,16 @@ def render_dashboard(df):
     ped_pend = len((sb_counts.table("pedidos").select("id").eq("estado","solicitado").execute().data or []))
     res_pend = len((sb_counts.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
 
-    # Aviso de pendientes FUERA de las etiquetas de pestañas.
-    # (Etiquetas dinámicas hacían que st.tabs se reconstruyera al cambiar un contador,
-    #  devolviendo al usuario a la primera pestaña a media edición.)
+    # Aviso de pendientes en un slot SIEMPRE presente (st.empty) para que
+    # su aparición/desaparición no remonte st.tabs y expulse al usuario de su pestaña.
+    aviso_slot = st.empty()
     if ped_pend > 0 or res_pend > 0:
         avisos = []
         if ped_pend > 0:
             avisos.append(f"🛍️ {ped_pend} pedido{'s' if ped_pend != 1 else ''} esperando confirmación")
         if res_pend > 0:
             avisos.append(f"🍽️ {res_pend} reserva{'s' if res_pend != 1 else ''} pendiente{'s' if res_pend != 1 else ''}")
-        st.error("🔴 " + " · ".join(avisos))
+        aviso_slot.error("🔴 " + " · ".join(avisos))
 
     tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "💰 Rentabilidad",
@@ -2964,13 +2964,14 @@ if df.empty:
     _sb0 = get_supabase()
     _ped_pend = len((_sb0.table("pedidos").select("id").eq("estado","solicitado").execute().data or []))
     _res_pend = len((_sb0.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
+    _aviso_slot = st.empty()
     if _ped_pend > 0 or _res_pend > 0:
         _avisos = []
         if _ped_pend > 0:
             _avisos.append(f"🛍️ {_ped_pend} pedido{'s' if _ped_pend != 1 else ''} esperando confirmación")
         if _res_pend > 0:
             _avisos.append(f"🍽️ {_res_pend} reserva{'s' if _res_pend != 1 else ''} pendiente{'s' if _res_pend != 1 else ''}")
-        st.error("🔴 " + " · ".join(_avisos))
+        _aviso_slot.error("🔴 " + " · ".join(_avisos))
 
     _t1, _t2, _t3, _t4, _t5, _t6 = st.tabs(["👥 Turnos", "📋 Checklists", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS"])
 
