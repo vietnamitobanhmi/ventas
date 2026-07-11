@@ -2311,7 +2311,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         with ped_sub3:
             col_filt_p, col_del_p = st.columns([3, 1])
             filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Solicitados", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados", "Rechazados"], key="filtro_ped")
-            filtro_map = {"Todos": None, "Solicitados": "solicitado", "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado", "Rechazados": "rechazado"}
+            filtro_map = {"Todos": None, "Esperando pago": "esperando_pago", "Solicitados": "solicitado", "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado", "Rechazados": "rechazado"}
 
             if col_del_p.button("🗑️ Borrar finalizados", key="del_finalizados_ped", help="Borra cancelados, rechazados y entregados de más de 7 días"):
                 st.session_state["confirm_del_finalizados"] = True
@@ -2346,7 +2346,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     items_res = items_bulk_t.get(ped["id"], [])
                     productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
                     estado = ped["estado"]
-                    color_map = {"solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
+                    color_map = {"esperando_pago":"💳⏳","solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
                     icono = color_map.get(estado, "⚪")
                     with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
                         st.caption(_kds_recibido_badge(ped))
