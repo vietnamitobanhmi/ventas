@@ -2349,9 +2349,16 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.session_state[f"confirm_rechazar_{ped['id']}"] = True
                         if st.session_state.get(f"confirm_rechazar_{ped['id']}"):
                             st.warning(f"¿Rechazar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
+                            motivo_bo = st.text_input(
+                                "✉️ Mensaje para el cliente (opcional) — se enviará tal cual como motivo del rechazo:",
+                                key=f"motivo_rechazar_{ped['id']}")
                             yc, nc = st.columns(2)
                             if yc.button("✅ Sí, rechazar", key=f"yes_rechazar_{ped['id']}"):
-                                sb7.table("pedidos").update({"estado": "rechazado"}).eq("id", ped["id"]).execute()
+                                upd = {"estado": "rechazado"}
+                                if motivo_bo.strip():
+                                    upd["motivo_rechazo_tipo"] = "otro"
+                                    upd["motivo_rechazo"] = motivo_bo.strip()
+                                sb7.table("pedidos").update(upd).eq("id", ped["id"]).execute()
                                 st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
                                 st.success("❌ Pedido rechazado")
                                 st.rerun()
