@@ -15,10 +15,64 @@ st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="
 
 # ── AUTENTICACIÓN ──
 import hashlib
+import requests as _rq
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+# Guard anti fuerza bruta persistido en Supabase (no se salta ni refrescando ni borrando caché)
+_BO_SB_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
+_BO_SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
+_GUARD_HDRS = {"apikey": _BO_SB_KEY, "Authorization": f"Bearer {_BO_SB_KEY}", "Content-Type": "application/json"}
+
 
 def _auth_token(pwd: str) -> str:
     """Token derivado de la contraseña (no expone la contraseña en la URL)."""
     return hashlib.sha256(("vietnamito_bo_salt::" + pwd).encode()).hexdigest()[:32]
+
+
+def _guard_leer():
+    try:
+        r = _rq.get(f"{_BO_SB_URL}/rest/v1/backoffice_login_guard?id=eq.1&select=*", headers=_GUARD_HDRS, timeout=5)
+        rows = r.json()
+        if rows:
+            return rows[0]
+    except Exception:
+        pass
+    return {"fails": 0, "lock_until": None}
+
+
+def _guard_escribir(fails, lock_until_iso):
+    try:
+        _rq.patch(f"{_BO_SB_URL}/rest/v1/backoffice_login_guard?id=eq.1", headers=_GUARD_HDRS,
+                  json={"fails": fails, "lock_until": lock_until_iso}, timeout=5)
+    except Exception:
+        pass
+
+
+def _guard_lock_restante_s(g):
+    """Segundos restantes de bloqueo (0 si no hay bloqueo activo)."""
+    lu = g.get("lock_until")
+    if not lu:
+        return 0
+    try:
+        t = _dt.fromisoformat(str(lu).replace("Z", "+00:00"))
+        return max(0, (t - _dt.now(_tz.utc)).total_seconds())
+    except Exception:
+        return 0
+
+
+def _guard_duracion_min(fails):
+    """Escalado: 3 fallos→5min · 6→15 · 9→30 · 12+→180 (3h) cada vez."""
+    ronda = fails // 3
+    return {1: 5, 2: 15, 3: 30}.get(ronda, 180 if ronda >= 4 else 0)
+
+
+def _guard_texto_espera(segundos):
+    m = int(segundos // 60) + (1 if segundos % 60 else 0)
+    if m >= 60:
+        h, mm = divmod(m, 60)
+        return f"{h}h {mm}min" if mm else f"{h}h"
+    return f"{m} min"
+
 
 def check_password():
     """Devuelve True si el usuario está autenticado (sesión, URL token o login)."""
@@ -33,28 +87,56 @@ def check_password():
         return True
 
     # 2. Token válido en la URL (persiste entre sesiones/refresh/marcadores)
+    #    Los tokens válidos NO se ven afectados por el bloqueo (son credenciales correctas)
     if st.query_params.get("auth") == expected_token:
         st.session_state["password_correct"] = True
         return True
 
+    # 3. Login por contraseña, protegido por bloqueo escalado
+    guard = _guard_leer()
+    bloqueado_s = _guard_lock_restante_s(guard)
+
     def password_entered():
+        g = _guard_leer()
+        if _guard_lock_restante_s(g) > 0:
+            # Bloqueado: ignorar el intento por completo
+            st.session_state["password_correct"] = None
+            return
         if st.session_state.get("password") == correct_pwd:
             st.session_state["password_correct"] = True
-            # Borrar la contraseña de session_state para no dejarla en memoria
             del st.session_state["password"]
+            _guard_escribir(0, None)  # login correcto → contadores a cero
         else:
             st.session_state["password_correct"] = False
+            fails = int(g.get("fails") or 0) + 1
+            lock_iso = None
+            if fails % 3 == 0:
+                mins = _guard_duracion_min(fails)
+                lock_iso = (_dt.now(_tz.utc) + _td(minutes=mins)).isoformat()
+            _guard_escribir(fails, lock_iso)
 
-    # Mostrar pantalla de login
+    # Pantalla de login
     st.markdown("""
     <div style="max-width:400px;margin:80px auto;padding:40px;background:var(--background-color, #fff);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.08);text-align:center;">
       <h1 style="margin:0 0 8px;font-size:24px;">☕ Vietnamito</h1>
       <p style="color:#666;margin:0 0 24px;font-size:14px;">Backoffice — Acceso restringido</p>
     </div>
     """, unsafe_allow_html=True)
+
+    if bloqueado_s > 0:
+        st.error(f"🔒 Demasiados intentos fallidos. Vuelve a intentarlo en {_guard_texto_espera(bloqueado_s)}.")
+        st.caption("El bloqueo se levanta automáticamente. Recarga la página pasado ese tiempo.")
+        return False
+
     st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
     if st.session_state.get("password_correct") is False:
-        st.error("❌ Contraseña incorrecta")
+        g_post = _guard_leer()
+        rest_post = _guard_lock_restante_s(g_post)
+        if rest_post > 0:
+            st.error(f"🔒 Demasiados intentos fallidos. Vuelve a intentarlo en {_guard_texto_espera(rest_post)}.")
+        else:
+            quedan = 3 - (int(g_post.get("fails") or 0) % 3)
+            st.error(f"❌ Contraseña incorrecta ({quedan} intento{'s' if quedan != 1 else ''} antes de bloqueo)")
     st.caption("Este backoffice contiene datos confidenciales del negocio. Solo personal autorizado.")
     return False
 
