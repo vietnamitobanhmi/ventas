@@ -833,22 +833,19 @@ def render_dashboard(df):
             avisos.append(f"🍽️ {res_pend} reserva{'s' if res_pend != 1 else ''} pendiente{'s' if res_pend != 1 else ''}")
         aviso_slot.error("🔴 " + " · ".join(avisos))
 
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
-        "💰 Rentabilidad",
-        "📅 Por día de semana",
-        "🕐 Por franja horaria",
-        "🌡️ Mapa de calor",
-        "📈 Por semana",
-        "👥 Turnos",
-        "📋 Checklists",
-        "🛍️ Pedidos",
-        "🍽️ Reservas",
-        "🌐 Web",
-        "📢 KDS",
-    ])
+    # Navegación principal con estado REAL (st.radio + key en session_state):
+    # a diferencia de st.tabs, la sección activa NUNCA se resetea por re-runs
+    # ni cambios estructurales. Además solo se renderiza la sección activa (más rápido).
+    _SECCIONES = [
+        "💰 Rentabilidad", "📅 Por día de semana", "🕐 Por franja horaria",
+        "🌡️ Mapa de calor", "📈 Por semana", "👥 Turnos", "📋 Checklists",
+        "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
+    ]
+    nav = st.radio("Sección", _SECCIONES, horizontal=True, key="nav_principal", label_visibility="collapsed")
+    st.markdown("")
 
     # ── TAB 0: Rentabilidad ─────────────────────────────────
-    with tab0:
+    if nav == "💰 Rentabilidad":
         import datetime as dt_rent
         sb0 = get_supabase()
 
@@ -1619,7 +1616,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
                 st.caption("⚠️ El coste de personal es estimado basándose en la configuración de turnos actual.")
 
-    with tab1:
+    if nav == "📅 Por día de semana":
         avg_dow = calcular_promedios_dia(df)
         labels = [DIAS[d] for d in DIAS_ORDER]
         values = [round(avg_dow.get(d, 0), 2) for d in DIAS_ORDER]
@@ -1679,7 +1676,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         )
         st.plotly_chart(fig_evo, use_container_width=True)
 
-    with tab2:
+    if nav == "🕐 Por franja horaria":
         import datetime as dt_franja
         fecha_min_data = df["fecha"].min()
         fecha_max_data = df["fecha"].max()
@@ -1715,7 +1712,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} — ventas brutas (con IVA)",
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
 
-    with tab3:
+    if nav == "🌡️ Mapa de calor":
         hm = calcular_heatmap(df)
         pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
         pivot.index = [DIAS[d] for d in DIAS_ORDER]
@@ -1732,7 +1729,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         fig3.update_traces(textfont_size=11)
         st.plotly_chart(fig3, use_container_width=True)
 
-    with tab4:
+    if nav == "📈 Por semana":
         semana_dow, semana_labels = calcular_por_semana(df)
         semanas_sorted = sorted(semana_labels.keys())
         labels_sorted = [semana_labels[s] for s in semanas_sorted]
@@ -1819,7 +1816,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             )
             st.plotly_chart(fig6, use_container_width=True)
 
-    with tab5:
+    if nav == "👥 Turnos":
         import datetime as dt_mod
         sb = get_supabase()
 
@@ -2013,7 +2010,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
 
     # ── TAB 6: Checklists (admin) ────────────────────────────
-    with tab6:
+    if nav == "📋 Checklists":
         sb6 = get_supabase()
         st.markdown("### Procesos")
 
@@ -2216,7 +2213,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.info("No hay pasos registrados para esta ejecución.")
 
     # ── TAB 7: Pedidos ──────────────────────────────────────
-    with tab7:
+    if nav == "🛍️ Pedidos":
         import datetime as dt_mod
         sb7 = get_supabase()
         st.markdown("### Pedidos")
@@ -2476,7 +2473,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 st.rerun()
 
     # ── TAB 8: Reservas ─────────────────────────────────────
-    with tab8:
+    if nav == "🍽️ Reservas":
         import datetime as dt_mod
         sb8 = get_supabase()
         st.markdown("### Reservas")
@@ -2702,7 +2699,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="lista")
 
     # ── TAB 9: Web ──────────────────────────────────────────
-    with tab9:
+    if nav == "🌐 Web":
         sb9 = get_supabase()
         st.markdown("### Gestión de la web")
 
@@ -3011,7 +3008,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
                             st.rerun()
 
-    with tab10:
+    if nav == "📢 KDS":
         render_kds_msg_tab()
 
     st.divider()
@@ -3062,14 +3059,15 @@ if df.empty:
             _avisos.append(f"🍽️ {_res_pend} reserva{'s' if _res_pend != 1 else ''} pendiente{'s' if _res_pend != 1 else ''}")
         _aviso_slot.error("🔴 " + " · ".join(_avisos))
 
-    _t1, _t2, _t3, _t4, _t5, _t6 = st.tabs(["👥 Turnos", "📋 Checklists", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS"])
+    _nav = st.radio("Sección", ["👥 Turnos", "📋 Checklists", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS"],
+                    horizontal=True, key="nav_sin_datos", label_visibility="collapsed")
 
     # Reutilizar el mismo código de las pestañas del dashboard
     # Para ello creamos un df vacío con las columnas necesarias
     import pandas as _pd2
     _df_empty = _pd2.DataFrame(columns=["fecha","hora","dow","valor","ntrans","items"])
 
-    with _t1:
+    if _nav == "👥 Turnos":
         import datetime as _dt_mod
         sb = _sb0
         emp_res = sb.table("empleados").select("*").order("id").execute()
@@ -3103,7 +3101,7 @@ if df.empty:
                     sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
                     st.success(f"✅ {nuevo_emp_nombre} añadido"); st.rerun()
 
-    with _t2:
+    if _nav == "📋 Checklists":
         sb6 = _sb0
         st.markdown("### Procesos")
         proc_res = sb6.table("procesos").select("*").order("orden").execute()
@@ -3133,7 +3131,7 @@ if df.empty:
                         sb6.table("pasos").insert({"proceso_id": proc_sel2, "titulo": new_paso_titulo2.strip(), "descripcion": new_paso_desc2.strip() or None, "orden": int(new_paso_orden2)}).execute()
                         st.success("✅ Paso añadido"); st.rerun()
 
-    with _t3:
+    if _nav == "🛍️ Pedidos":
         sb7 = _sb0
         st.markdown("### Pedidos")
         filtro_ped2 = st.selectbox("Filtrar:", ["Todos","Pendientes","Preparando","Listos","Entregados","Cancelados"], key="filtro_ped2")
@@ -3159,7 +3157,7 @@ if df.empty:
                                 sb7.table("pedidos").update({"estado": est2}).eq("id", ped["id"]).execute()
                                 st.rerun()
 
-    with _t4:
+    if _nav == "🍽️ Reservas":
         sb8 = _sb0
         st.markdown("### Reservas")
         filtro_res2 = st.selectbox("Filtrar:", ["Todos","Pendientes","Confirmadas","Canceladas"], key="filtro_res2")
@@ -3186,7 +3184,7 @@ if df.empty:
                                     st.success(f"✅ → {est3}")
                                 st.rerun()
 
-    with _t5:
+    if _nav == "🌐 Web":
         # Reutilizar exactamente el mismo código del tab9
         sb9 = _sb0
         st.markdown("### Gestión de la web")
@@ -3259,7 +3257,7 @@ if df.empty:
                         }).eq("id", cat_e["id"]).execute()
                         st.success("✅ Guardado"); st.rerun()
 
-    with _t6:
+    if _nav == "📢 KDS":
         render_kds_msg_tab()
 
 else:
