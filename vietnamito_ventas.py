@@ -2873,13 +2873,15 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 new_cat_nom = nc1.text_input("Nombre:", key="new_cat_nom")
                 new_cat_ord = nc2.number_input("Orden:", value=len(cats_web)+1, min_value=1, key="new_cat_ord")
                 new_cat_desc = st.text_input("Descripción (opcional):", key="new_cat_desc")
+                new_cat_local = st.checkbox("🪑 Solo pedidos en el local (no aparece en la web para recogida)", key="new_cat_local")
                 if st.button("➕ Añadir categoría", key="add_cat_web"):
                     if new_cat_nom.strip():
                         sb9.table("categorias").insert({
                             "nombre": new_cat_nom.strip(),
                             "descripcion": new_cat_desc.strip() or None,
                             "orden": int(new_cat_ord),
-                            "activo": True
+                            "activo": True,
+                            "solo_local": bool(new_cat_local)
                         }).execute()
                         st.success(f"✅ Categoría '{new_cat_nom}' creada")
                         st.rerun()
@@ -2888,17 +2890,21 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
             for cat in cats_web:
                 n_prods = len([p for p in prods_web if p["categoria_id"] == cat["id"]])
-                with st.expander(f"{'✅' if cat['activo'] else '❌'} {cat['orden']}. {cat['nombre']} ({n_prods} productos)"):
+                icono_local = " 🪑" if cat.get("solo_local") else ""
+                with st.expander(f"{'✅' if cat['activo'] else '❌'} {cat['orden']}. {cat['nombre']}{icono_local} ({n_prods} productos)"):
                     cc1, cc2 = st.columns([3,1])
                     c_nom = cc1.text_input("Nombre:", value=cat["nombre"], key=f"cnom_{cat['id']}")
                     c_ord = cc2.number_input("Orden:", value=int(cat.get("orden",0)), min_value=1, key=f"cord_{cat['id']}")
                     c_desc = st.text_input("Descripción:", value=cat.get("descripcion") or "", key=f"cdesc_{cat['id']}")
                     c_act = st.checkbox("Activa", value=cat.get("activo",True), key=f"cact_{cat['id']}")
+                    c_local = st.checkbox("🪑 Solo pedidos en el local (QR de mesa) — no aparece en la web para recogida",
+                                          value=bool(cat.get("solo_local")), key=f"clocal_{cat['id']}")
                     csc1, csc2 = st.columns(2)
                     if csc1.button("💾 Guardar", key=f"save_cat_{cat['id']}"):
                         sb9.table("categorias").update({
                             "nombre": c_nom, "descripcion": c_desc or None,
-                            "orden": int(c_ord), "activo": c_act
+                            "orden": int(c_ord), "activo": c_act,
+                            "solo_local": bool(c_local)
                         }).eq("id", cat["id"]).execute()
                         st.success("✅ Categoría guardada")
                         st.rerun()
