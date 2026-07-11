@@ -2935,10 +2935,16 @@ if uploaded:
     with st.spinner("Procesando y guardando en la nube..."):
         rows, fmt = parse_csv(uploaded)
         if rows:
+            # Trazabilidad: origen y archivo del que procede cada fila
+            _fuente = "glop" if fmt == "nuevo" else "epos"
+            _nombre_archivo = getattr(uploaded, "name", None)
+            for _r in rows:
+                _r["fuente"] = _fuente
+                _r["archivo"] = _nombre_archivo
             save_to_supabase(rows, fmt)
             load_from_supabase.clear()
             fmt_label = "nuevo POS (por ticket)" if fmt == "nuevo" else "Epos Now (por franja horaria)"
-            st.success(f"✅ {len(rows)} registros guardados · Formato detectado: {fmt_label}")
+            st.success(f"✅ {len(rows)} registros guardados · Formato detectado: {fmt_label} · Archivo: {_nombre_archivo}")
         else:
             st.error("No se pudieron leer datos del CSV. Verifica el formato.")
 
