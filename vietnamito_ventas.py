@@ -818,9 +818,14 @@ def render_dashboard(df):
 
     st.divider()
 
-    sb_counts = get_supabase()
-    ped_pend = len((sb_counts.table("pedidos").select("id").eq("estado","solicitado").execute().data or []))
-    res_pend = len((sb_counts.table("reservas").select("id").eq("estado","pendiente").execute().data or []))
+    @st.cache_data(ttl=10, show_spinner=False)
+    def _contar_pendientes():
+        _sb = get_supabase()
+        p = len((_sb.table("pedidos").select("id").eq("estado", "solicitado").execute().data or []))
+        r = len((_sb.table("reservas").select("id").eq("estado", "pendiente").execute().data or []))
+        return p, r
+
+    ped_pend, res_pend = _contar_pendientes()
 
     # Aviso de pendientes en un slot SIEMPRE presente (st.empty) para que
     # su aparición/desaparición no remonte st.tabs y expulse al usuario de su pestaña.
@@ -1817,733 +1822,836 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             st.plotly_chart(fig6, use_container_width=True)
 
     if nav == "👥 Turnos":
-        import datetime as dt_mod
-        sb = get_supabase()
+        @st.fragment
+        def _frag_seccion_1():
+            import datetime as dt_mod
+            sb = get_supabase()
 
-        emp_res = sb.table("empleados").select("*").order("id").execute()
-        empleados = emp_res.data if emp_res.data else []
+            emp_res = sb.table("empleados").select("*").order("id").execute()
+            empleados = emp_res.data if emp_res.data else []
 
-        st.markdown("### Empleados")
-        st.caption("Edita nombres y coste/hora. Los cambios se guardan al pulsar el botón al final. Los turnos se eliminan automáticamente al borrar un empleado.")
+            st.markdown("### Empleados")
+            st.caption("Edita nombres y coste/hora. Los cambios se guardan al pulsar el botón al final. Los turnos se eliminan automáticamente al borrar un empleado.")
 
-        header = st.columns([3, 2, 1])
-        header[0].markdown("**Nombre**")
-        header[1].markdown("**€/hora**")
-        header[2].markdown("**Eliminar**")
+            header = st.columns([3, 2, 1])
+            header[0].markdown("**Nombre**")
+            header[1].markdown("**€/hora**")
+            header[2].markdown("**Eliminar**")
 
-        cambios_emp = []  # acumula cambios pendientes
-        for emp in empleados:
-            c1, c2, c3 = st.columns([3, 2, 1])
-            nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom_{emp['id']}")
-            nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos_{emp['id']}")
-            # Detectar si hay cambios respecto a BBDD
-            if nuevo_nombre != emp["nombre"] or float(nuevo_coste) != float(emp["coste_hora"]):
-                cambios_emp.append({"id": emp["id"], "nombre": nuevo_nombre, "coste_hora": nuevo_coste, "orig": emp["nombre"]})
-            if c3.button("🗑️", key=f"delemp_{emp['id']}"):
-                st.session_state[f"confirm_del_{emp['id']}"] = True
-            if st.session_state.get(f"confirm_del_{emp['id']}"):
-                st.warning(f"¿Seguro que quieres eliminar a **{emp['nombre']}** y todos sus turnos?")
-                conf1, conf2 = st.columns(2)
-                if conf1.button("✅ Sí, eliminar", key=f"yes_del_{emp['id']}"):
-                    sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
-                    sb.table("empleados").delete().eq("id", emp["id"]).execute()
-                    st.session_state.pop(f"confirm_del_{emp['id']}", None)
-                    st.success(f"✅ {emp['nombre']} eliminado")
-                    st.rerun()
-                if conf2.button("❌ Cancelar", key=f"no_del_{emp['id']}"):
-                    st.session_state.pop(f"confirm_del_{emp['id']}", None)
-                    st.rerun()
-
-        # Botón único de guardado para empleados
-        st.markdown("")
-        if cambios_emp:
-            preview = ", ".join([f"{c['orig']}" for c in cambios_emp])
-            st.info(f"📝 Cambios pendientes en: **{preview}**")
-        col_save_emp, _ = st.columns([2, 5])
-        if col_save_emp.button("💾 Guardar empleados", key="save_all_emp", type="primary", disabled=len(cambios_emp)==0, use_container_width=True):
-            for c in cambios_emp:
-                sb.table("empleados").update({"nombre": c["nombre"], "coste_hora": c["coste_hora"]}).eq("id", c["id"]).execute()
-            st.success(f"✅ {len(cambios_emp)} empleado{'s' if len(cambios_emp)!=1 else ''} guardado{'s' if len(cambios_emp)!=1 else ''}")
-            st.rerun()
-
-        st.markdown("")
-        with st.expander("➕ Añadir empleado"):
-            na1, na2, na3 = st.columns([3, 2, 1])
-            nuevo_emp_nombre = na1.text_input("Nombre:", key="new_emp_nombre")
-            nuevo_emp_coste = na2.number_input("€/hora:", value=10.0, min_value=0.0, step=0.5, format="%.2f", key="new_emp_coste")
-            if na3.button("➕ Añadir", key="add_emp"):
-                if nuevo_emp_nombre.strip():
-                    sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
-                    st.success(f"✅ {nuevo_emp_nombre} añadido")
-                    st.rerun()
-                else:
-                    st.warning("Escribe un nombre.")
-
-        st.divider()
-        st.markdown("### Turnos por día")
-
-        slots = []
-        current = dt_mod.datetime(2000, 1, 1, 7, 0)
-        end = dt_mod.datetime(2000, 1, 2, 1, 30)
-        while current < end:
-            slots.append(current.strftime("%H:%M"))
-            current += dt_mod.timedelta(minutes=30)
-
-        emp_ids = [e["id"] for e in empleados]
-        emp_nombres = {e["id"]: e["nombre"] for e in empleados}
-        emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
-
-        with st.expander("📋 Copiar turnos de un día a otro"):
-            cc1, cc2, cc3 = st.columns([2, 3, 1])
-            dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
-            dias_destino_sel = cc2.multiselect("Copiar a:", [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen], key="copy_to")
-            cc3.markdown("<br>", unsafe_allow_html=True)
-            if cc3.button("📋 Copiar", key="do_copy", type="primary"):
-                if not dias_destino_sel:
-                    st.warning("Selecciona al menos un día destino.")
-                else:
-                    dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
-                    turnos_res_copy = sb.table("turnos").select("*").execute()
-                    turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res_copy.data or []) if int(tr["dia_semana"]) == dow_origen]
-                    if not turnos_origen:
-                        st.warning(f"El día {dia_origen} no tiene turnos configurados.")
-                    else:
-                        for dia_dest_label in dias_destino_sel:
-                            dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
-                            sb.table("turnos").delete().eq("dia_semana", dow_dest).execute()
-                            sb.table("turnos").insert([
-                                {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot}
-                                for eid, slot in turnos_origen
-                            ]).execute()
-                        st.success(f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
+            cambios_emp = []  # acumula cambios pendientes
+            for emp in empleados:
+                c1, c2, c3 = st.columns([3, 2, 1])
+                nuevo_nombre = c1.text_input("n", value=emp["nombre"], label_visibility="collapsed", key=f"nom_{emp['id']}")
+                nuevo_coste = c2.number_input("c", value=float(emp["coste_hora"]), min_value=0.0, step=0.5, format="%.2f", label_visibility="collapsed", key=f"cos_{emp['id']}")
+                # Detectar si hay cambios respecto a BBDD
+                if nuevo_nombre != emp["nombre"] or float(nuevo_coste) != float(emp["coste_hora"]):
+                    cambios_emp.append({"id": emp["id"], "nombre": nuevo_nombre, "coste_hora": nuevo_coste, "orig": emp["nombre"]})
+                if c3.button("🗑️", key=f"delemp_{emp['id']}"):
+                    st.session_state[f"confirm_del_{emp['id']}"] = True
+                if st.session_state.get(f"confirm_del_{emp['id']}"):
+                    st.warning(f"¿Seguro que quieres eliminar a **{emp['nombre']}** y todos sus turnos?")
+                    conf1, conf2 = st.columns(2)
+                    if conf1.button("✅ Sí, eliminar", key=f"yes_del_{emp['id']}"):
+                        sb.table("turnos").delete().eq("empleado_id", emp["id"]).execute()
+                        sb.table("empleados").delete().eq("id", emp["id"]).execute()
+                        st.session_state.pop(f"confirm_del_{emp['id']}", None)
+                        st.success(f"✅ {emp['nombre']} eliminado")
+                        st.rerun()
+                    if conf2.button("❌ Cancelar", key=f"no_del_{emp['id']}"):
+                        st.session_state.pop(f"confirm_del_{emp['id']}", None)
                         st.rerun()
 
-        turnos_res = sb.table("turnos").select("*").execute()
-        turnos_set = set()
-        for tr in (turnos_res.data or []):
-            turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
+            # Botón único de guardado para empleados
+            st.markdown("")
+            if cambios_emp:
+                preview = ", ".join([f"{c['orig']}" for c in cambios_emp])
+                st.info(f"📝 Cambios pendientes en: **{preview}**")
+            col_save_emp, _ = st.columns([2, 5])
+            if col_save_emp.button("💾 Guardar empleados", key="save_all_emp", type="primary", disabled=len(cambios_emp)==0, use_container_width=True):
+                for c in cambios_emp:
+                    sb.table("empleados").update({"nombre": c["nombre"], "coste_hora": c["coste_hora"]}).eq("id", c["id"]).execute()
+                st.success(f"✅ {len(cambios_emp)} empleado{'s' if len(cambios_emp)!=1 else ''} guardado{'s' if len(cambios_emp)!=1 else ''}")
+                st.rerun()
 
-        dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
-        # Recolectar los edits de cada día para guardar todo de golpe al final
-        ediciones_por_dow = {}
-        horas_por_dow = {}
+            st.markdown("")
+            with st.expander("➕ Añadir empleado"):
+                na1, na2, na3 = st.columns([3, 2, 1])
+                nuevo_emp_nombre = na1.text_input("Nombre:", key="new_emp_nombre")
+                nuevo_emp_coste = na2.number_input("€/hora:", value=10.0, min_value=0.0, step=0.5, format="%.2f", key="new_emp_coste")
+                if na3.button("➕ Añadir", key="add_emp"):
+                    if nuevo_emp_nombre.strip():
+                        sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
+                        st.success(f"✅ {nuevo_emp_nombre} añadido")
+                        st.rerun()
+                    else:
+                        st.warning("Escribe un nombre.")
 
-        for di, dow in enumerate(DIAS_ORDER):
-            with dias_tabs[di]:
-                data = {}
-                for slot in slots:
-                    row = {}
-                    for eid in emp_ids:
-                        row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, dow, slot) in turnos_set
-                    data[slot] = row
-                df_grid = pd.DataFrame(data).T
-                df_grid.index.name = "Hora"
-                df_grid = df_grid.reset_index()
+            st.divider()
+            st.markdown("### Turnos por día")
 
-                edited = st.data_editor(
-                    df_grid,
-                    key=f"grid_{dow}",
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={"Hora": st.column_config.TextColumn("Hora", disabled=True)},
-                    height=min(400, len(slots) * 35 + 40),
-                )
-                ediciones_por_dow[dow] = edited
+            slots = []
+            current = dt_mod.datetime(2000, 1, 1, 7, 0)
+            end = dt_mod.datetime(2000, 1, 2, 1, 30)
+            while current < end:
+                slots.append(current.strftime("%H:%M"))
+                current += dt_mod.timedelta(minutes=30)
 
-                horas_dia = {}
-                for _, row in edited.iterrows():
-                    for eid in emp_ids:
-                        col_name = emp_nombres.get(eid, f"Emp {eid}")
-                        if row.get(col_name, False):
-                            horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
-                horas_por_dow[dow] = horas_dia
-                if any(horas_dia.values()):
-                    st.markdown("**Resumen del día:**")
-                    res_cols = st.columns(len(emp_ids))
-                    for ei, eid in enumerate(emp_ids):
-                        h = horas_dia.get(eid, 0)
-                        coste = h * emp_coste.get(eid, 10)
-                        res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
+            emp_ids = [e["id"] for e in empleados]
+            emp_nombres = {e["id"]: e["nombre"] for e in empleados}
+            emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
 
-        # ── Botón único de guardar TODOS los turnos ──
-        st.divider()
-        st.markdown("#### Guardar cambios en turnos")
-        st.caption("Cambia los turnos en cualquier día de la semana. Cuando termines, pulsa el botón para guardar todos los cambios de una vez.")
-        col_save_t, _ = st.columns([2, 4])
-        if col_save_t.button("💾 Guardar TODOS los turnos", key="save_all_turnos", type="primary", use_container_width=True):
-            total_insertados = 0
-            for dow, edited in ediciones_por_dow.items():
-                sb.table("turnos").delete().eq("dia_semana", dow).execute()
-                to_insert = []
-                for _, row in edited.iterrows():
-                    slot = row["Hora"]
-                    for eid in emp_ids:
-                        col_name = emp_nombres.get(eid, f"Emp {eid}")
-                        if row.get(col_name, False):
-                            to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
-                if to_insert:
-                    sb.table("turnos").insert(to_insert).execute()
-                    total_insertados += len(to_insert)
-            st.success(f"✅ {total_insertados} slots guardados en total (toda la semana)")
-            st.rerun()
+            with st.expander("📋 Copiar turnos de un día a otro"):
+                cc1, cc2, cc3 = st.columns([2, 3, 1])
+                dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
+                dias_destino_sel = cc2.multiselect("Copiar a:", [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen], key="copy_to")
+                cc3.markdown("<br>", unsafe_allow_html=True)
+                if cc3.button("📋 Copiar", key="do_copy", type="primary"):
+                    if not dias_destino_sel:
+                        st.warning("Selecciona al menos un día destino.")
+                    else:
+                        dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
+                        turnos_res_copy = sb.table("turnos").select("*").execute()
+                        turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res_copy.data or []) if int(tr["dia_semana"]) == dow_origen]
+                        if not turnos_origen:
+                            st.warning(f"El día {dia_origen} no tiene turnos configurados.")
+                        else:
+                            for dia_dest_label in dias_destino_sel:
+                                dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
+                                sb.table("turnos").delete().eq("dia_semana", dow_dest).execute()
+                                sb.table("turnos").insert([
+                                    {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot}
+                                    for eid, slot in turnos_origen
+                                ]).execute()
+                            st.success(f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
+                            st.rerun()
 
-        st.divider()
+            turnos_res = sb.table("turnos").select("*").execute()
+            turnos_set = set()
+            for tr in (turnos_res.data or []):
+                turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
 
-        st.markdown("### Resumen semanal")
-        turnos_all = sb.table("turnos").select("*").execute().data or []
-        resumen_rows = []
-        for emp in empleados:
-            eid = emp["id"]
-            total_h = sum(0.5 for tr in turnos_all if tr["empleado_id"] == eid)
-            total_coste = total_h * emp["coste_hora"]
-            resumen_rows.append({
-                "Empleado": emp["nombre"],
-                "Horas/semana": f"{total_h:.1f}h",
-                "Coste semanal": f"€{total_coste:.2f}",
-                "Coste mensual est.": f"€{total_coste * 4.33:.2f}",
-            })
-        st.dataframe(pd.DataFrame(resumen_rows), hide_index=True, use_container_width=True)
-        total_sem = sum(
-            sum(0.5 for tr in turnos_all if tr["empleado_id"] == e["id"]) * e["coste_hora"]
-            for e in empleados
-        )
-        st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
+            dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
+            # Recolectar los edits de cada día para guardar todo de golpe al final
+            ediciones_por_dow = {}
+            horas_por_dow = {}
 
+            for di, dow in enumerate(DIAS_ORDER):
+                with dias_tabs[di]:
+                    data = {}
+                    for slot in slots:
+                        row = {}
+                        for eid in emp_ids:
+                            row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, dow, slot) in turnos_set
+                        data[slot] = row
+                    df_grid = pd.DataFrame(data).T
+                    df_grid.index.name = "Hora"
+                    df_grid = df_grid.reset_index()
+
+                    edited = st.data_editor(
+                        df_grid,
+                        key=f"grid_{dow}",
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={"Hora": st.column_config.TextColumn("Hora", disabled=True)},
+                        height=min(400, len(slots) * 35 + 40),
+                    )
+                    ediciones_por_dow[dow] = edited
+
+                    horas_dia = {}
+                    for _, row in edited.iterrows():
+                        for eid in emp_ids:
+                            col_name = emp_nombres.get(eid, f"Emp {eid}")
+                            if row.get(col_name, False):
+                                horas_dia[eid] = horas_dia.get(eid, 0) + 0.5
+                    horas_por_dow[dow] = horas_dia
+                    if any(horas_dia.values()):
+                        st.markdown("**Resumen del día:**")
+                        res_cols = st.columns(len(emp_ids))
+                        for ei, eid in enumerate(emp_ids):
+                            h = horas_dia.get(eid, 0)
+                            coste = h * emp_coste.get(eid, 10)
+                            res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
+
+            # ── Botón único de guardar TODOS los turnos ──
+            st.divider()
+            st.markdown("#### Guardar cambios en turnos")
+            st.caption("Cambia los turnos en cualquier día de la semana. Cuando termines, pulsa el botón para guardar todos los cambios de una vez.")
+            col_save_t, _ = st.columns([2, 4])
+            if col_save_t.button("💾 Guardar TODOS los turnos", key="save_all_turnos", type="primary", use_container_width=True):
+                total_insertados = 0
+                for dow, edited in ediciones_por_dow.items():
+                    sb.table("turnos").delete().eq("dia_semana", dow).execute()
+                    to_insert = []
+                    for _, row in edited.iterrows():
+                        slot = row["Hora"]
+                        for eid in emp_ids:
+                            col_name = emp_nombres.get(eid, f"Emp {eid}")
+                            if row.get(col_name, False):
+                                to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
+                    if to_insert:
+                        sb.table("turnos").insert(to_insert).execute()
+                        total_insertados += len(to_insert)
+                st.success(f"✅ {total_insertados} slots guardados en total (toda la semana)")
+                st.rerun()
+
+            st.divider()
+
+            st.markdown("### Resumen semanal")
+            turnos_all = sb.table("turnos").select("*").execute().data or []
+            resumen_rows = []
+            for emp in empleados:
+                eid = emp["id"]
+                total_h = sum(0.5 for tr in turnos_all if tr["empleado_id"] == eid)
+                total_coste = total_h * emp["coste_hora"]
+                resumen_rows.append({
+                    "Empleado": emp["nombre"],
+                    "Horas/semana": f"{total_h:.1f}h",
+                    "Coste semanal": f"€{total_coste:.2f}",
+                    "Coste mensual est.": f"€{total_coste * 4.33:.2f}",
+                })
+            st.dataframe(pd.DataFrame(resumen_rows), hide_index=True, use_container_width=True)
+            total_sem = sum(
+                sum(0.5 for tr in turnos_all if tr["empleado_id"] == e["id"]) * e["coste_hora"]
+                for e in empleados
+            )
+            st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
+
+        _frag_seccion_1()
     # ── TAB 6: Checklists (admin) ────────────────────────────
     if nav == "📋 Checklists":
-        sb6 = get_supabase()
-        st.markdown("### Procesos")
+        @st.fragment
+        def _frag_seccion_2():
+            sb6 = get_supabase()
+            st.markdown("### Procesos")
 
-        proc_res = sb6.table("procesos").select("*").order("orden").execute()
-        procesos = proc_res.data or []
+            proc_res = sb6.table("procesos").select("*").order("orden").execute()
+            procesos = proc_res.data or []
 
-        with st.expander("➕ Nuevo proceso"):
-            new_proc_nombre = st.text_input("Nombre:", key="new_proc_nombre")
-            new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
-            new_proc_orden = st.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden")
-            if st.button("➕ Añadir proceso", key="add_proc"):
-                if new_proc_nombre.strip():
-                    try:
-                        sb6.table("procesos").insert({
-                            "nombre": new_proc_nombre.strip(),
-                            "descripcion": new_proc_desc.strip() or None,
-                            "orden": int(new_proc_orden),
-                            "activo": True
-                        }).execute()
-                        st.success(f"✅ Proceso '{new_proc_nombre}' creado")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al crear proceso: {e}")
-                else:
-                    st.warning("Escribe un nombre.")
-
-        if not procesos:
-            st.info("No hay procesos. Crea uno arriba.")
-        else:
-            proc_sel = st.selectbox(
-                "Selecciona proceso para editar:",
-                options=[p["id"] for p in procesos],
-                format_func=lambda x: next(p["nombre"] for p in procesos if p["id"] == x),
-                key="proc_sel"
-            )
-            proc = next(p for p in procesos if p["id"] == proc_sel)
-
-            with st.expander(f"✏️ Editar proceso: {proc['nombre']}"):
-                e1, e2 = st.columns([3, 1])
-                edit_nombre = e1.text_input("Nombre:", value=proc["nombre"], key=f"ep_nom_{proc['id']}")
-                edit_orden = e2.number_input("Orden:", value=int(proc.get("orden") or 0), key=f"ep_ord_{proc['id']}")
-                edit_desc = st.text_input("Descripción:", value=proc.get("descripcion") or "", key=f"ep_desc_{proc['id']}")
-                edit_activo = st.checkbox("Activo", value=proc.get("activo", True), key=f"ep_act_{proc['id']}")
-                ec1, ec2 = st.columns(2)
-                if ec1.button("💾 Guardar cambios", key=f"save_proc_{proc['id']}"):
-                    sb6.table("procesos").update({
-                        "nombre": edit_nombre,
-                        "descripcion": edit_desc or None,
-                        "orden": int(edit_orden),
-                        "activo": edit_activo
-                    }).eq("id", proc["id"]).execute()
-                    st.success("✅ Proceso actualizado")
-                    st.rerun()
-                if ec2.button("🗑️ Eliminar proceso", key=f"del_proc_{proc['id']}"):
-                    st.session_state[f"confirm_del_proc_{proc['id']}"] = True
-                if st.session_state.get(f"confirm_del_proc_{proc['id']}"):
-                    st.error(f"¿Eliminar '{proc['nombre']}' y todos sus pasos?")
-                    dc1, dc2 = st.columns(2)
-                    if dc1.button("✅ Sí, eliminar", key=f"yes_del_proc_{proc['id']}"):
-                        sb6.table("procesos").delete().eq("id", proc["id"]).execute()
-                        st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
-                        st.success("✅ Proceso eliminado")
-                        st.rerun()
-                    if dc2.button("❌ Cancelar", key=f"no_del_proc_{proc['id']}"):
-                        st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
-                        st.rerun()
-
-            st.markdown(f"### Pasos de: {proc['nombre']}")
-
-            pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
-            pasos = sorted(pasos_res.data or [], key=lambda p: p.get("orden", 0))
-
-            if "add_paso_counter" not in st.session_state:
-                st.session_state.add_paso_counter = 0
-            counter = st.session_state.add_paso_counter
-
-            with st.expander("➕ Añadir paso"):
-                pa1, pa2 = st.columns([3, 1])
-                new_paso_titulo = pa1.text_input("Título del paso:", key=f"new_paso_titulo_{counter}")
-                new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key=f"new_paso_orden_{counter}")
-                new_paso_desc = st.text_area("Descripción (opcional):", key=f"new_paso_desc_{counter}", height=80)
-                new_paso_foto_url = st.text_input("URL de foto (opcional):", key=f"new_paso_foto_{counter}", placeholder="https://...")
-                new_paso_foto_file = st.file_uploader("O sube una foto:", type=["jpg","jpeg","png","webp"], key=f"new_paso_foto_file_{counter}")
-                if new_paso_foto_file:
-                    st.image(new_paso_foto_file, width=200)
-                if st.button("➕ Añadir paso", key=f"add_paso_{counter}"):
-                    if new_paso_titulo.strip():
-                        foto_url = new_paso_foto_url.strip() or None
-                        if new_paso_foto_file:
-                            try:
-                                foto_url = upload_foto(sb6, new_paso_foto_file, f"{proc_sel}_{len(pasos)+1}")
-                            except Exception as e:
-                                st.warning(f"No se pudo subir la foto: {e}")
-                        nuevo_orden = int(new_paso_orden)
-                        # Si el orden ya existe, correr hacia abajo los posteriores
-                        ordenes_existentes = [p["orden"] for p in pasos]
-                        if nuevo_orden in ordenes_existentes:
-                            pasos_a_mover = [p for p in pasos if p["orden"] >= nuevo_orden]
-                            for p in pasos_a_mover:
-                                sb6.table("pasos").update({"orden": p["orden"] + 1}).eq("id", p["id"]).execute()
-                        sb6.table("pasos").insert({
-                            "proceso_id": proc_sel,
-                            "titulo": new_paso_titulo.strip(),
-                            "descripcion": new_paso_desc.strip() or None,
-                            "foto_url": foto_url,
-                            "orden": nuevo_orden,
-                        }).execute()
-                        st.session_state.add_paso_counter += 1
-                        st.success("✅ Paso añadido")
-                        st.rerun()
-                    else:
-                        st.warning("Escribe un título.")
-
-            if not pasos:
-                st.info("Este proceso no tiene pasos. Añade uno arriba.")
-            else:
-                for paso in pasos:
-                    with st.expander(f"**{paso['orden']}.** {paso['titulo']}"):
-                        sp1, sp2 = st.columns([3, 1])
-                        s_titulo = sp1.text_input("Título:", value=paso["titulo"], key=f"sp_tit_{paso['id']}")
-                        s_orden = sp2.number_input("Orden:", value=int(paso["orden"]), min_value=1, key=f"sp_ord_{paso['id']}")
-                        s_desc = st.text_area("Descripción:", value=paso.get("descripcion") or "", key=f"sp_desc_{paso['id']}", height=80)
-                        s_foto = st.text_input("URL foto:", value=paso.get("foto_url") or "", key=f"sp_foto_{paso['id']}")
-                        s_foto_file = st.file_uploader("O sube foto nueva:", type=["jpg","jpeg","png","webp"], key=f"sp_foto_file_{paso['id']}")
-                        if s_foto_file:
-                            st.image(s_foto_file, width=200)
-                            try:
-                                s_foto = upload_foto(sb6, s_foto_file, str(paso['id']))
-                                st.success("✅ Foto lista — pulsa Guardar para confirmar")
-                            except Exception as e:
-                                st.warning(f"No se pudo subir: {e}")
-                        elif s_foto:
-                            st.image(s_foto, width=200)
-                        sc1, sc2 = st.columns(2)
-                        if sc1.button("💾 Guardar", key=f"save_paso_{paso['id']}"):
-                            sb6.table("pasos").update({
-                                "titulo": s_titulo,
-                                "descripcion": s_desc or None,
-                                "foto_url": s_foto or None,
-                                "orden": int(s_orden),
-                            }).eq("id", paso["id"]).execute()
-                            st.success("✅ Paso guardado")
+            with st.expander("➕ Nuevo proceso"):
+                new_proc_nombre = st.text_input("Nombre:", key="new_proc_nombre")
+                new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
+                new_proc_orden = st.number_input("Orden:", value=len(procesos)+1, min_value=1, key="new_proc_orden")
+                if st.button("➕ Añadir proceso", key="add_proc"):
+                    if new_proc_nombre.strip():
+                        try:
+                            sb6.table("procesos").insert({
+                                "nombre": new_proc_nombre.strip(),
+                                "descripcion": new_proc_desc.strip() or None,
+                                "orden": int(new_proc_orden),
+                                "activo": True
+                            }).execute()
+                            st.success(f"✅ Proceso '{new_proc_nombre}' creado")
                             st.rerun()
-                        if sc2.button("🗑️ Eliminar", key=f"del_paso_{paso['id']}"):
-                            st.session_state[f"confirm_del_paso_{paso['id']}"] = True
-                        if st.session_state.get(f"confirm_del_paso_{paso['id']}"):
-                            st.warning(f"¿Eliminar el paso **{paso['titulo']}**? Esta acción no se puede deshacer.")
-                            dp1, dp2 = st.columns(2)
-                            if dp1.button("✅ Sí, eliminar", key=f"yes_del_paso_{paso['id']}"):
-                                sb6.table("pasos").delete().eq("id", paso["id"]).execute()
-                                st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
-                                st.success("✅ Paso eliminado")
-                                st.rerun()
-                            if dp2.button("❌ Cancelar", key=f"no_del_paso_{paso['id']}"):
-                                st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
-                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al crear proceso: {e}")
+                    else:
+                        st.warning("Escribe un nombre.")
 
-        st.divider()
-        st.markdown("### Historial de ejecuciones")
+            if not procesos:
+                st.info("No hay procesos. Crea uno arriba.")
+            else:
+                proc_sel = st.selectbox(
+                    "Selecciona proceso para editar:",
+                    options=[p["id"] for p in procesos],
+                    format_func=lambda x: next(p["nombre"] for p in procesos if p["id"] == x),
+                    key="proc_sel"
+                )
+                proc = next(p for p in procesos if p["id"] == proc_sel)
 
-        ejec_res = sb6.table("ejecuciones").select("*").order("iniciado_at", desc=True).limit(50).execute()
-        ejecuciones = ejec_res.data or []
+                with st.expander(f"✏️ Editar proceso: {proc['nombre']}"):
+                    e1, e2 = st.columns([3, 1])
+                    edit_nombre = e1.text_input("Nombre:", value=proc["nombre"], key=f"ep_nom_{proc['id']}")
+                    edit_orden = e2.number_input("Orden:", value=int(proc.get("orden") or 0), key=f"ep_ord_{proc['id']}")
+                    edit_desc = st.text_input("Descripción:", value=proc.get("descripcion") or "", key=f"ep_desc_{proc['id']}")
+                    edit_activo = st.checkbox("Activo", value=proc.get("activo", True), key=f"ep_act_{proc['id']}")
+                    ec1, ec2 = st.columns(2)
+                    if ec1.button("💾 Guardar cambios", key=f"save_proc_{proc['id']}"):
+                        sb6.table("procesos").update({
+                            "nombre": edit_nombre,
+                            "descripcion": edit_desc or None,
+                            "orden": int(edit_orden),
+                            "activo": edit_activo
+                        }).eq("id", proc["id"]).execute()
+                        st.success("✅ Proceso actualizado")
+                        st.rerun()
+                    if ec2.button("🗑️ Eliminar proceso", key=f"del_proc_{proc['id']}"):
+                        st.session_state[f"confirm_del_proc_{proc['id']}"] = True
+                    if st.session_state.get(f"confirm_del_proc_{proc['id']}"):
+                        st.error(f"¿Eliminar '{proc['nombre']}' y todos sus pasos?")
+                        dc1, dc2 = st.columns(2)
+                        if dc1.button("✅ Sí, eliminar", key=f"yes_del_proc_{proc['id']}"):
+                            sb6.table("procesos").delete().eq("id", proc["id"]).execute()
+                            st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
+                            st.success("✅ Proceso eliminado")
+                            st.rerun()
+                        if dc2.button("❌ Cancelar", key=f"no_del_proc_{proc['id']}"):
+                            st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
+                            st.rerun()
 
-        emp_lookup = {e["id"]: e["nombre"] for e in (sb6.table("empleados").select("id, nombre").execute().data or [])}
-        proc_lookup = {p["id"]: p["nombre"] for p in (sb6.table("procesos").select("id, nombre").execute().data or [])}
+                st.markdown(f"### Pasos de: {proc['nombre']}")
 
-        if not ejecuciones:
-            st.info("Aún no hay ejecuciones registradas.")
-        else:
-            rows = []
-            for e in ejecuciones:
-                rows.append({
-                    "Fecha": pd.Timestamp(e["iniciado_at"]).strftime("%d/%m/%Y %H:%M"),
-                    "Empleado": emp_lookup.get(e["empleado_id"], "—"),
-                    "Proceso": proc_lookup.get(e["proceso_id"], "—"),
-                    "Completado": "✅" if e["completado"] else "⏳",
-                })
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
+                pasos = sorted(pasos_res.data or [], key=lambda p: p.get("orden", 0))
 
-            ejec_ids = {
-                f"{emp_lookup.get(e['empleado_id'],'?')} — {proc_lookup.get(e['proceso_id'],'?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"]
-                for e in ejecuciones
-            }
-            sel_ejec = st.selectbox("Ver detalle de ejecución:", list(ejec_ids.keys()), key="sel_ejec")
-            if sel_ejec:
-                ejec_id = ejec_ids[sel_ejec]
-                ep_res = sb6.table("ejecucion_pasos").select("*").eq("ejecucion_id", ejec_id).order("timestamp").execute()
-                ep_data = ep_res.data or []
-                paso_lookup = {p["id"]: p for p in (sb6.table("pasos").select("id, titulo, orden").execute().data or [])}
-                if ep_data:
-                    for ep in ep_data:
-                        estado = "✅ Hecho" if ep["estado"] == "hecho" else "⚠️ No pudo"
-                        paso = paso_lookup.get(ep["paso_id"], {})
-                        titulo = paso.get("titulo", "—")
-                        orden = paso.get("orden", "?")
-                        st.markdown(f"**{orden}. {titulo}** — {estado}")
-                        if ep.get("nota"):
-                            st.caption(f"📝 {ep['nota']}")
+                if "add_paso_counter" not in st.session_state:
+                    st.session_state.add_paso_counter = 0
+                counter = st.session_state.add_paso_counter
+
+                with st.expander("➕ Añadir paso"):
+                    pa1, pa2 = st.columns([3, 1])
+                    new_paso_titulo = pa1.text_input("Título del paso:", key=f"new_paso_titulo_{counter}")
+                    new_paso_orden = pa2.number_input("Orden:", value=len(pasos)+1, min_value=1, key=f"new_paso_orden_{counter}")
+                    new_paso_desc = st.text_area("Descripción (opcional):", key=f"new_paso_desc_{counter}", height=80)
+                    new_paso_foto_url = st.text_input("URL de foto (opcional):", key=f"new_paso_foto_{counter}", placeholder="https://...")
+                    new_paso_foto_file = st.file_uploader("O sube una foto:", type=["jpg","jpeg","png","webp"], key=f"new_paso_foto_file_{counter}")
+                    if new_paso_foto_file:
+                        st.image(new_paso_foto_file, width=200)
+                    if st.button("➕ Añadir paso", key=f"add_paso_{counter}"):
+                        if new_paso_titulo.strip():
+                            foto_url = new_paso_foto_url.strip() or None
+                            if new_paso_foto_file:
+                                try:
+                                    foto_url = upload_foto(sb6, new_paso_foto_file, f"{proc_sel}_{len(pasos)+1}")
+                                except Exception as e:
+                                    st.warning(f"No se pudo subir la foto: {e}")
+                            nuevo_orden = int(new_paso_orden)
+                            # Si el orden ya existe, correr hacia abajo los posteriores
+                            ordenes_existentes = [p["orden"] for p in pasos]
+                            if nuevo_orden in ordenes_existentes:
+                                pasos_a_mover = [p for p in pasos if p["orden"] >= nuevo_orden]
+                                for p in pasos_a_mover:
+                                    sb6.table("pasos").update({"orden": p["orden"] + 1}).eq("id", p["id"]).execute()
+                            sb6.table("pasos").insert({
+                                "proceso_id": proc_sel,
+                                "titulo": new_paso_titulo.strip(),
+                                "descripcion": new_paso_desc.strip() or None,
+                                "foto_url": foto_url,
+                                "orden": nuevo_orden,
+                            }).execute()
+                            st.session_state.add_paso_counter += 1
+                            st.success("✅ Paso añadido")
+                            st.rerun()
+                        else:
+                            st.warning("Escribe un título.")
+
+                if not pasos:
+                    st.info("Este proceso no tiene pasos. Añade uno arriba.")
                 else:
-                    st.info("No hay pasos registrados para esta ejecución.")
+                    for paso in pasos:
+                        with st.expander(f"**{paso['orden']}.** {paso['titulo']}"):
+                            sp1, sp2 = st.columns([3, 1])
+                            s_titulo = sp1.text_input("Título:", value=paso["titulo"], key=f"sp_tit_{paso['id']}")
+                            s_orden = sp2.number_input("Orden:", value=int(paso["orden"]), min_value=1, key=f"sp_ord_{paso['id']}")
+                            s_desc = st.text_area("Descripción:", value=paso.get("descripcion") or "", key=f"sp_desc_{paso['id']}", height=80)
+                            s_foto = st.text_input("URL foto:", value=paso.get("foto_url") or "", key=f"sp_foto_{paso['id']}")
+                            s_foto_file = st.file_uploader("O sube foto nueva:", type=["jpg","jpeg","png","webp"], key=f"sp_foto_file_{paso['id']}")
+                            if s_foto_file:
+                                st.image(s_foto_file, width=200)
+                                try:
+                                    s_foto = upload_foto(sb6, s_foto_file, str(paso['id']))
+                                    st.success("✅ Foto lista — pulsa Guardar para confirmar")
+                                except Exception as e:
+                                    st.warning(f"No se pudo subir: {e}")
+                            elif s_foto:
+                                st.image(s_foto, width=200)
+                            sc1, sc2 = st.columns(2)
+                            if sc1.button("💾 Guardar", key=f"save_paso_{paso['id']}"):
+                                sb6.table("pasos").update({
+                                    "titulo": s_titulo,
+                                    "descripcion": s_desc or None,
+                                    "foto_url": s_foto or None,
+                                    "orden": int(s_orden),
+                                }).eq("id", paso["id"]).execute()
+                                st.success("✅ Paso guardado")
+                                st.rerun()
+                            if sc2.button("🗑️ Eliminar", key=f"del_paso_{paso['id']}"):
+                                st.session_state[f"confirm_del_paso_{paso['id']}"] = True
+                            if st.session_state.get(f"confirm_del_paso_{paso['id']}"):
+                                st.warning(f"¿Eliminar el paso **{paso['titulo']}**? Esta acción no se puede deshacer.")
+                                dp1, dp2 = st.columns(2)
+                                if dp1.button("✅ Sí, eliminar", key=f"yes_del_paso_{paso['id']}"):
+                                    sb6.table("pasos").delete().eq("id", paso["id"]).execute()
+                                    st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
+                                    st.success("✅ Paso eliminado")
+                                    st.rerun()
+                                if dp2.button("❌ Cancelar", key=f"no_del_paso_{paso['id']}"):
+                                    st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
+                                    st.rerun()
 
+            st.divider()
+            st.markdown("### Historial de ejecuciones")
+
+            ejec_res = sb6.table("ejecuciones").select("*").order("iniciado_at", desc=True).limit(50).execute()
+            ejecuciones = ejec_res.data or []
+
+            emp_lookup = {e["id"]: e["nombre"] for e in (sb6.table("empleados").select("id, nombre").execute().data or [])}
+            proc_lookup = {p["id"]: p["nombre"] for p in (sb6.table("procesos").select("id, nombre").execute().data or [])}
+
+            if not ejecuciones:
+                st.info("Aún no hay ejecuciones registradas.")
+            else:
+                rows = []
+                for e in ejecuciones:
+                    rows.append({
+                        "Fecha": pd.Timestamp(e["iniciado_at"]).strftime("%d/%m/%Y %H:%M"),
+                        "Empleado": emp_lookup.get(e["empleado_id"], "—"),
+                        "Proceso": proc_lookup.get(e["proceso_id"], "—"),
+                        "Completado": "✅" if e["completado"] else "⏳",
+                    })
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+                ejec_ids = {
+                    f"{emp_lookup.get(e['empleado_id'],'?')} — {proc_lookup.get(e['proceso_id'],'?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"]
+                    for e in ejecuciones
+                }
+                sel_ejec = st.selectbox("Ver detalle de ejecución:", list(ejec_ids.keys()), key="sel_ejec")
+                if sel_ejec:
+                    ejec_id = ejec_ids[sel_ejec]
+                    ep_res = sb6.table("ejecucion_pasos").select("*").eq("ejecucion_id", ejec_id).order("timestamp").execute()
+                    ep_data = ep_res.data or []
+                    paso_lookup = {p["id"]: p for p in (sb6.table("pasos").select("id, titulo, orden").execute().data or [])}
+                    if ep_data:
+                        for ep in ep_data:
+                            estado = "✅ Hecho" if ep["estado"] == "hecho" else "⚠️ No pudo"
+                            paso = paso_lookup.get(ep["paso_id"], {})
+                            titulo = paso.get("titulo", "—")
+                            orden = paso.get("orden", "?")
+                            st.markdown(f"**{orden}. {titulo}** — {estado}")
+                            if ep.get("nota"):
+                                st.caption(f"📝 {ep['nota']}")
+                    else:
+                        st.info("No hay pasos registrados para esta ejecución.")
+
+        _frag_seccion_2()
     # ── TAB 7: Pedidos ──────────────────────────────────────
     if nav == "🛍️ Pedidos":
-        import datetime as dt_mod
-        sb7 = get_supabase()
-        st.markdown("### Pedidos")
+        @st.fragment
+        def _frag_seccion_3():
+            import datetime as dt_mod
+            sb7 = get_supabase()
+            st.markdown("### Pedidos")
 
-        # Auto-enviar email de recepción a pedidos solicitados sin email enviado
-        cfg_p = sb7.table("config").select("*").execute()
-        cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
+            # Auto-enviar email de recepción a pedidos solicitados sin email enviado
+            cfg_p = sb7.table("config").select("*").execute()
+            cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
 
-        # ── Auto-emails: detecta cambios de estado pendientes de notificar ──
-        # 1) Pedidos recién recibidos (solicitado, sin email_recibido_ok)
-        nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
-        # 2) Pedidos aceptados (pendiente/preparando/listo/entregado, sin email_confirmacion_ok)
-        aceptados_ped = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo","entregado"]).eq("email_confirmacion_ok", False).execute().data or []
-        # 2b) Pedidos en estado listo (sin email_listo_ok)
-        listos_ped = sb7.table("pedidos").select("*").eq("estado","listo").eq("email_listo_ok", False).execute().data or []
-        # 3) Pedidos rechazados (sin email_rechazo_ok)
-        rechazados_ped = sb7.table("pedidos").select("*").eq("estado","rechazado").eq("email_rechazo_ok", False).execute().data or []
-        # 4) Pedidos cancelados (sin email_cancelacion_ok)
-        cancelados_ped = sb7.table("pedidos").select("*").eq("estado","cancelado").eq("email_cancelacion_ok", False).execute().data or []
+            # ── Auto-emails: detecta cambios de estado pendientes de notificar ──
+            # 1) Pedidos recién recibidos (solicitado, sin email_recibido_ok)
+            nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
+            # 2) Pedidos aceptados (pendiente/preparando/listo/entregado, sin email_confirmacion_ok)
+            aceptados_ped = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo","entregado"]).eq("email_confirmacion_ok", False).execute().data or []
+            # 2b) Pedidos en estado listo (sin email_listo_ok)
+            listos_ped = sb7.table("pedidos").select("*").eq("estado","listo").eq("email_listo_ok", False).execute().data or []
+            # 3) Pedidos rechazados (sin email_rechazo_ok)
+            rechazados_ped = sb7.table("pedidos").select("*").eq("estado","rechazado").eq("email_rechazo_ok", False).execute().data or []
+            # 4) Pedidos cancelados (sin email_cancelacion_ok)
+            cancelados_ped = sb7.table("pedidos").select("*").eq("estado","cancelado").eq("email_cancelacion_ok", False).execute().data or []
 
-        # Bulk de items para todos los pedidos que necesitan emails
-        todos_ids_email = [p["id"] for p in (nuevos_ped + aceptados_ped + listos_ped + rechazados_ped + cancelados_ped)]
-        items_email_por_id = {}
-        if todos_ids_email:
-            items_bulk_email = sb7.table("pedido_items").select("*").in_("pedido_id", todos_ids_email).execute().data or []
-            for it in items_bulk_email:
-                items_email_por_id.setdefault(it["pedido_id"], []).append(it)
+            # Bulk de items para todos los pedidos que necesitan emails
+            todos_ids_email = [p["id"] for p in (nuevos_ped + aceptados_ped + listos_ped + rechazados_ped + cancelados_ped)]
+            items_email_por_id = {}
+            if todos_ids_email:
+                items_bulk_email = sb7.table("pedido_items").select("*").in_("pedido_id", todos_ids_email).execute().data or []
+                for it in items_bulk_email:
+                    items_email_por_id.setdefault(it["pedido_id"], []).append(it)
 
-        emails_enviados_count = 0
+            emails_enviados_count = 0
 
-        for np_ in nuevos_ped:
-            if np_.get("email"):
-                items_np = items_email_por_id.get(np_["id"], [])
-                if enviar_email_pedido_recibido(np_, items_np, cfg_ped):
+            for np_ in nuevos_ped:
+                if np_.get("email"):
+                    items_np = items_email_por_id.get(np_["id"], [])
+                    if enviar_email_pedido_recibido(np_, items_np, cfg_ped):
+                        sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
+                        emails_enviados_count += 1
+                else:
+                    # sin email del cliente — marcar como "no aplica" para no reintentar
                     sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
-                    emails_enviados_count += 1
-            else:
-                # sin email del cliente — marcar como "no aplica" para no reintentar
-                sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
 
-        for ap in aceptados_ped:
-            if ap.get("email"):
-                items_ap = items_email_por_id.get(ap["id"], [])
-                if enviar_email_pedido_aceptado(ap, items_ap, cfg_ped):
+            for ap in aceptados_ped:
+                if ap.get("email"):
+                    items_ap = items_email_por_id.get(ap["id"], [])
+                    if enviar_email_pedido_aceptado(ap, items_ap, cfg_ped):
+                        sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
+                        emails_enviados_count += 1
+                else:
                     sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
-                    emails_enviados_count += 1
-            else:
-                sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
 
-        for lp in listos_ped:
-            if lp.get("email"):
-                items_lp = items_email_por_id.get(lp["id"], [])
-                if enviar_email_pedido_listo(lp, items_lp, cfg_ped):
+            for lp in listos_ped:
+                if lp.get("email"):
+                    items_lp = items_email_por_id.get(lp["id"], [])
+                    if enviar_email_pedido_listo(lp, items_lp, cfg_ped):
+                        sb7.table("pedidos").update({"email_listo_ok": True}).eq("id", lp["id"]).execute()
+                        emails_enviados_count += 1
+                else:
                     sb7.table("pedidos").update({"email_listo_ok": True}).eq("id", lp["id"]).execute()
-                    emails_enviados_count += 1
-            else:
-                sb7.table("pedidos").update({"email_listo_ok": True}).eq("id", lp["id"]).execute()
 
-        for rp in rechazados_ped:
-            if rp.get("email"):
-                items_rp = items_email_por_id.get(rp["id"], [])
-                if enviar_email_pedido_rechazado(rp, items_rp, cfg_ped):
+            for rp in rechazados_ped:
+                if rp.get("email"):
+                    items_rp = items_email_por_id.get(rp["id"], [])
+                    if enviar_email_pedido_rechazado(rp, items_rp, cfg_ped):
+                        sb7.table("pedidos").update({"email_rechazo_ok": True}).eq("id", rp["id"]).execute()
+                        emails_enviados_count += 1
+                else:
                     sb7.table("pedidos").update({"email_rechazo_ok": True}).eq("id", rp["id"]).execute()
-                    emails_enviados_count += 1
-            else:
-                sb7.table("pedidos").update({"email_rechazo_ok": True}).eq("id", rp["id"]).execute()
 
-        for cp in cancelados_ped:
-            if cp.get("email"):
-                items_cp = items_email_por_id.get(cp["id"], [])
-                if enviar_email_pedido_cancelado(cp, items_cp, cfg_ped):
+            for cp in cancelados_ped:
+                if cp.get("email"):
+                    items_cp = items_email_por_id.get(cp["id"], [])
+                    if enviar_email_pedido_cancelado(cp, items_cp, cfg_ped):
+                        sb7.table("pedidos").update({"email_cancelacion_ok": True}).eq("id", cp["id"]).execute()
+                        emails_enviados_count += 1
+                else:
                     sb7.table("pedidos").update({"email_cancelacion_ok": True}).eq("id", cp["id"]).execute()
-                    emails_enviados_count += 1
-            else:
-                sb7.table("pedidos").update({"email_cancelacion_ok": True}).eq("id", cp["id"]).execute()
 
-        if emails_enviados_count > 0:
-            st.toast(f"📧 {emails_enviados_count} email{'s' if emails_enviados_count!=1 else ''} enviado{'s' if emails_enviados_count!=1 else ''} automáticamente")
+            if emails_enviados_count > 0:
+                st.toast(f"📧 {emails_enviados_count} email{'s' if emails_enviados_count!=1 else ''} enviado{'s' if emails_enviados_count!=1 else ''} automáticamente")
 
-        ped_sub1, ped_sub2, ped_sub3 = st.tabs(["📥 Solicitados", "🔥 Activos", "📋 Todos"])
+            ped_sub1, ped_sub2, ped_sub3 = st.tabs(["📥 Solicitados", "🔥 Activos", "📋 Todos"])
 
-        def _items_de(pedido_id, items_por_pedido):
-            return items_por_pedido.get(pedido_id, [])
+            def _items_de(pedido_id, items_por_pedido):
+                return items_por_pedido.get(pedido_id, [])
 
-        def _bulk_items(pedido_ids):
-            """Trae todos los items de una lista de pedido_ids en una sola query, agrupados por pedido_id."""
-            if not pedido_ids:
-                return {}
-            res = sb7.table("pedido_items").select("*").in_("pedido_id", pedido_ids).execute().data or []
-            grupos = {}
-            for it in res:
-                grupos.setdefault(it["pedido_id"], []).append(it)
-            return grupos
+            def _bulk_items(pedido_ids):
+                """Trae todos los items de una lista de pedido_ids en una sola query, agrupados por pedido_id."""
+                if not pedido_ids:
+                    return {}
+                res = sb7.table("pedido_items").select("*").in_("pedido_id", pedido_ids).execute().data or []
+                grupos = {}
+                for it in res:
+                    grupos.setdefault(it["pedido_id"], []).append(it)
+                return grupos
 
-        def _render_pedido_completo(ped, items_res):
-            productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-            c1, c2 = st.columns(2)
-            c1.markdown(f"**Nombre:** {ped['nombre']}")
-            c1.markdown(f"**Teléfono:** {ped['telefono']}")
-            c1.markdown(f"**Email:** {ped.get('email') or '—'}")
-            c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
-            c2.markdown(f"**Total:** €{float(ped['total']):.2f}")
-            c2.markdown(f"**Estado:** {ped['estado']}")
-            c2.markdown(f"**Solicitado:** {pd.Timestamp(ped['creado_at']).strftime('%d/%m/%Y %H:%M')}")
-            if ped.get("notas"):
-                st.markdown(f"**Notas:** {ped['notas']}")
-            st.markdown(f"**Productos:** {productos_str}")
+            def _render_pedido_completo(ped, items_res):
+                productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+                c1, c2 = st.columns(2)
+                c1.markdown(f"**Nombre:** {ped['nombre']}")
+                c1.markdown(f"**Teléfono:** {ped['telefono']}")
+                c1.markdown(f"**Email:** {ped.get('email') or '—'}")
+                c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
+                c2.markdown(f"**Total:** €{float(ped['total']):.2f}")
+                c2.markdown(f"**Estado:** {ped['estado']}")
+                c2.markdown(f"**Solicitado:** {pd.Timestamp(ped['creado_at']).strftime('%d/%m/%Y %H:%M')}")
+                if ped.get("notas"):
+                    st.markdown(f"**Notas:** {ped['notas']}")
+                st.markdown(f"**Productos:** {productos_str}")
 
-        # ─── SOLICITADOS — aceptar/rechazar ───
-        with ped_sub1:
-            solicitados = sb7.table("pedidos").select("*").eq("estado","solicitado").order("creado_at", desc=True).execute().data or []
-            if not solicitados:
-                st.info("No hay pedidos pendientes de aceptar.")
-            else:
-                st.caption(f"{len(solicitados)} pedido{'s' if len(solicitados)!=1 else ''} esperando tu aprobación.")
-                items_bulk_s = _bulk_items([p["id"] for p in solicitados])
-                for ped in solicitados:
-                    items_res = items_bulk_s.get(ped["id"], [])
-                    productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-                    with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%H:%M')}", expanded=True):
-                        st.caption(_kds_recibido_badge(ped))
-                        _render_pedido_completo(ped, items_res)
-                        st.markdown("")
-                        ac1, ac2 = st.columns(2)
-                        if ac1.button("✅ Aceptar pedido", key=f"acept_{ped['id']}", type="primary", use_container_width=True):
-                            sb7.table("pedidos").update({"estado": "pendiente"}).eq("id", ped["id"]).execute()
-                            st.success(f"✅ Pedido #{ped['id']} aceptado")
-                            st.rerun()
-                        if ac2.button("❌ Rechazar", key=f"rechazar_{ped['id']}", use_container_width=True):
-                            st.session_state[f"confirm_rechazar_{ped['id']}"] = True
-                        if st.session_state.get(f"confirm_rechazar_{ped['id']}"):
-                            st.warning(f"¿Rechazar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
-                            motivo_bo = st.text_input(
-                                "✉️ Mensaje para el cliente (opcional) — se enviará tal cual como motivo del rechazo:",
-                                key=f"motivo_rechazar_{ped['id']}")
-                            yc, nc = st.columns(2)
-                            if yc.button("✅ Sí, rechazar", key=f"yes_rechazar_{ped['id']}"):
-                                upd = {"estado": "rechazado"}
-                                if motivo_bo.strip():
-                                    upd["motivo_rechazo_tipo"] = "otro"
-                                    upd["motivo_rechazo"] = motivo_bo.strip()
-                                sb7.table("pedidos").update(upd).eq("id", ped["id"]).execute()
-                                st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
-                                st.success("❌ Pedido rechazado")
-                                st.rerun()
-                            if nc.button("Cancelar", key=f"no_rechazar_{ped['id']}"):
-                                st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
-                                st.rerun()
-
-        # ─── ACTIVOS — solo ver estado + cancelar ───
-        with ped_sub2:
-            activos = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo"]).order("creado_at", desc=True).execute().data or []
-            if not activos:
-                st.info("No hay pedidos activos en cocina.")
-            else:
-                st.caption(f"{len(activos)} pedido{'s' if len(activos)!=1 else ''} en curso. El estado se gestiona desde el KDS.")
-                estado_emoji = {"pendiente":"🔴 Pendiente","preparando":"🟡 Preparando","listo":"🟢 Listo"}
-                items_bulk_a = _bulk_items([p["id"] for p in activos])
-                for ped in activos:
-                    items_res = items_bulk_a.get(ped["id"], [])
-                    with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']}"):
-                        st.caption(_kds_recibido_badge(ped))
-                        _render_pedido_completo(ped, items_res)
-                        st.markdown("")
-                        st.caption("Para mover entre estados (pendiente → preparando → listo → entregado) usa el KDS.")
-                        if st.button("🚫 Cancelar pedido", key=f"cancel_active_{ped['id']}"):
-                            st.session_state[f"confirm_cancel_active_{ped['id']}"] = True
-                        if st.session_state.get(f"confirm_cancel_active_{ped['id']}"):
-                            st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
-                            yc2, nc2 = st.columns(2)
-                            if yc2.button("✅ Sí, cancelar", key=f"yes_cancel_active_{ped['id']}"):
-                                sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
-                                st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
-                                st.success("🚫 Cancelado")
-                                st.rerun()
-                            if nc2.button("No", key=f"no_cancel_active_{ped['id']}"):
-                                st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
-                                st.rerun()
-
-        # ─── TODOS — vista histórica con filtro ───
-        with ped_sub3:
-            col_filt_p, col_del_p = st.columns([3, 1])
-            filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Solicitados", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados", "Rechazados"], key="filtro_ped")
-            filtro_map = {"Todos": None, "Esperando pago": "esperando_pago", "Solicitados": "solicitado", "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado", "Rechazados": "rechazado"}
-
-            if col_del_p.button("🗑️ Borrar finalizados", key="del_finalizados_ped", help="Borra cancelados, rechazados y entregados de más de 7 días"):
-                st.session_state["confirm_del_finalizados"] = True
-            if st.session_state.get("confirm_del_finalizados"):
-                st.warning("¿Borrar pedidos cancelados, rechazados y entregados de más de 7 días? No se puede deshacer.")
-                df1, df2 = st.columns(2)
-                if df1.button("✅ Sí", key="yes_del_finalizados"):
-                    sb7.table("pedido_items").delete().in_("pedido_id", [p["id"] for p in (sb7.table("pedidos").select("id").in_("estado",["cancelado","rechazado"]).execute().data or [])]).execute()
-                    sb7.table("pedidos").delete().in_("estado", ["cancelado","rechazado"]).execute()
-                    hace7 = (dt_mod.datetime.now() - dt_mod.timedelta(days=7)).isoformat()
-                    old_entreg = sb7.table("pedidos").select("id").eq("estado","entregado").lt("creado_at", hace7).execute().data or []
-                    if old_entreg:
-                        sb7.table("pedido_items").delete().in_("pedido_id", [p["id"] for p in old_entreg]).execute()
-                        sb7.table("pedidos").delete().eq("estado","entregado").lt("creado_at", hace7).execute()
-                    st.session_state.pop("confirm_del_finalizados", None)
-                    st.success("✅ Limpieza completada")
-                    st.rerun()
-                if df2.button("❌", key="no_del_finalizados"):
-                    st.session_state.pop("confirm_del_finalizados", None)
-                    st.rerun()
-
-            q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
-            if filtro_map[filtro_ped]:
-                q = q.eq("estado", filtro_map[filtro_ped])
-            pedidos = q.limit(100).execute().data or []
-            
-            if not pedidos:
-                st.info("No hay pedidos con ese filtro.")
-            else:
-                items_bulk_t = _bulk_items([p["id"] for p in pedidos])
-                for ped in pedidos:
-                    items_res = items_bulk_t.get(ped["id"], [])
-                    productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-                    estado = ped["estado"]
-                    color_map = {"esperando_pago":"💳⏳","solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
-                    icono = color_map.get(estado, "⚪")
-                    with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
-                        st.caption(_kds_recibido_badge(ped))
-                        _render_pedido_completo(ped, items_res)
-                        # Botón cancelar solo para estados activos (no para cancelado/rechazado/entregado)
-                        if estado in ["solicitado", "pendiente", "preparando", "listo"]:
+            # ─── SOLICITADOS — aceptar/rechazar ───
+            with ped_sub1:
+                solicitados = sb7.table("pedidos").select("*").eq("estado","solicitado").order("creado_at", desc=True).execute().data or []
+                if not solicitados:
+                    st.info("No hay pedidos pendientes de aceptar.")
+                else:
+                    st.caption(f"{len(solicitados)} pedido{'s' if len(solicitados)!=1 else ''} esperando tu aprobación.")
+                    items_bulk_s = _bulk_items([p["id"] for p in solicitados])
+                    for ped in solicitados:
+                        items_res = items_bulk_s.get(ped["id"], [])
+                        productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+                        with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%H:%M')}", expanded=True):
+                            st.caption(_kds_recibido_badge(ped))
+                            _render_pedido_completo(ped, items_res)
                             st.markdown("")
-                            if st.button("🚫 Cancelar pedido", key=f"cancel_todos_{ped['id']}"):
-                                st.session_state[f"confirm_cancel_todos_{ped['id']}"] = True
-                            if st.session_state.get(f"confirm_cancel_todos_{ped['id']}"):
+                            ac1, ac2 = st.columns(2)
+                            if ac1.button("✅ Aceptar pedido", key=f"acept_{ped['id']}", type="primary", use_container_width=True):
+                                sb7.table("pedidos").update({"estado": "pendiente"}).eq("id", ped["id"]).execute()
+                                st.success(f"✅ Pedido #{ped['id']} aceptado")
+                                st.rerun()
+                            if ac2.button("❌ Rechazar", key=f"rechazar_{ped['id']}", use_container_width=True):
+                                st.session_state[f"confirm_rechazar_{ped['id']}"] = True
+                            if st.session_state.get(f"confirm_rechazar_{ped['id']}"):
+                                st.warning(f"¿Rechazar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
+                                motivo_bo = st.text_input(
+                                    "✉️ Mensaje para el cliente (opcional) — se enviará tal cual como motivo del rechazo:",
+                                    key=f"motivo_rechazar_{ped['id']}")
+                                yc, nc = st.columns(2)
+                                if yc.button("✅ Sí, rechazar", key=f"yes_rechazar_{ped['id']}"):
+                                    upd = {"estado": "rechazado"}
+                                    if motivo_bo.strip():
+                                        upd["motivo_rechazo_tipo"] = "otro"
+                                        upd["motivo_rechazo"] = motivo_bo.strip()
+                                    sb7.table("pedidos").update(upd).eq("id", ped["id"]).execute()
+                                    st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
+                                    st.success("❌ Pedido rechazado")
+                                    st.rerun()
+                                if nc.button("Cancelar", key=f"no_rechazar_{ped['id']}"):
+                                    st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
+                                    st.rerun()
+
+            # ─── ACTIVOS — solo ver estado + cancelar ───
+            with ped_sub2:
+                activos = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo"]).order("creado_at", desc=True).execute().data or []
+                if not activos:
+                    st.info("No hay pedidos activos en cocina.")
+                else:
+                    st.caption(f"{len(activos)} pedido{'s' if len(activos)!=1 else ''} en curso. El estado se gestiona desde el KDS.")
+                    estado_emoji = {"pendiente":"🔴 Pendiente","preparando":"🟡 Preparando","listo":"🟢 Listo"}
+                    items_bulk_a = _bulk_items([p["id"] for p in activos])
+                    for ped in activos:
+                        items_res = items_bulk_a.get(ped["id"], [])
+                        with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']}"):
+                            st.caption(_kds_recibido_badge(ped))
+                            _render_pedido_completo(ped, items_res)
+                            st.markdown("")
+                            st.caption("Para mover entre estados (pendiente → preparando → listo → entregado) usa el KDS.")
+                            if st.button("🚫 Cancelar pedido", key=f"cancel_active_{ped['id']}"):
+                                st.session_state[f"confirm_cancel_active_{ped['id']}"] = True
+                            if st.session_state.get(f"confirm_cancel_active_{ped['id']}"):
                                 st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
-                                yc3, nc3 = st.columns(2)
-                                if yc3.button("✅ Sí, cancelar", key=f"yes_cancel_todos_{ped['id']}"):
+                                yc2, nc2 = st.columns(2)
+                                if yc2.button("✅ Sí, cancelar", key=f"yes_cancel_active_{ped['id']}"):
                                     sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
-                                    st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
+                                    st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
                                     st.success("🚫 Cancelado")
                                     st.rerun()
-                                if nc3.button("No", key=f"no_cancel_todos_{ped['id']}"):
-                                    st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
+                                if nc2.button("No", key=f"no_cancel_active_{ped['id']}"):
+                                    st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
                                     st.rerun()
 
-                        # Botón "Borrar sin email" — disponible en TODOS los estados
-                        st.markdown("")
-                        st.caption("⚠️ Uso administrativo — no notifica al cliente")
-                        if st.button("🗑️ Borrar pedido (sin enviar email)", key=f"delete_silent_{ped['id']}"):
-                            st.session_state[f"confirm_del_silent_{ped['id']}"] = True
-                        if st.session_state.get(f"confirm_del_silent_{ped['id']}"):
-                            st.error(f"⚠️ ¿Borrar el pedido de **{ped['nombre']}** (€{float(ped['total']):.2f}) SIN notificar al cliente? Esto no se puede deshacer.")
-                            yds, nds = st.columns(2)
-                            if yds.button("✅ Sí, borrar silenciosamente", key=f"yes_del_silent_{ped['id']}"):
-                                sb7.table("pedido_items").delete().eq("pedido_id", ped["id"]).execute()
-                                sb7.table("pedidos").delete().eq("id", ped["id"]).execute()
-                                st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
-                                st.success(f"🗑️ Pedido #{ped['id']} borrado (sin notificar)")
-                                st.rerun()
-                            if nds.button("No", key=f"no_del_silent_{ped['id']}"):
-                                st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
-                                st.rerun()
+            # ─── TODOS — vista histórica con filtro ───
+            with ped_sub3:
+                col_filt_p, col_del_p = st.columns([3, 1])
+                filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Solicitados", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados", "Rechazados"], key="filtro_ped")
+                filtro_map = {"Todos": None, "Esperando pago": "esperando_pago", "Solicitados": "solicitado", "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado", "Rechazados": "rechazado"}
 
+                if col_del_p.button("🗑️ Borrar finalizados", key="del_finalizados_ped", help="Borra cancelados, rechazados y entregados de más de 7 días"):
+                    st.session_state["confirm_del_finalizados"] = True
+                if st.session_state.get("confirm_del_finalizados"):
+                    st.warning("¿Borrar pedidos cancelados, rechazados y entregados de más de 7 días? No se puede deshacer.")
+                    df1, df2 = st.columns(2)
+                    if df1.button("✅ Sí", key="yes_del_finalizados"):
+                        sb7.table("pedido_items").delete().in_("pedido_id", [p["id"] for p in (sb7.table("pedidos").select("id").in_("estado",["cancelado","rechazado"]).execute().data or [])]).execute()
+                        sb7.table("pedidos").delete().in_("estado", ["cancelado","rechazado"]).execute()
+                        hace7 = (dt_mod.datetime.now() - dt_mod.timedelta(days=7)).isoformat()
+                        old_entreg = sb7.table("pedidos").select("id").eq("estado","entregado").lt("creado_at", hace7).execute().data or []
+                        if old_entreg:
+                            sb7.table("pedido_items").delete().in_("pedido_id", [p["id"] for p in old_entreg]).execute()
+                            sb7.table("pedidos").delete().eq("estado","entregado").lt("creado_at", hace7).execute()
+                        st.session_state.pop("confirm_del_finalizados", None)
+                        st.success("✅ Limpieza completada")
+                        st.rerun()
+                    if df2.button("❌", key="no_del_finalizados"):
+                        st.session_state.pop("confirm_del_finalizados", None)
+                        st.rerun()
+
+                q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
+                if filtro_map[filtro_ped]:
+                    q = q.eq("estado", filtro_map[filtro_ped])
+                pedidos = q.limit(100).execute().data or []
+            
+                if not pedidos:
+                    st.info("No hay pedidos con ese filtro.")
+                else:
+                    items_bulk_t = _bulk_items([p["id"] for p in pedidos])
+                    for ped in pedidos:
+                        items_res = items_bulk_t.get(ped["id"], [])
+                        productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
+                        estado = ped["estado"]
+                        color_map = {"esperando_pago":"💳⏳","solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
+                        icono = color_map.get(estado, "⚪")
+                        with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
+                            st.caption(_kds_recibido_badge(ped))
+                            _render_pedido_completo(ped, items_res)
+                            # Botón cancelar solo para estados activos (no para cancelado/rechazado/entregado)
+                            if estado in ["solicitado", "pendiente", "preparando", "listo"]:
+                                st.markdown("")
+                                if st.button("🚫 Cancelar pedido", key=f"cancel_todos_{ped['id']}"):
+                                    st.session_state[f"confirm_cancel_todos_{ped['id']}"] = True
+                                if st.session_state.get(f"confirm_cancel_todos_{ped['id']}"):
+                                    st.warning(f"¿Cancelar pedido de **{ped['nombre']}**? Se enviará un email automáticamente.")
+                                    yc3, nc3 = st.columns(2)
+                                    if yc3.button("✅ Sí, cancelar", key=f"yes_cancel_todos_{ped['id']}"):
+                                        sb7.table("pedidos").update({"estado": "cancelado"}).eq("id", ped["id"]).execute()
+                                        st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
+                                        st.success("🚫 Cancelado")
+                                        st.rerun()
+                                    if nc3.button("No", key=f"no_cancel_todos_{ped['id']}"):
+                                        st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
+                                        st.rerun()
+
+                            # Botón "Borrar sin email" — disponible en TODOS los estados
+                            st.markdown("")
+                            st.caption("⚠️ Uso administrativo — no notifica al cliente")
+                            if st.button("🗑️ Borrar pedido (sin enviar email)", key=f"delete_silent_{ped['id']}"):
+                                st.session_state[f"confirm_del_silent_{ped['id']}"] = True
+                            if st.session_state.get(f"confirm_del_silent_{ped['id']}"):
+                                st.error(f"⚠️ ¿Borrar el pedido de **{ped['nombre']}** (€{float(ped['total']):.2f}) SIN notificar al cliente? Esto no se puede deshacer.")
+                                yds, nds = st.columns(2)
+                                if yds.button("✅ Sí, borrar silenciosamente", key=f"yes_del_silent_{ped['id']}"):
+                                    sb7.table("pedido_items").delete().eq("pedido_id", ped["id"]).execute()
+                                    sb7.table("pedidos").delete().eq("id", ped["id"]).execute()
+                                    st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
+                                    st.success(f"🗑️ Pedido #{ped['id']} borrado (sin notificar)")
+                                    st.rerun()
+                                if nds.button("No", key=f"no_del_silent_{ped['id']}"):
+                                    st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
+                                    st.rerun()
+
+        _frag_seccion_3()
     # ── TAB 8: Reservas ─────────────────────────────────────
     if nav == "🍽️ Reservas":
-        import datetime as dt_mod
-        sb8 = get_supabase()
-        st.markdown("### Reservas")
+        @st.fragment
+        def _frag_seccion_4():
+            import datetime as dt_mod
+            sb8 = get_supabase()
+            st.markdown("### Reservas")
 
-        # Los emails de reservas (recibida/confirmada/rechazada/cancelada) los envía
-        # automáticamente la Edge Function `send-reserva-email` vía Database Webhook.
-        cfg_res = sb8.table("config").select("*").execute()
-        cfg_email = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
+            # Los emails de reservas (recibida/confirmada/rechazada/cancelada) los envía
+            # automáticamente la Edge Function `send-reserva-email` vía Database Webhook.
+            cfg_res = sb8.table("config").select("*").execute()
+            cfg_email = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
 
-        res_subtab1, res_subtab2, res_subtab3 = st.tabs(["📆 Próximas", "🗓️ Calendario", "📋 Lista completa"])
+            res_subtab1, res_subtab2, res_subtab3 = st.tabs(["📆 Próximas", "🗓️ Calendario", "📋 Lista completa"])
 
-        def _cambiar_estado_reserva(res, est, sb_ref, cfg_email_ref, key_suffix=""):
-            """Helper reutilizable para cambiar estado + enviar email."""
-            estado_actual = res["estado"]
-            if est == estado_actual:
-                st.markdown(f"<div style='text-align:center;padding:8px;background:rgba(34,197,94,0.1);color:#22C55E;border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
-                return
-            if est == "cancelada":
-                if st.button("Cancelada", key=f"cancel_{key_suffix}_{res['id']}"):
-                    st.session_state[f"confirm_cancel_{key_suffix}_{res['id']}"] = True
-                if st.session_state.get(f"confirm_cancel_{key_suffix}_{res['id']}"):
-                    st.warning(f"¿Cancelar reserva de **{res['nombre']}**? Se enviará email al cliente.")
-                    yc, nc = st.columns(2)
-                    if yc.button("✅ Sí", key=f"yes_cancel_{key_suffix}_{res['id']}"):
-                        sb_ref.table("reservas").update({"estado": "cancelada"}).eq("id", res["id"]).execute()
-                        st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
-                        st.success("✅ Cancelada · El email se envía automáticamente")
+            def _cambiar_estado_reserva(res, est, sb_ref, cfg_email_ref, key_suffix=""):
+                """Helper reutilizable para cambiar estado + enviar email."""
+                estado_actual = res["estado"]
+                if est == estado_actual:
+                    st.markdown(f"<div style='text-align:center;padding:8px;background:rgba(34,197,94,0.1);color:#22C55E;border-radius:6px;font-size:13px;'>{est.capitalize()} ✓</div>", unsafe_allow_html=True)
+                    return
+                if est == "cancelada":
+                    if st.button("Cancelada", key=f"cancel_{key_suffix}_{res['id']}"):
+                        st.session_state[f"confirm_cancel_{key_suffix}_{res['id']}"] = True
+                    if st.session_state.get(f"confirm_cancel_{key_suffix}_{res['id']}"):
+                        st.warning(f"¿Cancelar reserva de **{res['nombre']}**? Se enviará email al cliente.")
+                        yc, nc = st.columns(2)
+                        if yc.button("✅ Sí", key=f"yes_cancel_{key_suffix}_{res['id']}"):
+                            sb_ref.table("reservas").update({"estado": "cancelada"}).eq("id", res["id"]).execute()
+                            st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
+                            st.success("✅ Cancelada · El email se envía automáticamente")
+                            st.rerun()
+                        if nc.button("❌ No", key=f"no_cancel_{key_suffix}_{res['id']}"):
+                            st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
+                            st.rerun()
+                else:
+                    if st.button(est.capitalize(), key=f"chg_{key_suffix}_{res['id']}_{est}"):
+                        sb_ref.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
+                        if est == "confirmada" and res.get("email"):
+                            st.success("✅ Confirmada · El email se envía automáticamente")
+                        else:
+                            st.success(f"✅ → {est}")
                         st.rerun()
-                    if nc.button("❌ No", key=f"no_cancel_{key_suffix}_{res['id']}"):
-                        st.session_state.pop(f"confirm_cancel_{key_suffix}_{res['id']}", None)
-                        st.rerun()
-            else:
-                if st.button(est.capitalize(), key=f"chg_{key_suffix}_{res['id']}_{est}"):
-                    sb_ref.table("reservas").update({"estado": est}).eq("id", res["id"]).execute()
-                    if est == "confirmada" and res.get("email"):
-                        st.success("✅ Confirmada · El email se envía automáticamente")
+
+            # ── SUBTAB: PRÓXIMAS ──
+            with res_subtab1:
+                hoy_r = hoy_madrid()
+                todas_res = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(hoy_r)).order("fecha").order("hora").execute().data or []
+
+                grupos = {}
+                for r in todas_res:
+                    fecha_r = dt_mod.date.fromisoformat(r["fecha"])
+                    dias_dif = (fecha_r - hoy_r).days
+                    if dias_dif == 0:
+                        label = "📅 Hoy"
+                    elif dias_dif == 1:
+                        label = "📅 Mañana"
+                    elif dias_dif < 7:
+                        dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+                        label = f"📅 {dias_es[fecha_r.weekday()]} {fecha_r.strftime('%d/%m')}"
                     else:
-                        st.success(f"✅ → {est}")
+                        label = f"📅 {fecha_r.strftime('%d/%m/%Y')}"
+                    grupos.setdefault((dias_dif, label), []).append(r)
+
+                if not grupos:
+                    st.info("No hay próximas reservas.")
+                else:
+                    for (dias_dif, label), res_grupo in sorted(grupos.items()):
+                        st.markdown(f"#### {label} · {len(res_grupo)} reserva{'s' if len(res_grupo)!=1 else ''}")
+                        for res in res_grupo:
+                            estado = res["estado"]
+                            icono = {"pendiente":"🔴","confirmada":"🟢"}.get(estado, "⚪")
+                            with st.expander(f"{icono} {res['hora']} · {res['nombre']} · {res['personas']} pax"):
+                                st.caption(_kds_recibido_badge(res))
+                                c1, c2 = st.columns(2)
+                                c1.markdown(f"**Teléfono:** {res['telefono']}")
+                                c1.markdown(f"**Email:** {res.get('email') or '—'}")
+                                c2.markdown(f"**Estado:** {estado}")
+                                if res.get("notas"):
+                                    st.markdown(f"**Notas:** {res['notas']}")
+                                st.markdown("**Cambiar estado:**")
+                                pc1, pc2, pc3 = st.columns(3)
+                                for col, est in zip([pc1,pc2,pc3], ["pendiente","confirmada","cancelada"]):
+                                    with col:
+                                        _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="prox")
+                        st.divider()
+
+            # ── SUBTAB: CALENDARIO ──
+            with res_subtab2:
+                import calendar as _cal
+
+                if "cal_res_year" not in st.session_state:
+                    st.session_state.cal_res_year = hoy_madrid().year
+                if "cal_res_month" not in st.session_state:
+                    st.session_state.cal_res_month = hoy_madrid().month
+
+                nc1, nc2, nc3 = st.columns([1,3,1])
+                if nc1.button("◀", key="cal_prev_month"):
+                    st.session_state.cal_res_month -= 1
+                    if st.session_state.cal_res_month < 1:
+                        st.session_state.cal_res_month = 12
+                        st.session_state.cal_res_year -= 1
+                    st.rerun()
+                meses_es = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+                nc2.markdown(f"<h4 style='text-align:center;margin:0;'>{meses_es[st.session_state.cal_res_month-1]} {st.session_state.cal_res_year}</h4>", unsafe_allow_html=True)
+                if nc3.button("▶", key="cal_next_month"):
+                    st.session_state.cal_res_month += 1
+                    if st.session_state.cal_res_month > 12:
+                        st.session_state.cal_res_month = 1
+                        st.session_state.cal_res_year += 1
                     st.rerun()
 
-        # ── SUBTAB: PRÓXIMAS ──
-        with res_subtab1:
-            hoy_r = hoy_madrid()
-            todas_res = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(hoy_r)).order("fecha").order("hora").execute().data or []
+                y, m = st.session_state.cal_res_year, st.session_state.cal_res_month
+                primer_dia = dt_mod.date(y, m, 1)
+                ultimo_dia = dt_mod.date(y, m, _cal.monthrange(y, m)[1])
 
-            grupos = {}
-            for r in todas_res:
-                fecha_r = dt_mod.date.fromisoformat(r["fecha"])
-                dias_dif = (fecha_r - hoy_r).days
-                if dias_dif == 0:
-                    label = "📅 Hoy"
-                elif dias_dif == 1:
-                    label = "📅 Mañana"
-                elif dias_dif < 7:
-                    dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
-                    label = f"📅 {dias_es[fecha_r.weekday()]} {fecha_r.strftime('%d/%m')}"
+                res_mes = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(primer_dia)).lte("fecha", str(ultimo_dia)).execute().data or []
+                res_por_dia = {}
+                for r in res_mes:
+                    res_por_dia.setdefault(r["fecha"], []).append(r)
+
+                cal_matrix = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
+                dias_header = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
+                hoy_str = str(hoy_madrid())
+
+                # Construir tabla HTML completa de una vez — evita 35+ widgets de Streamlit
+                html_rows = []
+                header_html = "".join(f"<th style='padding:6px;font-size:11px;font-weight:600;color:#888;width:14.28%;'>{dh}</th>" for dh in dias_header)
+                html_rows.append(f"<tr>{header_html}</tr>")
+
+                for semana in cal_matrix:
+                    cells = []
+                    for dia in semana:
+                        if dia == 0:
+                            cells.append("<td style='height:64px;'></td>")
+                        else:
+                            fecha_str = f"{y}-{m:02d}-{dia:02d}"
+                            res_dia = res_por_dia.get(fecha_str, [])
+                            n_pax = sum(r["personas"] for r in res_dia)
+                            es_hoy = fecha_str == hoy_str
+                            bg = "rgba(216,90,48,0.18)" if es_hoy else ("rgba(34,197,94,0.10)" if res_dia else "transparent")
+                            border = "2px solid #D85A30" if es_hoy else "1px solid rgba(128,128,128,0.15)"
+                            badge = f"<div style='font-size:10px;color:#22C55E;font-weight:700;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
+                            cells.append(f"<td style='height:64px;vertical-align:top;border:{border};border-radius:6px;background:{bg};padding:4px 6px;'><div style='font-size:13px;font-weight:600;'>{dia}</div>{badge}</td>")
+                    html_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+                calendar_html = "<table style='width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;'>" + "".join(html_rows) + "</table>"
+                st.markdown(calendar_html, unsafe_allow_html=True)
+
+                # Selector simple para ver detalle de un día con reservas
+                dias_con_res = sorted(res_por_dia.keys())
+                if dias_con_res:
+                    opciones_dia = [f"{dt_mod.date.fromisoformat(d).strftime('%A %d/%m')} ({len(res_por_dia[d])} reservas)" for d in dias_con_res]
+                    sel_idx = st.selectbox("Ver detalle del día:", range(len(opciones_dia)), format_func=lambda i: opciones_dia[i], key="cal_dia_selectbox")
+                    dia_sel = dias_con_res[sel_idx]
                 else:
-                    label = f"📅 {fecha_r.strftime('%d/%m/%Y')}"
-                grupos.setdefault((dias_dif, label), []).append(r)
+                    st.caption("No hay reservas este mes.")
+                    dia_sel = None
 
-            if not grupos:
-                st.info("No hay próximas reservas.")
-            else:
-                for (dias_dif, label), res_grupo in sorted(grupos.items()):
-                    st.markdown(f"#### {label} · {len(res_grupo)} reserva{'s' if len(res_grupo)!=1 else ''}")
-                    for res in res_grupo:
+                if dia_sel and dia_sel in res_por_dia:
+                    st.divider()
+                    st.markdown(f"#### Reservas del {dt_mod.date.fromisoformat(dia_sel).strftime('%d/%m/%Y')}")
+                    for res in sorted(res_por_dia[dia_sel], key=lambda r: r["hora"]):
                         estado = res["estado"]
                         icono = {"pendiente":"🔴","confirmada":"🟢"}.get(estado, "⚪")
                         with st.expander(f"{icono} {res['hora']} · {res['nombre']} · {res['personas']} pax"):
-                            st.caption(_kds_recibido_badge(res))
                             c1, c2 = st.columns(2)
                             c1.markdown(f"**Teléfono:** {res['telefono']}")
                             c1.markdown(f"**Email:** {res.get('email') or '—'}")
@@ -2554,463 +2662,378 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             pc1, pc2, pc3 = st.columns(3)
                             for col, est in zip([pc1,pc2,pc3], ["pendiente","confirmada","cancelada"]):
                                 with col:
-                                    _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="prox")
-                    st.divider()
+                                    _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="cal")
 
-        # ── SUBTAB: CALENDARIO ──
-        with res_subtab2:
-            import calendar as _cal
+            # ── SUBTAB: LISTA COMPLETA ──
+            with res_subtab3:
+                col_filt_r, col_del_r = st.columns([3,1])
+                filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
+                filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
 
-            if "cal_res_year" not in st.session_state:
-                st.session_state.cal_res_year = hoy_madrid().year
-            if "cal_res_month" not in st.session_state:
-                st.session_state.cal_res_month = hoy_madrid().month
+                if col_del_r.button("🗑️ Borrar canceladas", key="del_cancelled_res"):
+                    st.session_state["confirm_del_cancelled_res"] = True
+                if st.session_state.get("confirm_del_cancelled_res"):
+                    st.warning("¿Borrar todas las reservas canceladas? No se puede deshacer.")
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("✅ Sí, borrar", key="yes_del_cancelled_res"):
+                        sb8.table("reservas").delete().eq("estado", "cancelada").execute()
+                        st.session_state.pop("confirm_del_cancelled_res", None)
+                        st.success("✅ Reservas canceladas eliminadas")
+                        st.rerun()
+                    if dc2.button("❌ Cancelar", key="no_del_cancelled_res"):
+                        st.session_state.pop("confirm_del_cancelled_res", None)
+                        st.rerun()
 
-            nc1, nc2, nc3 = st.columns([1,3,1])
-            if nc1.button("◀", key="cal_prev_month"):
-                st.session_state.cal_res_month -= 1
-                if st.session_state.cal_res_month < 1:
-                    st.session_state.cal_res_month = 12
-                    st.session_state.cal_res_year -= 1
-                st.rerun()
-            meses_es = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-            nc2.markdown(f"<h4 style='text-align:center;margin:0;'>{meses_es[st.session_state.cal_res_month-1]} {st.session_state.cal_res_year}</h4>", unsafe_allow_html=True)
-            if nc3.button("▶", key="cal_next_month"):
-                st.session_state.cal_res_month += 1
-                if st.session_state.cal_res_month > 12:
-                    st.session_state.cal_res_month = 1
-                    st.session_state.cal_res_year += 1
-                st.rerun()
-
-            y, m = st.session_state.cal_res_year, st.session_state.cal_res_month
-            primer_dia = dt_mod.date(y, m, 1)
-            ultimo_dia = dt_mod.date(y, m, _cal.monthrange(y, m)[1])
-
-            res_mes = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(primer_dia)).lte("fecha", str(ultimo_dia)).execute().data or []
-            res_por_dia = {}
-            for r in res_mes:
-                res_por_dia.setdefault(r["fecha"], []).append(r)
-
-            cal_matrix = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
-            dias_header = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
-            hoy_str = str(hoy_madrid())
-
-            # Construir tabla HTML completa de una vez — evita 35+ widgets de Streamlit
-            html_rows = []
-            header_html = "".join(f"<th style='padding:6px;font-size:11px;font-weight:600;color:#888;width:14.28%;'>{dh}</th>" for dh in dias_header)
-            html_rows.append(f"<tr>{header_html}</tr>")
-
-            for semana in cal_matrix:
-                cells = []
-                for dia in semana:
-                    if dia == 0:
-                        cells.append("<td style='height:64px;'></td>")
-                    else:
-                        fecha_str = f"{y}-{m:02d}-{dia:02d}"
-                        res_dia = res_por_dia.get(fecha_str, [])
-                        n_pax = sum(r["personas"] for r in res_dia)
-                        es_hoy = fecha_str == hoy_str
-                        bg = "rgba(216,90,48,0.18)" if es_hoy else ("rgba(34,197,94,0.10)" if res_dia else "transparent")
-                        border = "2px solid #D85A30" if es_hoy else "1px solid rgba(128,128,128,0.15)"
-                        badge = f"<div style='font-size:10px;color:#22C55E;font-weight:700;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
-                        cells.append(f"<td style='height:64px;vertical-align:top;border:{border};border-radius:6px;background:{bg};padding:4px 6px;'><div style='font-size:13px;font-weight:600;'>{dia}</div>{badge}</td>")
-                html_rows.append(f"<tr>{''.join(cells)}</tr>")
-
-            calendar_html = "<table style='width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;'>" + "".join(html_rows) + "</table>"
-            st.markdown(calendar_html, unsafe_allow_html=True)
-
-            # Selector simple para ver detalle de un día con reservas
-            dias_con_res = sorted(res_por_dia.keys())
-            if dias_con_res:
-                opciones_dia = [f"{dt_mod.date.fromisoformat(d).strftime('%A %d/%m')} ({len(res_por_dia[d])} reservas)" for d in dias_con_res]
-                sel_idx = st.selectbox("Ver detalle del día:", range(len(opciones_dia)), format_func=lambda i: opciones_dia[i], key="cal_dia_selectbox")
-                dia_sel = dias_con_res[sel_idx]
-            else:
-                st.caption("No hay reservas este mes.")
-                dia_sel = None
-
-            if dia_sel and dia_sel in res_por_dia:
-                st.divider()
-                st.markdown(f"#### Reservas del {dt_mod.date.fromisoformat(dia_sel).strftime('%d/%m/%Y')}")
-                for res in sorted(res_por_dia[dia_sel], key=lambda r: r["hora"]):
-                    estado = res["estado"]
-                    icono = {"pendiente":"🔴","confirmada":"🟢"}.get(estado, "⚪")
-                    with st.expander(f"{icono} {res['hora']} · {res['nombre']} · {res['personas']} pax"):
-                        c1, c2 = st.columns(2)
-                        c1.markdown(f"**Teléfono:** {res['telefono']}")
-                        c1.markdown(f"**Email:** {res.get('email') or '—'}")
-                        c2.markdown(f"**Estado:** {estado}")
-                        if res.get("notas"):
-                            st.markdown(f"**Notas:** {res['notas']}")
-                        st.markdown("**Cambiar estado:**")
-                        pc1, pc2, pc3 = st.columns(3)
-                        for col, est in zip([pc1,pc2,pc3], ["pendiente","confirmada","cancelada"]):
-                            with col:
-                                _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="cal")
-
-        # ── SUBTAB: LISTA COMPLETA ──
-        with res_subtab3:
-            col_filt_r, col_del_r = st.columns([3,1])
-            filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
-            filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
-
-            if col_del_r.button("🗑️ Borrar canceladas", key="del_cancelled_res"):
-                st.session_state["confirm_del_cancelled_res"] = True
-            if st.session_state.get("confirm_del_cancelled_res"):
-                st.warning("¿Borrar todas las reservas canceladas? No se puede deshacer.")
-                dc1, dc2 = st.columns(2)
-                if dc1.button("✅ Sí, borrar", key="yes_del_cancelled_res"):
-                    sb8.table("reservas").delete().eq("estado", "cancelada").execute()
-                    st.session_state.pop("confirm_del_cancelled_res", None)
-                    st.success("✅ Reservas canceladas eliminadas")
-                    st.rerun()
-                if dc2.button("❌ Cancelar", key="no_del_cancelled_res"):
-                    st.session_state.pop("confirm_del_cancelled_res", None)
-                    st.rerun()
-
-            q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
-            if filtro_res_map[filtro_res]:
-                q2 = q2.eq("estado", filtro_res_map[filtro_res])
-            reservas = q2.limit(100).execute().data or []
+                q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
+                if filtro_res_map[filtro_res]:
+                    q2 = q2.eq("estado", filtro_res_map[filtro_res])
+                reservas = q2.limit(100).execute().data or []
             
-            if not reservas:
-                st.info("No hay reservas con ese filtro.")
-            else:
-                for res in reservas:
-                    estado = res["estado"]
-                    color_map = {"pendiente": "🔴", "confirmada": "🟢", "cancelada": "⚫"}
-                    icono = color_map.get(estado, "⚪")
+                if not reservas:
+                    st.info("No hay reservas con ese filtro.")
+                else:
+                    for res in reservas:
+                        estado = res["estado"]
+                        color_map = {"pendiente": "🔴", "confirmada": "🟢", "cancelada": "⚫"}
+                        icono = color_map.get(estado, "⚪")
                     
-                    with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {pd.Timestamp(res['creado_at']).strftime('%d/%m %H:%M')}"):
-                        c1, c2 = st.columns(2)
-                        c1.markdown(f"**Nombre:** {res['nombre']}")
-                        c1.markdown(f"**Teléfono:** {res['telefono']}")
-                        c1.markdown(f"**Email:** {res.get('email') or '—'}")
-                        c2.markdown(f"**Fecha:** {res['fecha']} a las {res['hora']}")
-                        c2.markdown(f"**Personas:** {res['personas']}")
-                        c2.markdown(f"**Estado:** {estado}")
-                        if res.get("notas"):
-                            st.markdown(f"**Notas:** {res['notas']}")
+                        with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {pd.Timestamp(res['creado_at']).strftime('%d/%m %H:%M')}"):
+                            c1, c2 = st.columns(2)
+                            c1.markdown(f"**Nombre:** {res['nombre']}")
+                            c1.markdown(f"**Teléfono:** {res['telefono']}")
+                            c1.markdown(f"**Email:** {res.get('email') or '—'}")
+                            c2.markdown(f"**Fecha:** {res['fecha']} a las {res['hora']}")
+                            c2.markdown(f"**Personas:** {res['personas']}")
+                            c2.markdown(f"**Estado:** {estado}")
+                            if res.get("notas"):
+                                st.markdown(f"**Notas:** {res['notas']}")
                         
-                        st.markdown("**Cambiar estado:**")
-                        rc1, rc2, rc3 = st.columns(3)
-                        for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
-                            with col:
-                                _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="lista")
+                            st.markdown("**Cambiar estado:**")
+                            rc1, rc2, rc3 = st.columns(3)
+                            for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
+                                with col:
+                                    _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="lista")
 
+        _frag_seccion_4()
     # ── TAB 9: Web ──────────────────────────────────────────
     if nav == "🌐 Web":
-        sb9 = get_supabase()
-        st.markdown("### Gestión de la web")
+        @st.fragment
+        def _frag_seccion_5():
+            sb9 = get_supabase()
+            st.markdown("### Gestión de la web")
 
-        web_tab1, web_tab2, web_tab3 = st.tabs(["⚙️ Configuración", "🍜 Menú", "📸 Categorías"])
+            web_tab1, web_tab2, web_tab3 = st.tabs(["⚙️ Configuración", "🍜 Menú", "📸 Categorías"])
 
-        # ── CONFIG ──
-        with web_tab1:
-            st.markdown("#### Datos del local y horarios")
-            cfg_res = sb9.table("config").select("*").execute()
-            cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
+            # ── CONFIG ──
+            with web_tab1:
+                st.markdown("#### Datos del local y horarios")
+                cfg_res = sb9.table("config").select("*").execute()
+                cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
 
-            st.markdown("**Información general**")
-            c1, c2 = st.columns(2)
-            new_cfg = {}
-            new_cfg["nombre_local"] = c1.text_input("Nombre del local", value=cfg.get("nombre_local","Vietnamito"), key="cfg_nombre")
-            new_cfg["direccion"] = c2.text_input("Dirección", value=cfg.get("direccion",""), key="cfg_dir")
-            new_cfg["telefono"] = c1.text_input("Teléfono", value=cfg.get("telefono",""), key="cfg_tel")
-            new_cfg["email_pedidos"] = c2.text_input("Email pedidos", value=cfg.get("email_pedidos",""), key="cfg_email")
-            new_cfg["tiempo_espera_min"] = c1.text_input("Tiempo espera recogida (min)", value=cfg.get("tiempo_espera_min","15"), key="cfg_espera")
-            new_cfg["mesas_total"] = c2.text_input("Nº máximo comensales", value=cfg.get("mesas_total","15"), key="cfg_mesas")
-            new_cfg["barrio"] = c1.text_input("Barrio", value=cfg.get("barrio","Sants - Les Corts"), key="cfg_barrio")
-            st.markdown("**Textos del hero (página de inicio)**")
-            new_cfg["hero_titulo"] = st.text_input("Título hero (HTML permitido, ej: El mejor<br>Banh mi de<br><em>Barcelona</em>)", value=cfg.get("hero_titulo","El mejor<br>Banh mi de<br><em>Barcelona</em>"), key="cfg_hero_titulo")
-            new_cfg["hero_subtitulo"] = st.text_input("Subtítulo hero", value=cfg.get("hero_subtitulo",""), placeholder="Ej: Comida vietnamita auténtica en el corazón de Barcelona", key="cfg_hero_sub")
+                st.markdown("**Información general**")
+                c1, c2 = st.columns(2)
+                new_cfg = {}
+                new_cfg["nombre_local"] = c1.text_input("Nombre del local", value=cfg.get("nombre_local","Vietnamito"), key="cfg_nombre")
+                new_cfg["direccion"] = c2.text_input("Dirección", value=cfg.get("direccion",""), key="cfg_dir")
+                new_cfg["telefono"] = c1.text_input("Teléfono", value=cfg.get("telefono",""), key="cfg_tel")
+                new_cfg["email_pedidos"] = c2.text_input("Email pedidos", value=cfg.get("email_pedidos",""), key="cfg_email")
+                new_cfg["tiempo_espera_min"] = c1.text_input("Tiempo espera recogida (min)", value=cfg.get("tiempo_espera_min","15"), key="cfg_espera")
+                new_cfg["mesas_total"] = c2.text_input("Nº máximo comensales", value=cfg.get("mesas_total","15"), key="cfg_mesas")
+                new_cfg["barrio"] = c1.text_input("Barrio", value=cfg.get("barrio","Sants - Les Corts"), key="cfg_barrio")
+                st.markdown("**Textos del hero (página de inicio)**")
+                new_cfg["hero_titulo"] = st.text_input("Título hero (HTML permitido, ej: El mejor<br>Banh mi de<br><em>Barcelona</em>)", value=cfg.get("hero_titulo","El mejor<br>Banh mi de<br><em>Barcelona</em>"), key="cfg_hero_titulo")
+                new_cfg["hero_subtitulo"] = st.text_input("Subtítulo hero", value=cfg.get("hero_subtitulo",""), placeholder="Ej: Comida vietnamita auténtica en el corazón de Barcelona", key="cfg_hero_sub")
 
-            st.markdown("**Horarios**")
-            dias_cfg = [("lunes","Lun"),("martes","Mar"),("miercoles","Mié"),("jueves","Jue"),("viernes","Vie"),("sabado","Sáb"),("domingo","Dom")]
-            cols_h = st.columns(7)
-            for (dia, label), col in zip(dias_cfg, cols_h):
-                new_cfg[f"horario_{dia}"] = col.text_input(label, value=cfg.get(f"horario_{dia}",""), key=f"cfg_h_{dia}")
+                st.markdown("**Horarios**")
+                dias_cfg = [("lunes","Lun"),("martes","Mar"),("miercoles","Mié"),("jueves","Jue"),("viernes","Vie"),("sabado","Sáb"),("domingo","Dom")]
+                cols_h = st.columns(7)
+                for (dia, label), col in zip(dias_cfg, cols_h):
+                    new_cfg[f"horario_{dia}"] = col.text_input(label, value=cfg.get(f"horario_{dia}",""), key=f"cfg_h_{dia}")
 
-            st.markdown("**Activar / desactivar**")
-            act1, act2 = st.columns(2)
-            new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
-            new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
+                st.markdown("**Activar / desactivar**")
+                act1, act2 = st.columns(2)
+                new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
+                new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
 
-            st.markdown("##### 📅 Días bloqueados para reservas")
-            st.caption("Selecciona fechas en las que no se pueden hacer reservas (festivos, cierre, etc.)")
-            import json as _json
-            dias_bloq_raw = cfg.get("dias_bloqueados", "[]")
-            try:
-                dias_bloq_actual = _json.loads(dias_bloq_raw)
-            except:
-                dias_bloq_actual = []
-            dias_bloq_dates = [dt_mod.date.fromisoformat(d) for d in dias_bloq_actual if d]
+                st.markdown("##### 📅 Días bloqueados para reservas")
+                st.caption("Selecciona fechas en las que no se pueden hacer reservas (festivos, cierre, etc.)")
+                import json as _json
+                dias_bloq_raw = cfg.get("dias_bloqueados", "[]")
+                try:
+                    dias_bloq_actual = _json.loads(dias_bloq_raw)
+                except:
+                    dias_bloq_actual = []
+                dias_bloq_dates = [dt_mod.date.fromisoformat(d) for d in dias_bloq_actual if d]
 
-            nueva_fecha = st.date_input("Añadir fecha bloqueada:", value=None, key="nueva_fecha_bloq", min_value=hoy_madrid())
-            if nueva_fecha and str(nueva_fecha) not in dias_bloq_actual:
-                if st.button("➕ Añadir", key="add_fecha_bloq"):
-                    dias_bloq_actual.append(str(nueva_fecha))
-                    dias_bloq_actual.sort()
-                    sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
-                    st.success(f"✅ {nueva_fecha} añadida")
+                nueva_fecha = st.date_input("Añadir fecha bloqueada:", value=None, key="nueva_fecha_bloq", min_value=hoy_madrid())
+                if nueva_fecha and str(nueva_fecha) not in dias_bloq_actual:
+                    if st.button("➕ Añadir", key="add_fecha_bloq"):
+                        dias_bloq_actual.append(str(nueva_fecha))
+                        dias_bloq_actual.sort()
+                        sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
+                        st.success(f"✅ {nueva_fecha} añadida")
+                        st.rerun()
+
+                if dias_bloq_actual:
+                    st.markdown("**Fechas bloqueadas:**")
+                    for d in sorted(dias_bloq_actual):
+                        dc1, dc2 = st.columns([4,1])
+                        dc1.markdown(f"🚫 {dt_mod.date.fromisoformat(d).strftime('%A %d/%m/%Y')}")
+                        if dc2.button("✕", key=f"del_bloq_{d}"):
+                            dias_bloq_actual.remove(d)
+                            sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
+                            st.rerun()
+                else:
+                    st.caption("No hay fechas bloqueadas.")
+
+                new_cfg["dias_bloqueados"] = cfg.get("dias_bloqueados", "[]")
+
+                if st.button("💾 Guardar configuración", key="save_cfg", type="primary"):
+                    for clave, valor in new_cfg.items():
+                        sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
+                    st.success("✅ Configuración guardada")
                     st.rerun()
 
-            if dias_bloq_actual:
-                st.markdown("**Fechas bloqueadas:**")
-                for d in sorted(dias_bloq_actual):
-                    dc1, dc2 = st.columns([4,1])
-                    dc1.markdown(f"🚫 {dt_mod.date.fromisoformat(d).strftime('%A %d/%m/%Y')}")
-                    if dc2.button("✕", key=f"del_bloq_{d}"):
-                        dias_bloq_actual.remove(d)
-                        sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
-                        st.rerun()
-            else:
-                st.caption("No hay fechas bloqueadas.")
+                st.divider()
+                st.markdown("#### Fotos de la web")
+                st.caption("Estas fotos aparecen en la página de inicio de vietnamito.es")
 
-            new_cfg["dias_bloqueados"] = cfg.get("dias_bloqueados", "[]")
+                fotos_config = [
+                    ("foto_hero", "🖼️ Hero principal", "Fondo grande al entrar a la web"),
+                    ("foto_franja", "🖼️ Franja intermedia", "Segunda sección de la página de inicio"),
+                    ("foto_split", "🖼️ Nuestro espacio", "Tercera sección, lado derecho"),
+                    ("foto_reserva", "🖼️ Página de reservas", "Foto de fondo lateral en la reserva"),
+                    ("foto_mural_banner", "🖼️ Banner inferior", "Justo encima del footer"),
+                    ("foto_mapa", "🗺️ Mapa del local", "Mapa ilustrado que aparece debajo de los horarios"),
+                ]
 
-            if st.button("💾 Guardar configuración", key="save_cfg", type="primary"):
-                for clave, valor in new_cfg.items():
-                    sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
-                st.success("✅ Configuración guardada")
-                st.rerun()
+                import urllib.parse as _ul
+                cols_foto = st.columns(2)
+                for idx, (clave_foto, label_foto, desc_foto) in enumerate(fotos_config):
+                    with cols_foto[idx % 2]:
+                        st.markdown(f"**{label_foto}**")
+                        st.caption(desc_foto)
+                        url_actual = cfg.get(clave_foto, "")
+                        if url_actual:
+                            st.image(url_actual, use_container_width=True)
+                        foto_upload = st.file_uploader(f"Subir foto", type=["jpg","jpeg","png","webp"], key=f"fup_{clave_foto}", label_visibility="collapsed")
+                        if foto_upload:
+                            try:
+                                ext = foto_upload.name.split(".")[-1].lower()
+                                fname = f"web/{clave_foto}.{ext}"
+                                sb9.storage.from_("assets").upload(fname, foto_upload.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                                new_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{_ul.quote(fname, safe='/')}"
+                                sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
+                                st.success(f"✅ Foto guardada")
+                                st.rerun()
+                            except Exception as e:
+                                st.warning(f"Error: {e}")
+                        st.markdown("")
 
-            st.divider()
-            st.markdown("#### Fotos de la web")
-            st.caption("Estas fotos aparecen en la página de inicio de vietnamito.es")
+            # ── MENÚ ──
+            with web_tab2:
+                cats_res = sb9.table("categorias").select("*").order("orden").execute()
+                cats_web = cats_res.data or []
+                prods_res = sb9.table("productos").select("*").order("orden").execute()
+                prods_web = prods_res.data or []
 
-            fotos_config = [
-                ("foto_hero", "🖼️ Hero principal", "Fondo grande al entrar a la web"),
-                ("foto_franja", "🖼️ Franja intermedia", "Segunda sección de la página de inicio"),
-                ("foto_split", "🖼️ Nuestro espacio", "Tercera sección, lado derecho"),
-                ("foto_reserva", "🖼️ Página de reservas", "Foto de fondo lateral en la reserva"),
-                ("foto_mural_banner", "🖼️ Banner inferior", "Justo encima del footer"),
-                ("foto_mapa", "🗺️ Mapa del local", "Mapa ilustrado que aparece debajo de los horarios"),
-            ]
+                if not cats_web:
+                    st.info("No hay categorías. Créalas en la pestaña Categorías primero.")
+                else:
+                    cat_sel_web = st.selectbox("Categoría:", [c["nombre"] for c in cats_web], key="cat_sel_web")
+                    cat_obj = next(c for c in cats_web if c["nombre"] == cat_sel_web)
+                    prods_cat_web = [p for p in prods_web if p["categoria_id"] == cat_obj["id"]]
 
-            import urllib.parse as _ul
-            cols_foto = st.columns(2)
-            for idx, (clave_foto, label_foto, desc_foto) in enumerate(fotos_config):
-                with cols_foto[idx % 2]:
-                    st.markdown(f"**{label_foto}**")
-                    st.caption(desc_foto)
-                    url_actual = cfg.get(clave_foto, "")
-                    if url_actual:
-                        st.image(url_actual, use_container_width=True)
-                    foto_upload = st.file_uploader(f"Subir foto", type=["jpg","jpeg","png","webp"], key=f"fup_{clave_foto}", label_visibility="collapsed")
-                    if foto_upload:
-                        try:
-                            ext = foto_upload.name.split(".")[-1].lower()
-                            fname = f"web/{clave_foto}.{ext}"
-                            sb9.storage.from_("assets").upload(fname, foto_upload.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                            new_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{_ul.quote(fname, safe='/')}"
-                            sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
-                            st.success(f"✅ Foto guardada")
-                            st.rerun()
-                        except Exception as e:
-                            st.warning(f"Error: {e}")
-                    st.markdown("")
+                    # Añadir producto
+                    with st.expander("➕ Añadir producto"):
+                        if "prod_counter" not in st.session_state:
+                            st.session_state.prod_counter = 0
+                        pc = st.session_state.prod_counter
+                        pa1, pa2 = st.columns([3,1])
+                        new_prod_nom = pa1.text_input("Nombre:", key=f"pn_{pc}")
+                        new_prod_precio = pa2.number_input("Precio €:", value=6.50, min_value=0.0, step=0.5, format="%.2f", key=f"pp_{pc}")
+                        new_prod_desc = st.text_area("Descripción:", key=f"pd_{pc}", height=70)
+                        new_prod_foto_url = st.text_input("URL foto (opcional):", key=f"pf_{pc}")
+                        new_prod_foto_file = st.file_uploader("O sube foto:", type=["jpg","jpeg","png","webp"], key=f"pff_{pc}")
+                        if new_prod_foto_file:
+                            st.image(new_prod_foto_file, width=150)
+                        new_prod_orden = st.number_input("Orden:", value=len(prods_cat_web)+1, min_value=1, key=f"po_{pc}")
 
-        # ── MENÚ ──
-        with web_tab2:
-            cats_res = sb9.table("categorias").select("*").order("orden").execute()
-            cats_web = cats_res.data or []
-            prods_res = sb9.table("productos").select("*").order("orden").execute()
-            prods_web = prods_res.data or []
+                        if st.button("➕ Añadir producto", key=f"add_prod_{pc}"):
+                            if new_prod_nom.strip():
+                                foto_url = new_prod_foto_url.strip() or None
+                                if new_prod_foto_file:
+                                    try:
+                                        import urllib.parse
+                                        ext = new_prod_foto_file.name.split(".")[-1].lower()
+                                        fname = f"productos/{cat_obj['id']}_{new_prod_nom.strip().replace(' ','_')}.{ext}"
+                                        sb9.storage.from_("assets").upload(fname, new_prod_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                                        foto_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+                                    except Exception as e:
+                                        st.warning(f"No se pudo subir foto: {e}")
+                                sb9.table("productos").insert({
+                                    "categoria_id": cat_obj["id"],
+                                    "nombre": new_prod_nom.strip(),
+                                    "descripcion": new_prod_desc.strip() or None,
+                                    "precio": float(new_prod_precio),
+                                    "foto_url": foto_url,
+                                    "orden": int(new_prod_orden),
+                                    "disponible": True
+                                }).execute()
+                                st.session_state.prod_counter += 1
+                                st.success("✅ Producto añadido")
+                                st.rerun()
+                            else:
+                                st.warning("Escribe un nombre.")
 
-            if not cats_web:
-                st.info("No hay categorías. Créalas en la pestaña Categorías primero.")
-            else:
-                cat_sel_web = st.selectbox("Categoría:", [c["nombre"] for c in cats_web], key="cat_sel_web")
-                cat_obj = next(c for c in cats_web if c["nombre"] == cat_sel_web)
-                prods_cat_web = [p for p in prods_web if p["categoria_id"] == cat_obj["id"]]
+                    # Editar productos existentes
+                    st.markdown(f"**{len(prods_cat_web)} productos en {cat_sel_web}:**")
+                    for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
+                        with st.expander(f"{'✅' if prod['disponible'] else '❌'} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
+                            ep1, ep2 = st.columns([3,1])
+                            e_nom = ep1.text_input("🇪🇸 Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
+                            e_precio = ep2.number_input("€:", value=float(prod["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_{prod['id']}")
+                            e_nom_en = st.text_input("🇬🇧 Name (EN):", value=prod.get("nombre_en") or "", key=f"en_en_{prod['id']}")
+                            e_nom_ca = st.text_input("🏴 Nom (CA):", value=prod.get("nombre_ca") or "", key=f"en_ca_{prod['id']}")
+                            e_nom_vi = st.text_input("🇻🇳 Tên (VI):", value=prod.get("nombre_vi") or "", key=f"en_vi_{prod['id']}")
+                            e_desc = st.text_area("🇪🇸 Descripción:", value=prod.get("descripcion") or "", key=f"ed_{prod['id']}", height=68)
+                            e_desc_en = st.text_area("🇬🇧 Description (EN):", value=prod.get("descripcion_en") or "", key=f"ed_en_{prod['id']}", height=68)
+                            e_desc_ca = st.text_area("🏴 Descripció (CA):", value=prod.get("descripcion_ca") or "", key=f"ed_ca_{prod['id']}", height=68)
+                            e_desc_vi = st.text_area("🇻🇳 Mô tả (VI):", value=prod.get("descripcion_vi") or "", key=f"ed_vi_{prod['id']}", height=68)
+                            e_orden = ep2.number_input("Orden:", value=int(prod.get("orden",0)), min_value=1, key=f"eord_{prod['id']}")
+                            e_disp = ep1.checkbox("Disponible", value=prod.get("disponible",True), key=f"edis_{prod['id']}")
 
-                # Añadir producto
-                with st.expander("➕ Añadir producto"):
-                    if "prod_counter" not in st.session_state:
-                        st.session_state.prod_counter = 0
-                    pc = st.session_state.prod_counter
-                    pa1, pa2 = st.columns([3,1])
-                    new_prod_nom = pa1.text_input("Nombre:", key=f"pn_{pc}")
-                    new_prod_precio = pa2.number_input("Precio €:", value=6.50, min_value=0.0, step=0.5, format="%.2f", key=f"pp_{pc}")
-                    new_prod_desc = st.text_area("Descripción:", key=f"pd_{pc}", height=70)
-                    new_prod_foto_url = st.text_input("URL foto (opcional):", key=f"pf_{pc}")
-                    new_prod_foto_file = st.file_uploader("O sube foto:", type=["jpg","jpeg","png","webp"], key=f"pff_{pc}")
-                    if new_prod_foto_file:
-                        st.image(new_prod_foto_file, width=150)
-                    new_prod_orden = st.number_input("Orden:", value=len(prods_cat_web)+1, min_value=1, key=f"po_{pc}")
+                            # Cambiar categoría
+                            otras_cats = [c for c in cats_web if c["id"] != cat_obj["id"]]
+                            if otras_cats:
+                                st.markdown("**Mover a otra categoría:**")
+                                cat_mover_opts = {c["nombre"]: c["id"] for c in otras_cats}
+                                cat_mover_sel = st.selectbox("Categoría destino:", list(cat_mover_opts.keys()), key=f"cat_mover_{prod['id']}")
+                                if st.button(f"↗️ Mover a {cat_mover_sel}", key=f"mover_prod_{prod['id']}"):
+                                    cat_dest_id = cat_mover_opts[cat_mover_sel]
+                                    # Calcular orden máximo en la categoría destino
+                                    prods_dest = [p for p in prods_web if p["categoria_id"] == cat_dest_id]
+                                    nuevo_orden = max((p.get("orden",0) for p in prods_dest), default=0) + 1
+                                    sb9.table("productos").update({"categoria_id": cat_dest_id, "orden": nuevo_orden}).eq("id", prod["id"]).execute()
+                                    st.success(f"✅ Movido a {cat_mover_sel} (orden {nuevo_orden})")
+                                    st.rerun()
 
-                    if st.button("➕ Añadir producto", key=f"add_prod_{pc}"):
-                        if new_prod_nom.strip():
-                            foto_url = new_prod_foto_url.strip() or None
-                            if new_prod_foto_file:
+                            e_foto = st.text_input("URL foto:", value=prod.get("foto_url") or "", key=f"ef_{prod['id']}")
+                            e_foto_file = st.file_uploader("Cambiar foto:", type=["jpg","jpeg","png","webp"], key=f"eff_{prod['id']}")
+                            if e_foto_file:
+                                st.image(e_foto_file, width=150)
                                 try:
                                     import urllib.parse
-                                    ext = new_prod_foto_file.name.split(".")[-1].lower()
-                                    fname = f"productos/{cat_obj['id']}_{new_prod_nom.strip().replace(' ','_')}.{ext}"
-                                    sb9.storage.from_("assets").upload(fname, new_prod_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                                    foto_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
-                                except Exception as e:
-                                    st.warning(f"No se pudo subir foto: {e}")
-                            sb9.table("productos").insert({
-                                "categoria_id": cat_obj["id"],
-                                "nombre": new_prod_nom.strip(),
-                                "descripcion": new_prod_desc.strip() or None,
-                                "precio": float(new_prod_precio),
-                                "foto_url": foto_url,
-                                "orden": int(new_prod_orden),
-                                "disponible": True
+                                    ext = e_foto_file.name.split(".")[-1].lower()
+                                    fname = f"productos/{prod['id']}.{ext}"
+                                    sb9.storage.from_("assets").upload(fname, e_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+                                    e_foto = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+                                    st.success("✅ Foto lista — pulsa Guardar")
+                                except Exception as ex:
+                                    st.warning(f"Error foto: {ex}")
+                            elif e_foto:
+                                st.image(e_foto, width=150)
+
+                            sc1, sc2 = st.columns(2)
+                            if sc1.button("💾 Guardar", key=f"save_prod_{prod['id']}"):
+                                sb9.table("productos").update({
+                                    "nombre": e_nom, "descripcion": e_desc or None,
+                                    "nombre_en": e_nom_en or None, "descripcion_en": e_desc_en or None,
+                                    "nombre_ca": e_nom_ca or None, "descripcion_ca": e_desc_ca or None,
+                                    "nombre_vi": e_nom_vi or None, "descripcion_vi": e_desc_vi or None,
+                                    "precio": float(e_precio), "foto_url": e_foto or None,
+                                    "orden": int(e_orden), "disponible": e_disp
+                                }).eq("id", prod["id"]).execute()
+                                st.success("✅ Guardado")
+                                st.rerun()
+                            if sc2.button("🗑️ Eliminar", key=f"del_prod_{prod['id']}"):
+                                st.session_state[f"confirm_del_prod_{prod['id']}"] = True
+                            if st.session_state.get(f"confirm_del_prod_{prod['id']}"):
+                                st.warning(f"¿Eliminar '{prod['nombre']}'?")
+                                dc1, dc2, dc3 = st.columns(3)
+                                if dc1.button("✅ Sí, eliminar", key=f"yes_prod_{prod['id']}"):
+                                    try:
+                                        sb9.table("productos").delete().eq("id", prod["id"]).execute()
+                                        st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                        st.success("✅ Eliminado")
+                                        st.rerun()
+                                    except Exception as _e:
+                                        st.error("No se puede eliminar porque tiene pedidos asociados. Márcalo como no disponible en su lugar.")
+                                        st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                if dc2.button("🚫 Desactivar", key=f"dis_prod_{prod['id']}"):
+                                    sb9.table("productos").update({"disponible": False}).eq("id", prod["id"]).execute()
+                                    st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                    st.success("✅ Producto desactivado — no aparecerá en la web")
+                                    st.rerun()
+                                if dc3.button("❌ Cancelar", key=f"no_prod_{prod['id']}"):
+                                    st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
+                                    st.rerun()
+
+            # ── CATEGORÍAS ──
+            with web_tab3:
+                st.markdown("#### Categorías del menú")
+
+                with st.expander("➕ Nueva categoría"):
+                    nc1, nc2 = st.columns([3,1])
+                    new_cat_nom = nc1.text_input("Nombre:", key="new_cat_nom")
+                    new_cat_ord = nc2.number_input("Orden:", value=len(cats_web)+1, min_value=1, key="new_cat_ord")
+                    new_cat_desc = st.text_input("Descripción (opcional):", key="new_cat_desc")
+                    new_cat_local = st.checkbox("🪑 Solo pedidos en el local (no aparece en la web para recogida)", key="new_cat_local")
+                    if st.button("➕ Añadir categoría", key="add_cat_web"):
+                        if new_cat_nom.strip():
+                            sb9.table("categorias").insert({
+                                "nombre": new_cat_nom.strip(),
+                                "descripcion": new_cat_desc.strip() or None,
+                                "orden": int(new_cat_ord),
+                                "activo": True,
+                                "solo_local": bool(new_cat_local)
                             }).execute()
-                            st.session_state.prod_counter += 1
-                            st.success("✅ Producto añadido")
+                            st.success(f"✅ Categoría '{new_cat_nom}' creada")
                             st.rerun()
                         else:
                             st.warning("Escribe un nombre.")
 
-                # Editar productos existentes
-                st.markdown(f"**{len(prods_cat_web)} productos en {cat_sel_web}:**")
-                for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
-                    with st.expander(f"{'✅' if prod['disponible'] else '❌'} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
-                        ep1, ep2 = st.columns([3,1])
-                        e_nom = ep1.text_input("🇪🇸 Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
-                        e_precio = ep2.number_input("€:", value=float(prod["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_{prod['id']}")
-                        e_nom_en = st.text_input("🇬🇧 Name (EN):", value=prod.get("nombre_en") or "", key=f"en_en_{prod['id']}")
-                        e_nom_ca = st.text_input("🏴 Nom (CA):", value=prod.get("nombre_ca") or "", key=f"en_ca_{prod['id']}")
-                        e_nom_vi = st.text_input("🇻🇳 Tên (VI):", value=prod.get("nombre_vi") or "", key=f"en_vi_{prod['id']}")
-                        e_desc = st.text_area("🇪🇸 Descripción:", value=prod.get("descripcion") or "", key=f"ed_{prod['id']}", height=68)
-                        e_desc_en = st.text_area("🇬🇧 Description (EN):", value=prod.get("descripcion_en") or "", key=f"ed_en_{prod['id']}", height=68)
-                        e_desc_ca = st.text_area("🏴 Descripció (CA):", value=prod.get("descripcion_ca") or "", key=f"ed_ca_{prod['id']}", height=68)
-                        e_desc_vi = st.text_area("🇻🇳 Mô tả (VI):", value=prod.get("descripcion_vi") or "", key=f"ed_vi_{prod['id']}", height=68)
-                        e_orden = ep2.number_input("Orden:", value=int(prod.get("orden",0)), min_value=1, key=f"eord_{prod['id']}")
-                        e_disp = ep1.checkbox("Disponible", value=prod.get("disponible",True), key=f"edis_{prod['id']}")
-
-                        # Cambiar categoría
-                        otras_cats = [c for c in cats_web if c["id"] != cat_obj["id"]]
-                        if otras_cats:
-                            st.markdown("**Mover a otra categoría:**")
-                            cat_mover_opts = {c["nombre"]: c["id"] for c in otras_cats}
-                            cat_mover_sel = st.selectbox("Categoría destino:", list(cat_mover_opts.keys()), key=f"cat_mover_{prod['id']}")
-                            if st.button(f"↗️ Mover a {cat_mover_sel}", key=f"mover_prod_{prod['id']}"):
-                                cat_dest_id = cat_mover_opts[cat_mover_sel]
-                                # Calcular orden máximo en la categoría destino
-                                prods_dest = [p for p in prods_web if p["categoria_id"] == cat_dest_id]
-                                nuevo_orden = max((p.get("orden",0) for p in prods_dest), default=0) + 1
-                                sb9.table("productos").update({"categoria_id": cat_dest_id, "orden": nuevo_orden}).eq("id", prod["id"]).execute()
-                                st.success(f"✅ Movido a {cat_mover_sel} (orden {nuevo_orden})")
+                for cat in cats_web:
+                    n_prods = len([p for p in prods_web if p["categoria_id"] == cat["id"]])
+                    icono_local = " 🪑" if cat.get("solo_local") else ""
+                    with st.expander(f"{'✅' if cat['activo'] else '❌'} {cat['orden']}. {cat['nombre']}{icono_local} ({n_prods} productos)"):
+                        cc1, cc2 = st.columns([3,1])
+                        c_nom = cc1.text_input("Nombre:", value=cat["nombre"], key=f"cnom_{cat['id']}")
+                        c_ord = cc2.number_input("Orden:", value=int(cat.get("orden",0)), min_value=1, key=f"cord_{cat['id']}")
+                        c_desc = st.text_input("Descripción:", value=cat.get("descripcion") or "", key=f"cdesc_{cat['id']}")
+                        c_act = st.checkbox("Activa", value=cat.get("activo",True), key=f"cact_{cat['id']}")
+                        c_local = st.checkbox("🪑 Solo pedidos en el local (QR de mesa) — no aparece en la web para recogida",
+                                              value=bool(cat.get("solo_local")), key=f"clocal_{cat['id']}")
+                        csc1, csc2 = st.columns(2)
+                        if csc1.button("💾 Guardar", key=f"save_cat_{cat['id']}"):
+                            sb9.table("categorias").update({
+                                "nombre": c_nom, "descripcion": c_desc or None,
+                                "orden": int(c_ord), "activo": c_act,
+                                "solo_local": bool(c_local)
+                            }).eq("id", cat["id"]).execute()
+                            st.success("✅ Categoría guardada")
+                            st.rerun()
+                        if csc2.button("🗑️ Eliminar", key=f"del_cat_{cat['id']}"):
+                            st.session_state[f"confirm_del_cat_{cat['id']}"] = True
+                        if st.session_state.get(f"confirm_del_cat_{cat['id']}"):
+                            st.warning(f"¿Eliminar '{cat['nombre']}' y todos sus productos?")
+                            dc1, dc2 = st.columns(2)
+                            if dc1.button("✅ Sí", key=f"yes_cat_{cat['id']}"):
+                                sb9.table("categorias").delete().eq("id", cat["id"]).execute()
+                                st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
+                                st.success("✅ Eliminada")
+                                st.rerun()
+                            if dc2.button("❌ No", key=f"no_cat_{cat['id']}"):
+                                st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
                                 st.rerun()
 
-                        e_foto = st.text_input("URL foto:", value=prod.get("foto_url") or "", key=f"ef_{prod['id']}")
-                        e_foto_file = st.file_uploader("Cambiar foto:", type=["jpg","jpeg","png","webp"], key=f"eff_{prod['id']}")
-                        if e_foto_file:
-                            st.image(e_foto_file, width=150)
-                            try:
-                                import urllib.parse
-                                ext = e_foto_file.name.split(".")[-1].lower()
-                                fname = f"productos/{prod['id']}.{ext}"
-                                sb9.storage.from_("assets").upload(fname, e_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                                e_foto = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
-                                st.success("✅ Foto lista — pulsa Guardar")
-                            except Exception as ex:
-                                st.warning(f"Error foto: {ex}")
-                        elif e_foto:
-                            st.image(e_foto, width=150)
-
-                        sc1, sc2 = st.columns(2)
-                        if sc1.button("💾 Guardar", key=f"save_prod_{prod['id']}"):
-                            sb9.table("productos").update({
-                                "nombre": e_nom, "descripcion": e_desc or None,
-                                "nombre_en": e_nom_en or None, "descripcion_en": e_desc_en or None,
-                                "nombre_ca": e_nom_ca or None, "descripcion_ca": e_desc_ca or None,
-                                "nombre_vi": e_nom_vi or None, "descripcion_vi": e_desc_vi or None,
-                                "precio": float(e_precio), "foto_url": e_foto or None,
-                                "orden": int(e_orden), "disponible": e_disp
-                            }).eq("id", prod["id"]).execute()
-                            st.success("✅ Guardado")
-                            st.rerun()
-                        if sc2.button("🗑️ Eliminar", key=f"del_prod_{prod['id']}"):
-                            st.session_state[f"confirm_del_prod_{prod['id']}"] = True
-                        if st.session_state.get(f"confirm_del_prod_{prod['id']}"):
-                            st.warning(f"¿Eliminar '{prod['nombre']}'?")
-                            dc1, dc2, dc3 = st.columns(3)
-                            if dc1.button("✅ Sí, eliminar", key=f"yes_prod_{prod['id']}"):
-                                try:
-                                    sb9.table("productos").delete().eq("id", prod["id"]).execute()
-                                    st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
-                                    st.success("✅ Eliminado")
-                                    st.rerun()
-                                except Exception as _e:
-                                    st.error("No se puede eliminar porque tiene pedidos asociados. Márcalo como no disponible en su lugar.")
-                                    st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
-                            if dc2.button("🚫 Desactivar", key=f"dis_prod_{prod['id']}"):
-                                sb9.table("productos").update({"disponible": False}).eq("id", prod["id"]).execute()
-                                st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
-                                st.success("✅ Producto desactivado — no aparecerá en la web")
-                                st.rerun()
-                            if dc3.button("❌ Cancelar", key=f"no_prod_{prod['id']}"):
-                                st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
-                                st.rerun()
-
-        # ── CATEGORÍAS ──
-        with web_tab3:
-            st.markdown("#### Categorías del menú")
-
-            with st.expander("➕ Nueva categoría"):
-                nc1, nc2 = st.columns([3,1])
-                new_cat_nom = nc1.text_input("Nombre:", key="new_cat_nom")
-                new_cat_ord = nc2.number_input("Orden:", value=len(cats_web)+1, min_value=1, key="new_cat_ord")
-                new_cat_desc = st.text_input("Descripción (opcional):", key="new_cat_desc")
-                new_cat_local = st.checkbox("🪑 Solo pedidos en el local (no aparece en la web para recogida)", key="new_cat_local")
-                if st.button("➕ Añadir categoría", key="add_cat_web"):
-                    if new_cat_nom.strip():
-                        sb9.table("categorias").insert({
-                            "nombre": new_cat_nom.strip(),
-                            "descripcion": new_cat_desc.strip() or None,
-                            "orden": int(new_cat_ord),
-                            "activo": True,
-                            "solo_local": bool(new_cat_local)
-                        }).execute()
-                        st.success(f"✅ Categoría '{new_cat_nom}' creada")
-                        st.rerun()
-                    else:
-                        st.warning("Escribe un nombre.")
-
-            for cat in cats_web:
-                n_prods = len([p for p in prods_web if p["categoria_id"] == cat["id"]])
-                icono_local = " 🪑" if cat.get("solo_local") else ""
-                with st.expander(f"{'✅' if cat['activo'] else '❌'} {cat['orden']}. {cat['nombre']}{icono_local} ({n_prods} productos)"):
-                    cc1, cc2 = st.columns([3,1])
-                    c_nom = cc1.text_input("Nombre:", value=cat["nombre"], key=f"cnom_{cat['id']}")
-                    c_ord = cc2.number_input("Orden:", value=int(cat.get("orden",0)), min_value=1, key=f"cord_{cat['id']}")
-                    c_desc = st.text_input("Descripción:", value=cat.get("descripcion") or "", key=f"cdesc_{cat['id']}")
-                    c_act = st.checkbox("Activa", value=cat.get("activo",True), key=f"cact_{cat['id']}")
-                    c_local = st.checkbox("🪑 Solo pedidos en el local (QR de mesa) — no aparece en la web para recogida",
-                                          value=bool(cat.get("solo_local")), key=f"clocal_{cat['id']}")
-                    csc1, csc2 = st.columns(2)
-                    if csc1.button("💾 Guardar", key=f"save_cat_{cat['id']}"):
-                        sb9.table("categorias").update({
-                            "nombre": c_nom, "descripcion": c_desc or None,
-                            "orden": int(c_ord), "activo": c_act,
-                            "solo_local": bool(c_local)
-                        }).eq("id", cat["id"]).execute()
-                        st.success("✅ Categoría guardada")
-                        st.rerun()
-                    if csc2.button("🗑️ Eliminar", key=f"del_cat_{cat['id']}"):
-                        st.session_state[f"confirm_del_cat_{cat['id']}"] = True
-                    if st.session_state.get(f"confirm_del_cat_{cat['id']}"):
-                        st.warning(f"¿Eliminar '{cat['nombre']}' y todos sus productos?")
-                        dc1, dc2 = st.columns(2)
-                        if dc1.button("✅ Sí", key=f"yes_cat_{cat['id']}"):
-                            sb9.table("categorias").delete().eq("id", cat["id"]).execute()
-                            st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
-                            st.success("✅ Eliminada")
-                            st.rerun()
-                        if dc2.button("❌ No", key=f"no_cat_{cat['id']}"):
-                            st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
-                            st.rerun()
-
+        _frag_seccion_5()
     if nav == "📢 KDS":
-        render_kds_msg_tab()
+        @st.fragment
+        def _frag_seccion_6():
+            render_kds_msg_tab()
 
+        _frag_seccion_6()
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
 
