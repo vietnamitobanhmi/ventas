@@ -1133,12 +1133,15 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
                     # ─── GRÁFICA POR DÍA DE LA SEMANA × FRANJA ───
                     st.divider()
-                    st.markdown("##### Margen por día de la semana — mañana vs tarde")
-                    st.caption("Mañana: 9h–17h · Tarde: 18h–23h. Aquí sí se incluye el coste fijo prorrateado.")
+                    st.markdown("##### Contribución por día de la semana — mañana vs tarde")
+                    st.caption("Mañana: 9h–17h · Tarde: 18h–23h. **Contribución = ventas netas − personal de la franja** "
+                               "(los únicos costes que desaparecen si cierras la franja). El coste fijo NO se reparte: "
+                               "existe igual abras o no — se descuenta a nivel de día/semana. "
+                               "Regla de decisión: si la contribución de una franja es positiva, abrirla suma para pagar los fijos.")
 
-                    # Para cada día con ventas en el periodo, calcular margen mañana/tarde
-                    # incluyendo coste personal real (turnos de ese dow) + coste fijo del día
-                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "coste_fijo_m": 0, "coste_fijo_t": 0, "n_dias": 0} for dow in range(7)}
+                    # Para cada día con ventas en el periodo, calcular contribución mañana/tarde
+                    # (netas − personal evitable de la franja; SIN coste fijo)
+                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "n_dias": 0} for dow in range(7)}
 
                     df_periodo_copy = df_periodo.copy()
                     df_periodo_copy["dow_calc"] = pd.to_datetime(df_periodo_copy["fecha"]).dt.weekday
@@ -1164,32 +1167,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             elif 18 <= h <= 23:
                                 dow_data[dow_d]["coste_personal_t"] += c
 
-                        # Coste fijo de ese día — repartir 50/50 entre mañana y tarde si ambas tienen actividad,
-                        # o todo a la franja activa
-                        if total_cf_mes_d > 0:
-                            dias_en_mes_fd = pd.Timestamp(fd).days_in_month
-                            cf_dia = total_cf_mes_d / dias_en_mes_fd
-                            tiene_m = ventas_m_d > 0 or dow_data[dow_d]["coste_personal_m"] > 0
-                            tiene_t = ventas_t_d > 0 or dow_data[dow_d]["coste_personal_t"] > 0
-                            if tiene_m and tiene_t:
-                                dow_data[dow_d]["coste_fijo_m"] += cf_dia / 2
-                                dow_data[dow_d]["coste_fijo_t"] += cf_dia / 2
-                            elif tiene_m:
-                                dow_data[dow_d]["coste_fijo_m"] += cf_dia
-                            elif tiene_t:
-                                dow_data[dow_d]["coste_fijo_t"] += cf_dia
-                            else:
-                                dow_data[dow_d]["coste_fijo_m"] += cf_dia / 2
-                                dow_data[dow_d]["coste_fijo_t"] += cf_dia / 2
-
                     dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
                     margen_manana = []
                     margen_tarde = []
                     labels_dow = []
                     for dow in range(7):
                         d = dow_data[dow]
-                        margen_m = (d["ventas_m"] / 1.10 * 0.75) - d["coste_personal_m"] - d["coste_fijo_m"]
-                        margen_t = (d["ventas_t"] / 1.10 * 0.75) - d["coste_personal_t"] - d["coste_fijo_t"]
+                        margen_m = (d["ventas_m"] / 1.10 * 0.75) - d["coste_personal_m"]
+                        margen_t = (d["ventas_t"] / 1.10 * 0.75) - d["coste_personal_t"]
                         margen_manana.append(round(margen_m, 2))
                         margen_tarde.append(round(margen_t, 2))
                         label_d = dias_es[dow]
