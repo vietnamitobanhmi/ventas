@@ -439,10 +439,23 @@ def save_to_supabase(rows, fmt="epos"):
         # Borra solo los registros del nuevo POS (id_ticket IS NOT NULL) para las fechas del archivo
         for fecha in fechas:
             sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
+        # Dedupe en memoria: si el CSV trae el mismo ticket varias veces, conservar solo el primero
+        # (también evita el error de upsert "cannot affect row a second time")
+        vistos = set()
+        rows_dedupe = []
+        for r in rows:
+            clave = (r["fecha"], r.get("id_ticket"))
+            if clave in vistos:
+                continue
+            vistos.add(clave)
+            rows_dedupe.append(r)
+        rows = rows_dedupe
 
-    # Inserta los nuevos registros
+    # Upsert: el índice único (fecha, id_ticket) garantiza que re-subidas o re-runs
+    # concurrentes de Streamlit no puedan duplicar tickets. Para filas Epos
+    # (id_ticket NULL) el conflicto nunca aplica y funciona como insert normal.
     for i in range(0, len(rows), 500):
-        sb.table("ventas").insert(rows[i:i+500]).execute()
+        sb.table("ventas").upsert(rows[i:i+500], on_conflict="fecha,id_ticket").execute()
 
 
 @st.cache_data(ttl=60)
