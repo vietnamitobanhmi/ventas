@@ -797,7 +797,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 > 💡 Las barras "Ventas netas" en las gráficas ya tienen descontado el IVA y el coste de producto.
             """)
 
-        rent_sub1, rent_sub_dia, rent_sub2 = st.tabs(["📊 Análisis", "📆 Por día", "🏛️ Costes fijos mensuales"])
+        rent_sub1, rent_sub_dia, rent_sub_sem, rent_sub2 = st.tabs(["📊 Análisis", "📆 Por día", "📅 Por semana", "🏛️ Costes fijos mensuales"])
 
         # ─── COSTES FIJOS ───
         with rent_sub2:
@@ -1151,6 +1151,117 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             })
                         st.dataframe(pd.DataFrame(tabla_dow_rows), hide_index=True, use_container_width=True)
 
+        # ─── POR SEMANA ───
+        with rent_sub_sem:
+            st.markdown("#### Evolución semanal del margen")
+            st.caption("Semanas completas de lunes a domingo. Ventas netas = brutas ÷ 1,10 (IVA) × 75% (coste producto).")
+
+            _cf_sem_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
+            _total_cf_mes = sum(float(c["importe_sin_iva"]) for c in _cf_sem_data)
+            _turnos_sem = sb0.table("turnos").select("*").execute().data or []
+            _emps_sem = sb0.table("empleados").select("*").execute().data or []
+            _emp_coste_sem = {e["id"]: e["coste_hora"] for e in _emps_sem}
+            _coste_dow_sem = {}
+            for _tr in _turnos_sem:
+                _d = int(_tr["dia_semana"])
+                _coste_dow_sem[_d] = _coste_dow_sem.get(_d, 0) + _emp_coste_sem.get(_tr["empleado_id"], 10) * 0.5
+
+            _hoy_s = hoy_madrid()
+            _lunes_actual = _hoy_s - dt_rent.timedelta(days=_hoy_s.weekday())
+
+            _sel_sem = st.selectbox(
+                "Periodo:",
+                ["Semana en curso", "Última semana completa", "Últimas 2 semanas",
+                 "Últimas 4 semanas", "Últimas 8 semanas", "Últimas 12 semanas", "Personalizado…"],
+                index=3, key="rent_sem_periodo")
+
+            if _sel_sem == "Semana en curso":
+                _n_sem = 0
+                _incluir_curso = True
+            else:
+                if _sel_sem == "Última semana completa":
+                    _n_sem = 1
+                elif _sel_sem.startswith("Últimas"):
+                    _n_sem = int(_sel_sem.split()[1])
+                else:
+                    _n_sem = int(st.number_input("Número de semanas completas:", min_value=1, max_value=52, value=6, key="rent_sem_n"))
+                _incluir_curso = st.checkbox("➕ Incluir también la semana en curso (parcial)", value=False, key="rent_sem_inc")
+
+            if _n_sem == 0:
+                _inicio_sem = _lunes_actual
+                _fin_sem = _hoy_s
+            else:
+                _inicio_sem = _lunes_actual - dt_rent.timedelta(days=7 * _n_sem)
+                _fin_sem = _hoy_s if _incluir_curso else (_lunes_actual - dt_rent.timedelta(days=1))
+
+            df_sem = df[(df["fecha"] >= _inicio_sem) & (df["fecha"] <= _fin_sem)].copy()
+
+            if df_sem.empty:
+                st.warning("No hay datos de ventas en ese rango de semanas.")
+            else:
+                df_sem["fecha_ts"] = pd.to_datetime(df_sem["fecha"])
+                df_sem["lunes"] = df_sem["fecha_ts"] - pd.to_timedelta(df_sem["fecha_ts"].dt.weekday, unit="D")
+                df_sem["semana"] = df_sem["lunes"].dt.strftime("%Y-%m-%d")
+
+                sem_df = df_sem.groupby("semana")["valor"].sum().reset_index()
+                sem_df.columns = ["semana", "ventas_brutas"]
+                sem_df["ventas_netas"] = (sem_df["ventas_brutas"] / 1.10 * 0.75).round(2)
+
+                def _coste_personal_semana(sem_str):
+                    _lun = pd.Timestamp(sem_str).date()
+                    _tot = 0
+                    for _dd in range(7):
+                        _fd = _lun + dt_rent.timedelta(days=_dd)
+                        if _fd > _fin_sem:
+                            break
+                        if df_sem[df_sem["fecha"] == _fd]["valor"].sum() > 0:
+                            _tot += _coste_dow_sem.get(_dd, 0)
+                    return round(_tot, 2)
+                sem_df["coste_personal"] = sem_df["semana"].apply(_coste_personal_semana)
+
+                def _coste_fijo_semana(sem_str):
+                    if _total_cf_mes == 0:
+                        return 0
+                    _lun = pd.Timestamp(sem_str).date()
+                    _cf = 0
+                    for _dd in range(7):
+                        _fd = _lun + dt_rent.timedelta(days=_dd)
+                        if _fd > _fin_sem:
+                            break
+                        _cf += _total_cf_mes / pd.Timestamp(_fd).days_in_month
+                    return round(_cf, 2)
+                sem_df["coste_fijo"] = sem_df["semana"].apply(_coste_fijo_semana)
+                sem_df["coste"] = sem_df["coste_personal"] + sem_df["coste_fijo"]
+                sem_df["margen"] = (sem_df["ventas_netas"] - sem_df["coste"]).round(2)
+
+                def _label_semana(sem_str):
+                    _lun = pd.Timestamp(sem_str).date()
+                    _dom = _lun + dt_rent.timedelta(days=6)
+                    _lbl = f"{_lun.strftime('%d/%m')}–{_dom.strftime('%d/%m')}"
+                    if _lun == _lunes_actual:
+                        _lbl += " ⏳en curso"
+                    return _lbl
+                sem_df["label"] = sem_df["semana"].apply(_label_semana)
+                sem_df = sem_df.sort_values("semana")
+
+                # Métricas del rango
+                _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                _mc1.metric("Ventas brutas", f"€{sem_df['ventas_brutas'].sum():,.2f}")
+                _mc2.metric("Ventas netas", f"€{sem_df['ventas_netas'].sum():,.2f}")
+                _mc3.metric("Costes (personal + fijo)", f"€{sem_df['coste'].sum():,.2f}")
+                _mc4.metric("Margen", f"€{sem_df['margen'].sum():,.2f}")
+
+                fig_sem = go.Figure()
+                fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["ventas_netas"], name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
+                fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
+                if _total_cf_mes > 0:
+                    fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_fijo"], name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
+                fig_sem.add_trace(go.Scatter(x=sem_df["label"], y=sem_df["coste"], name="Break-even semanal (personal + fijo)", mode="lines", line=dict(color="#8B5CF6", width=2, dash="dash"), hovertemplate="Break-even: €%{y:.2f}<extra></extra>"))
+                fig_sem.add_trace(go.Scatter(x=sem_df["label"], y=sem_df["margen"], name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in sem_df["margen"]]), text=[f"€{v:+.0f}" for v in sem_df["margen"]], textposition="top center", textfont=dict(size=11)))
+                fig_sem.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
+                fig_sem.update_layout(title="Ventas netas vs costes por semana — línea morada: break-even semanal", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
+                st.plotly_chart(fig_sem, use_container_width=True)
+
         # ─── ANÁLISIS ───
         with rent_sub1:
             # Cargar costes fijos para usar en los cálculos
@@ -1339,59 +1450,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.warning(f"⚠️ Suma desglose dow ventas: €{suma_ventas_brutas_dow:,.2f} vs total: €{ventas_brutas:,.2f}")
                 if abs(suma_coste_personal_dow - coste_periodo) > 0.5:
                     st.warning(f"⚠️ Suma desglose dow coste personal: €{suma_coste_personal_dow:,.2f} vs total: €{coste_periodo:,.2f}")
-
-                st.divider()
-
-                # Evolución semanal del margen
-                st.markdown("#### Evolución semanal del margen")
-                df_rent2 = df_rent.copy()
-                df_rent2["fecha_ts"] = pd.to_datetime(df_rent2["fecha"])
-                df_rent2["lunes"] = df_rent2["fecha_ts"] - pd.to_timedelta(df_rent2["fecha_ts"].dt.weekday, unit="D")
-                df_rent2["semana"] = df_rent2["lunes"].dt.strftime("%Y-%m-%d")
-
-                semana_margen = df_rent2.groupby("semana")["valor"].sum().reset_index()
-                semana_margen.columns = ["semana","ventas_brutas"]
-                semana_margen["ventas_netas"] = semana_margen["ventas_brutas"] / 1.10 * 0.75
-                def coste_semana(semana_str):
-                    lunes = pd.Timestamp(semana_str)
-                    coste = 0
-                    for d in range(7):
-                        fecha_dia = (lunes + pd.Timedelta(days=d)).date()
-                        if fecha_dia < inicio or fecha_dia > fin:
-                            continue
-                        ventas_dia = df_rent[df_rent["fecha"] == fecha_dia]["valor"].sum()
-                        if ventas_dia > 0:
-                            coste += coste_dia_por_dow.get(d, 0)
-                    return coste
-                semana_margen["coste_personal"] = semana_margen["semana"].apply(coste_semana)
-                # Coste fijo semanal: contar días del mes que caen en esa semana dentro del rango
-                def coste_fijo_semana(semana_str):
-                    if total_costes_fijos_mes == 0:
-                        return 0
-                    lunes = pd.Timestamp(semana_str)
-                    cf = 0
-                    for d in range(7):
-                        fd = (lunes + pd.Timedelta(days=d)).date()
-                        if fd < inicio or fd > fin:
-                            continue
-                        cf += total_costes_fijos_mes / pd.Timestamp(fd).days_in_month
-                    return round(cf, 2)
-                semana_margen["coste_fijo"] = semana_margen["semana"].apply(coste_fijo_semana)
-                semana_margen["coste"] = semana_margen["coste_personal"] + semana_margen["coste_fijo"]
-                semana_margen["margen"] = semana_margen["ventas_netas"] - semana_margen["coste"]
-                semana_margen["label"] = semana_margen["semana"].apply(lambda s: pd.Timestamp(s).strftime("%d/%m"))
-                semana_margen = semana_margen.sort_values("semana")
-
-                fig_margen = go.Figure()
-                fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["ventas_netas"].round(2), name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
-                fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_personal"].round(2), name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
-                if total_costes_fijos_mes > 0:
-                    fig_margen.add_trace(go.Bar(x=semana_margen["label"], y=semana_margen["coste_fijo"].round(2), name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
-                fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["coste"].round(2), name="Break-even semanal (personal + fijo)", mode="lines", line=dict(color="#8B5CF6", width=2, dash="dash"), hovertemplate="Break-even: €%{y:.2f}<extra></extra>"))
-                fig_margen.add_trace(go.Scatter(x=semana_margen["label"], y=semana_margen["margen"].round(2), name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in semana_margen["margen"]]), text=[f"€{v:+.0f}" for v in semana_margen["margen"]], textposition="top center", textfont=dict(size=11)))
-                fig_margen.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-                fig_margen.update_layout(title="Ventas netas vs costes por semana — línea morada: break-even semanal (personal + fijo prorrateado)", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
-                st.plotly_chart(fig_margen, use_container_width=True)
 
                 st.divider()
 
