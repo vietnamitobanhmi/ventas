@@ -1135,13 +1135,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.divider()
                     st.markdown("##### Contribución por día de la semana — mañana vs tarde")
                     st.caption("Mañana: 9h–17h · Tarde: 18h–23h. **Contribución = ventas netas − personal de la franja** "
-                               "(los únicos costes que desaparecen si cierras la franja). El coste fijo NO se reparte: "
-                               "existe igual abras o no — se descuenta a nivel de día/semana. "
-                               "Regla de decisión: si la contribución de una franja es positiva, abrirla suma para pagar los fijos.")
+                               "(los únicos costes que desaparecen si cierras la franja). "
+                               "La línea morada es el **coste fijo que ese día debe cubrir** (prorrateado por días del periodo): "
+                               "si el rombo naranja (contribución total del día) queda por encima de la línea, el día es rentable. "
+                               "El fijo no se reparte entre franjas — existe igual abras o no.")
 
                     # Para cada día con ventas en el periodo, calcular contribución mañana/tarde
                     # (netas − personal evitable de la franja; SIN coste fijo)
-                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "n_dias": 0} for dow in range(7)}
+                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "cf": 0, "n_dias": 0} for dow in range(7)}
 
                     df_periodo_copy = df_periodo.copy()
                     df_periodo_copy["dow_calc"] = pd.to_datetime(df_periodo_copy["fecha"]).dt.weekday
@@ -1155,6 +1156,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         dow_data[dow_d]["ventas_m"] += ventas_m_d
                         dow_data[dow_d]["ventas_t"] += ventas_t_d
                         dow_data[dow_d]["n_dias"] += 1
+                        if total_cf_mes_d > 0:
+                            dow_data[dow_d]["cf"] += total_cf_mes_d / pd.Timestamp(fd).days_in_month
 
                         # Coste personal de ese día por franja
                         for tr in turnos_data_d:
@@ -1196,8 +1199,24 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         text=[f"€{v:+.0f}" if v != 0 else "" for v in margen_tarde], textposition="outside",
                     ))
                     fig_dow.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
+                    # Contribución total del día (mañana + tarde) — para comparar contra el fijo a cubrir
+                    contrib_total_dow = [round(margen_manana[d] + margen_tarde[d], 2) for d in range(7)]
+                    fig_dow.add_trace(go.Scatter(
+                        x=labels_dow, y=contrib_total_dow, name="Contribución total del día",
+                        mode="markers", marker=dict(size=10, symbol="diamond", color="#F4A261",
+                                                    line=dict(width=1, color="#B96A34")),
+                        hovertemplate="Contribución total: €%{y:.2f}<extra></extra>",
+                    ))
+                    # Línea de fijo a cubrir: coste fijo prorrateado × nº de días de ese dow en el periodo
+                    cf_dow = [round(dow_data[d]["cf"], 2) for d in range(7)]
+                    fig_dow.add_trace(go.Scatter(
+                        x=labels_dow, y=cf_dow, name="🏛️ Fijo a cubrir (prorrateado × días)",
+                        mode="lines+markers", line=dict(color="#8B5CF6", width=2, dash="dash"),
+                        marker=dict(size=5),
+                        hovertemplate="Fijo a cubrir: €%{y:.2f}<extra></extra>",
+                    ))
                     fig_dow.update_layout(
-                        title=f"Margen por día de la semana × franja — {titulo_periodo}",
+                        title=f"Contribución por día de la semana × franja — {titulo_periodo}",
                         yaxis_title="€ margen", barmode="group",
                         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                         yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
