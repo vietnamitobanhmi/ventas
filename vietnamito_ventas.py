@@ -2736,6 +2736,41 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 cfg_res = sb9.table("config").select("*").execute()
                 cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
 
+                # ── Métodos de pago por canal (guardado instantáneo) ──
+                st.markdown("**💳 Métodos de pago aceptados**")
+                st.caption("Controla qué opciones de pago ve el cliente en cada canal. Los cambios se aplican al instante en la web.")
+
+                def _flag_cfg(clave):
+                    v = cfg.get(clave)
+                    return True if v is None or v == "" else v == "1"
+
+                pc1, pc2 = st.columns(2)
+                with pc1:
+                    st.markdown("🪑 *Pedidos en mesa (QR)*")
+                    t_tarj_mesa = st.toggle("💳 Tarjeta online (Stripe)", value=_flag_cfg("pago_tarjeta_mesa"), key="tg_tarj_mesa")
+                    t_caja_mesa = st.toggle("🏧 Pago en caja", value=_flag_cfg("pago_caja_mesa"), key="tg_caja_mesa")
+                with pc2:
+                    st.markdown("🛍️ *Pedidos para recoger (web)*")
+                    t_tarj_rec = st.toggle("💳 Tarjeta online (Stripe)", value=_flag_cfg("pago_tarjeta_recogida"), key="tg_tarj_rec")
+                    t_caja_rec = st.toggle("🏧 Pago al recoger", value=_flag_cfg("pago_caja_recogida"), key="tg_caja_rec")
+
+                _pagos_nuevos = {
+                    "pago_tarjeta_mesa": t_tarj_mesa, "pago_caja_mesa": t_caja_mesa,
+                    "pago_tarjeta_recogida": t_tarj_rec, "pago_caja_recogida": t_caja_rec,
+                }
+                _cambio_pagos = False
+                for _k, _v in _pagos_nuevos.items():
+                    if _flag_cfg(_k) != _v:
+                        sb9.table("config").upsert({"clave": _k, "valor": "1" if _v else "0"}).execute()
+                        _cambio_pagos = True
+                if _cambio_pagos:
+                    st.rerun()
+                if not (t_tarj_mesa or t_caja_mesa):
+                    st.error("⚠️ Pedidos en MESA sin ningún método de pago: los clientes del QR NO podrán pedir.")
+                if not (t_tarj_rec or t_caja_rec):
+                    st.error("⚠️ Pedidos para RECOGER sin ningún método de pago: la web NO aceptará pedidos.")
+                st.divider()
+
                 st.markdown("**Información general**")
                 c1, c2 = st.columns(2)
                 new_cfg = {}
