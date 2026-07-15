@@ -2922,9 +2922,16 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.session_state.prod_counter = 0
                         pc = st.session_state.prod_counter
                         pa1, pa2 = st.columns([3,1])
-                        new_prod_nom = pa1.text_input("Nombre:", key=f"pn_{pc}")
+                        new_prod_nom = pa1.text_input("🇪🇸 Nombre:", key=f"pn_{pc}")
                         new_prod_precio = pa2.number_input("Precio €:", value=6.50, min_value=0.0, step=0.5, format="%.2f", key=f"pp_{pc}")
-                        new_prod_desc = st.text_area("Descripción:", key=f"pd_{pc}", height=70)
+                        pt1, pt2, pt3 = st.columns(3)
+                        new_prod_nom_en = pt1.text_input("🇬🇧 Name (EN):", key=f"pn_en_{pc}")
+                        new_prod_nom_ca = pt2.text_input("🏴 Nom (CA):", key=f"pn_ca_{pc}")
+                        new_prod_nom_vi = pt3.text_input("🇻🇳 Tên (VI):", key=f"pn_vi_{pc}")
+                        new_prod_desc = st.text_area("🇪🇸 Descripción:", key=f"pd_{pc}", height=70)
+                        new_prod_desc_en = st.text_area("🇬🇧 Description (EN):", key=f"pd_en_{pc}", height=68)
+                        new_prod_desc_ca = st.text_area("🏴 Descripció (CA):", key=f"pd_ca_{pc}", height=68)
+                        new_prod_desc_vi = st.text_area("🇻🇳 Mô tả (VI):", key=f"pd_vi_{pc}", height=68)
                         new_prod_foto_url = st.text_input("URL foto (opcional):", key=f"pf_{pc}")
                         new_prod_foto_file = st.file_uploader("O sube foto:", type=["jpg","jpeg","png","webp"], key=f"pff_{pc}")
                         if new_prod_foto_file:
@@ -2946,7 +2953,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 sb9.table("productos").insert({
                                     "categoria_id": cat_obj["id"],
                                     "nombre": new_prod_nom.strip(),
+                                    "nombre_en": new_prod_nom_en.strip() or None,
+                                    "nombre_ca": new_prod_nom_ca.strip() or None,
+                                    "nombre_vi": new_prod_nom_vi.strip() or None,
                                     "descripcion": new_prod_desc.strip() or None,
+                                    "descripcion_en": new_prod_desc_en.strip() or None,
+                                    "descripcion_ca": new_prod_desc_ca.strip() or None,
+                                    "descripcion_vi": new_prod_desc_vi.strip() or None,
                                     "precio": float(new_prod_precio),
                                     "foto_url": foto_url,
                                     "orden": int(new_prod_orden),
