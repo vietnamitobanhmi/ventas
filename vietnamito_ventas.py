@@ -751,6 +751,37 @@ def render_kds_msg_tab():
             st.rerun()
         if not _alertas_on:
             st.caption("🔕 Avisos de KDS silenciados — no llegará nada a Telegram aunque el KDS se caiga.")
+        else:
+            # Indicador de ventana de vigilancia (mismo cálculo que la Edge Function:
+            # franjas de hoy en config ± 15 min, hora de Madrid)
+            try:
+                import re as _re
+                from datetime import datetime as _dtv
+                from zoneinfo import ZoneInfo as _ZI
+                _ahora_mad = _dtv.now(_ZI("Europe/Madrid"))
+                _dias_keys = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+                _dow_key = _dias_keys[_ahora_mad.weekday()]
+                _cfg_h = sb_kds.table("config").select("valor").eq("clave", f"horario_{_dow_key}").execute().data
+                _horario_hoy = (_cfg_h[0]["valor"] if _cfg_h else "") or ""
+                _min_ahora = _ahora_mad.hour * 60 + _ahora_mad.minute
+                _MARGEN = 15
+                _dentro = False
+                _rangos_txt = []
+                for _m in _re.finditer(r"(\d{1,2})[:.]?(\d{0,2})\s*[-–—]\s*(\d{1,2})[:.]?(\d{0,2})", _horario_hoy):
+                    _ini = int(_m.group(1)) * 60 + int(_m.group(2) or 0)
+                    _fin = int(_m.group(3)) * 60 + int(_m.group(4) or 0)
+                    _rangos_txt.append(f"{_m.group(1)}:{(_m.group(2) or '00').zfill(2)}–{_m.group(3)}:{(_m.group(4) or '00').zfill(2)}")
+                    if (_ini - _MARGEN) <= _min_ahora <= (_fin + _MARGEN):
+                        _dentro = True
+                _franjas = " / ".join(_rangos_txt) if _rangos_txt else "sin franjas configuradas hoy"
+                if _dentro:
+                    st.success(f"👁️ Vigilancia ACTIVA ahora mismo — horario de hoy: {_franjas} (±15 min). Si el KDS se apaga, avisará por Telegram.")
+                elif _rangos_txt:
+                    st.info(f"😴 Ahora mismo FUERA de horario — las alertas de KDS inactivo están en pausa. Horario de hoy: {_franjas} (vigilancia desde 15 min antes de abrir hasta 15 min tras cerrar). Los avisos de pedidos sin atender siguen activos 24h.")
+                else:
+                    st.info("😴 Hoy no hay franjas de apertura configuradas — sin vigilancia de KDS hoy. Los avisos de pedidos sin atender siguen activos 24h.")
+            except Exception:
+                pass
     except Exception:
         pass
     st.caption("El mensaje aparecerá en la tablet del KDS con un sonido persistente hasta que alguien pulse 'OK, entendido'.")
