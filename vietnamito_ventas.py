@@ -3047,14 +3047,21 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
                 with st.expander("➕ Nueva categoría"):
                     nc1, nc2 = st.columns([3,1])
-                    new_cat_nom = nc1.text_input("Nombre:", key="new_cat_nom")
+                    new_cat_nom = nc1.text_input("Nombre (ES):", key="new_cat_nom")
                     new_cat_ord = nc2.number_input("Orden:", value=len(cats_web)+1, min_value=1, key="new_cat_ord")
+                    nt1, nt2, nt3 = st.columns(3)
+                    new_cat_en = nt1.text_input("🇬🇧 Inglés:", key="new_cat_en")
+                    new_cat_ca = nt2.text_input("Català:", key="new_cat_ca")
+                    new_cat_vi = nt3.text_input("🇻🇳 Vietnamita:", key="new_cat_vi")
                     new_cat_desc = st.text_input("Descripción (opcional):", key="new_cat_desc")
                     new_cat_local = st.checkbox("🪑 Solo pedidos en el local (no aparece en la web para recogida)", key="new_cat_local")
                     if st.button("➕ Añadir categoría", key="add_cat_web"):
                         if new_cat_nom.strip():
                             sb9.table("categorias").insert({
                                 "nombre": new_cat_nom.strip(),
+                                "nombre_en": new_cat_en.strip() or None,
+                                "nombre_ca": new_cat_ca.strip() or None,
+                                "nombre_vi": new_cat_vi.strip() or None,
                                 "descripcion": new_cat_desc.strip() or None,
                                 "orden": int(new_cat_ord),
                                 "activo": True,
@@ -3070,8 +3077,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     icono_local = " 🪑" if cat.get("solo_local") else ""
                     with st.expander(f"{'✅' if cat['activo'] else '❌'} {cat['orden']}. {cat['nombre']}{icono_local} ({n_prods} productos)"):
                         cc1, cc2 = st.columns([3,1])
-                        c_nom = cc1.text_input("Nombre:", value=cat["nombre"], key=f"cnom_{cat['id']}")
+                        c_nom = cc1.text_input("Nombre (ES):", value=cat["nombre"], key=f"cnom_{cat['id']}")
                         c_ord = cc2.number_input("Orden:", value=int(cat.get("orden",0)), min_value=1, key=f"cord_{cat['id']}")
+                        ct1, ct2, ct3 = st.columns(3)
+                        c_en = ct1.text_input("🇬🇧 Inglés:", value=cat.get("nombre_en") or "", key=f"cen_{cat['id']}")
+                        c_ca = ct2.text_input("Català:", value=cat.get("nombre_ca") or "", key=f"cca_{cat['id']}")
+                        c_vi = ct3.text_input("🇻🇳 Vietnamita:", value=cat.get("nombre_vi") or "", key=f"cvi_{cat['id']}")
                         c_desc = st.text_input("Descripción:", value=cat.get("descripcion") or "", key=f"cdesc_{cat['id']}")
                         c_act = st.checkbox("Activa", value=cat.get("activo",True), key=f"cact_{cat['id']}")
                         c_local = st.checkbox("🪑 Solo pedidos en el local (QR de mesa) — no aparece en la web para recogida",
@@ -3080,6 +3091,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if csc1.button("💾 Guardar", key=f"save_cat_{cat['id']}"):
                             sb9.table("categorias").update({
                                 "nombre": c_nom, "descripcion": c_desc or None,
+                                "nombre_en": c_en.strip() or None,
+                                "nombre_ca": c_ca.strip() or None,
+                                "nombre_vi": c_vi.strip() or None,
                                 "orden": int(c_ord), "activo": c_act,
                                 "solo_local": bool(c_local)
                             }).eq("id", cat["id"]).execute()
