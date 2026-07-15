@@ -771,13 +771,13 @@ def render_kds_msg_tab():
                     _ini = int(_m.group(1)) * 60 + int(_m.group(2) or 0)
                     _fin = int(_m.group(3)) * 60 + int(_m.group(4) or 0)
                     _rangos_txt.append(f"{_m.group(1)}:{(_m.group(2) or '00').zfill(2)}–{_m.group(3)}:{(_m.group(4) or '00').zfill(2)}")
-                    if (_ini - _MARGEN) <= _min_ahora <= (_fin + _MARGEN):
+                    if (_ini + _MARGEN) <= _min_ahora <= (_fin - _MARGEN):
                         _dentro = True
                 _franjas = " / ".join(_rangos_txt) if _rangos_txt else "sin franjas configuradas hoy"
                 if _dentro:
-                    st.success(f"👁️ Vigilancia ACTIVA ahora mismo — horario de hoy: {_franjas} (±15 min). Si el KDS se apaga, avisará por Telegram.")
+                    st.success(f"👁️ Vigilancia ACTIVA ahora mismo — horario de hoy: {_franjas}. Si el KDS se apaga, avisará por Telegram.")
                 elif _rangos_txt:
-                    st.info(f"😴 Ahora mismo FUERA de horario — las alertas de KDS inactivo están en pausa. Horario de hoy: {_franjas} (vigilancia desde 15 min antes de abrir hasta 15 min tras cerrar). Los avisos de pedidos sin atender siguen activos 24h.")
+                    st.info(f"😴 Ahora mismo FUERA de horario — las alertas de KDS inactivo están en pausa. Horario de hoy: {_franjas} (vigilancia desde 15 min después de abrir hasta 15 min antes de cerrar). Los avisos de pedidos sin atender siguen activos 24h.")
                 else:
                     st.info("😴 Hoy no hay franjas de apertura configuradas — sin vigilancia de KDS hoy. Los avisos de pedidos sin atender siguen activos 24h.")
             except Exception:
