@@ -2759,10 +2759,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             sb9 = get_supabase()
             st.markdown("### Gestión de la web")
 
-            web_tab1, web_tab2, web_tab3 = st.tabs(["⚙️ Configuración", "🍜 Menú", "📸 Categorías"])
+            nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías"],
+                                   horizontal=True, key="nav_web", label_visibility="collapsed")
 
             # ── CONFIG ──
-            with web_tab1:
+            if nav_web == "⚙️ Configuración":
                 st.markdown("#### Datos del local y horarios")
                 cfg_res = sb9.table("config").select("*").execute()
                 cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
@@ -2903,7 +2904,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.markdown("")
 
             # ── MENÚ ──
-            with web_tab2:
+            if nav_web == "🍜 Menú":
                 cats_res = sb9.table("categorias").select("*").order("orden").execute()
                 cats_web = cats_res.data or []
                 prods_res = sb9.table("productos").select("*").order("orden").execute()
@@ -3055,7 +3056,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     st.rerun()
 
             # ── CATEGORÍAS ──
-            with web_tab3:
+            if nav_web == "📸 Categorías":
                 st.markdown("#### Categorías del menú")
 
                 with st.expander("➕ Nueva categoría"):
@@ -3310,10 +3311,11 @@ if df.empty:
         # Reutilizar exactamente el mismo código del tab9
         sb9 = _sb0
         st.markdown("### Gestión de la web")
-        web_tab1, web_tab2, web_tab3 = st.tabs(["⚙️ Configuración", "🍜 Menú", "📸 Categorías"])
+        nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías"],
+                           horizontal=True, key="nav_web_sd", label_visibility="collapsed")
         cfg_res = sb9.table("config").select("*").execute()
         cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
-        with web_tab1:
+        if nav_web == "⚙️ Configuración":
             st.markdown("#### Datos del local y horarios")
             c1, c2 = st.columns(2)
             new_cfg = {}
@@ -3340,7 +3342,7 @@ if df.empty:
                     sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
                 st.success("✅ Configuración guardada"); st.rerun()
 
-        with web_tab2:
+        if nav_web == "🍜 Menú":
             cats_res_e = sb9.table("categorias").select("*").order("orden").execute()
             cats_web_e = cats_res_e.data or []
             prods_res_e = sb9.table("productos").select("*").order("orden").execute()
@@ -3361,7 +3363,7 @@ if df.empty:
                             sb9.table("productos").update({"nombre": e_nom_e, "descripcion": e_desc_e or None, "precio": float(e_precio_e), "disponible": e_disp_e}).eq("id", prod_e["id"]).execute()
                             st.success("✅ Guardado"); st.rerun()
 
-        with web_tab3:
+        if nav_web == "📸 Categorías":
             st.markdown("#### Categorías")
             for cat_e in cats_web_e:
                 with st.expander(f"{cat_e['orden']}. {cat_e['nombre']}"):
