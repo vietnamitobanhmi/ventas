@@ -3058,6 +3058,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             # ── CATEGORÍAS ──
             if nav_web == "📸 Categorías":
                 st.markdown("#### Categorías del menú")
+                cats_web = sb9.table("categorias").select("*").order("orden").execute().data or []
+                prods_web = sb9.table("productos").select("id,categoria_id").execute().data or []
 
                 with st.expander("➕ Nueva categoría"):
                     nc1, nc2 = st.columns([3,1])
@@ -3365,6 +3367,7 @@ if df.empty:
 
         if nav_web == "📸 Categorías":
             st.markdown("#### Categorías")
+            cats_web_e = sb9.table("categorias").select("*").order("orden").execute().data or []
             for cat_e in cats_web_e:
                 with st.expander(f"{cat_e['orden']}. {cat_e['nombre']}"):
                     c_nom_e = st.text_input("🇪🇸 Nombre:", value=cat_e["nombre"], key=f"cnom_e_{cat_e['id']}")
