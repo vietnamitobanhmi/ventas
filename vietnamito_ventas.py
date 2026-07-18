@@ -912,10 +912,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 > 💡 Las barras "Ventas netas" en las gráficas ya tienen descontado el IVA y el coste de producto.
             """)
 
-        rent_sub1, rent_sub_dia, rent_sub_sem, rent_sub2 = st.tabs(["📊 Análisis", "📆 Por día", "📅 Por semana", "🏛️ Costes fijos mensuales"])
+        nav_rent = st.radio("Vista", ["📊 Análisis", "📆 Por día", "📅 Por semana", "🏛️ Costes fijos mensuales"],
+                            horizontal=True, key="nav_rent", label_visibility="collapsed")
 
         # ─── COSTES FIJOS ───
-        with rent_sub2:
+        if nav_rent == "🏛️ Costes fijos mensuales":
             st.markdown("#### Costes fijos mensuales")
             st.caption("⚠️ Introduce los importes **SIN IVA**. Estos costes se reparten proporcionalmente entre los días del mes para calcular la rentabilidad diaria real.")
 
@@ -975,7 +976,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.error("Concepto y importe son obligatorios.")
 
         # ─── POR DÍA ───
-        with rent_sub_dia:
+        if nav_rent == "📆 Por día":
             st.markdown("#### Rentabilidad por hora")
             st.caption("Selecciona un día concreto o un periodo para ver la rentabilidad agregada por franja horaria.")
 
@@ -1273,7 +1274,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.dataframe(pd.DataFrame(tabla_dow_rows), hide_index=True, use_container_width=True)
 
         # ─── POR SEMANA ───
-        with rent_sub_sem:
+        if nav_rent == "📅 Por semana":
             st.markdown("#### Evolución semanal del margen")
             st.caption("Semanas completas de lunes a domingo. Ventas netas = brutas ÷ 1,10 (IVA) × 75% (coste producto).")
 
@@ -1384,7 +1385,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 st.plotly_chart(fig_sem, use_container_width=True)
 
         # ─── ANÁLISIS ───
-        with rent_sub1:
+        if nav_rent == "📊 Análisis":
             # Cargar costes fijos para usar en los cálculos
             costes_fijos_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
             total_costes_fijos_mes = sum(float(c["importe_sin_iva"]) for c in costes_fijos_data)
