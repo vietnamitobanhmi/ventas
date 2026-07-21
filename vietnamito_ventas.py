@@ -787,12 +787,16 @@ def render_dashboard(df):
         # Nombres de imagen por tramo (bucket assets, raíz, .png)
         _CHI_IMGS = {
             "unknown": "margin_unknown",
-            "angry": "margin_angry",
-            "worried": "margin_worried",
-            "ok": "margin_ok",
-            "happy": "margin_happy",
-            "very_happy": "margin_very_happy",
-            "rich": "chinita_rich",
+            "disaster": "margin_01_disaster",
+            "terrible": "margin_02_terrible",
+            "bad": "margin_03_bad",
+            "worried": "margin_04_worried",
+            "neutral": "margin_05_neutral",
+            "ok": "margin_06_ok",
+            "happy": "margin_07_happy",
+            "great": "margin_08_great",
+            "amazing": "margin_09_amazing",
+            "rich": "margin_10_rich",
         }
         def _chi_url(nombre):
             return f"{SUPABASE_URL}/storage/v1/object/public/assets/{nombre}.png"
@@ -818,19 +822,27 @@ def render_dashboard(df):
             _ventas_brutas_hoy = _df_hoy["valor"].sum()
             _ventas_netas_hoy = _ventas_brutas_hoy / 1.10 * 0.75
             _margen_hoy = _ventas_netas_hoy - _coste_personal_hoy - _coste_fijo_hoy
-        # Elegir imagen según el tramo del margen
+        # Elegir imagen según el tramo del margen (11 estados, misma escala que el cmeter.html)
         if _margen_hoy is None:
             _estado_chi = "unknown"
-        elif _margen_hoy <= -100:
-            _estado_chi = "angry"
+        elif _margen_hoy <= -150:
+            _estado_chi = "disaster"
+        elif _margen_hoy <= -75:
+            _estado_chi = "terrible"
         elif _margen_hoy < 0:
+            _estado_chi = "bad"
+        elif _margen_hoy <= 25:
             _estado_chi = "worried"
         elif _margen_hoy <= 50:
+            _estado_chi = "neutral"
+        elif _margen_hoy <= 90:
             _estado_chi = "ok"
-        elif _margen_hoy <= 100:
+        elif _margen_hoy <= 130:
             _estado_chi = "happy"
-        elif _margen_hoy <= 200:
-            _estado_chi = "very_happy"
+        elif _margen_hoy <= 180:
+            _estado_chi = "great"
+        elif _margen_hoy <= 280:
+            _estado_chi = "amazing"
         else:
             _estado_chi = "rich"
         # Título + imagen centrada
@@ -841,6 +853,22 @@ def render_dashboard(df):
         _c_izq, _c_centro, _c_der = st.columns([1, 2, 1.4])
         with _c_centro:
             st.image(_chi_url(_CHI_IMGS[_estado_chi]), use_container_width=True)
+            # Texto de ánimo "Chinita is… ESTADO" (mismo mapa que el cmeter.html público)
+            _CHI_MOOD = {
+                "unknown":  ("WAITING…",       "#8a7566"),
+                "disaster": ("A DISASTER!!!",  "#8E0000"),
+                "terrible": ("FURIOUS!!!",     "#C62828"),
+                "bad":      ("ANGRY",          "#E53935"),
+                "worried":  ("WORRIED",        "#E8792B"),
+                "neutral":  ("MEH",            "#B0932A"),
+                "ok":       ("OK-ISH",         "#C9A227"),
+                "happy":    ("HAPPY",          "#7CB342"),
+                "great":    ("VERY HAPPY!!!",  "#2E7D32"),
+                "amazing":  ("AMAZING!!!",     "#1B8A5A"),
+                "rich":     ("CHITA RICH!!!!", "#1565C0"),
+            }
+            _mood_txt, _mood_col = _CHI_MOOD.get(_estado_chi, _CHI_MOOD["unknown"])
+            st.markdown(f"<p style='text-align:center;font-size:20px;font-weight:800;letter-spacing:0.5px;margin-top:10px;'>Chinita is… <span style='color:{_mood_col}'>{_mood_txt}</span></p>", unsafe_allow_html=True)
             if _margen_hoy is None:
                 st.markdown("<p style='text-align:center;color:#888;font-size:15px;margin-top:12px;'>Todavía no hay ventas registradas hoy.</p>", unsafe_allow_html=True)
             else:
