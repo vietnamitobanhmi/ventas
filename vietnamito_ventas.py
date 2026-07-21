@@ -1180,6 +1180,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                "(los únicos costes que desaparecen si cierras la franja). "
                                "La línea morada es el **coste fijo que ese día debe cubrir** (prorrateado por días del periodo): "
                                "si el rombo naranja (contribución total del día) queda por encima de la línea, el día es rentable. "
+                               "El número al lado del rombo es la ganancia real del día (distancia del rombo al break-even): "
+                               "verde si gana, rojo si falta para cubrir el fijo. "
                                "El fijo no se reparte entre franjas — existe igual abras o no.")
                     # Para cada día con ventas en el periodo, calcular contribución mañana/tarde
                     # (netas − personal evitable de la franja; SIN coste fijo)
@@ -1237,14 +1239,28 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     fig_dow.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
                     # Contribución total del día (mañana + tarde) — para comparar contra el fijo a cubrir
                     contrib_total_dow = [round(margen_manana[d] + margen_tarde[d], 2) for d in range(7)]
+                    cf_dow = [round(dow_data[d]["cf"], 2) for d in range(7)]
+                    # Ganancia real del día = contribución total − fijo a cubrir (distancia del rombo al break-even)
+                    ganancia_dow = [round(contrib_total_dow[d] - cf_dow[d], 2) for d in range(7)]
+                    # Etiqueta al lado del rombo: solo en días con ventas, verde si gana, rojo si falta
+                    texto_ganancia = []
+                    color_ganancia = []
+                    for d in range(7):
+                        if dow_data[d]["n_dias"] > 0:
+                            texto_ganancia.append(f"  {'+' if ganancia_dow[d] >= 0 else '−'}€{abs(ganancia_dow[d]):.0f}")
+                            color_ganancia.append("#2E7D32" if ganancia_dow[d] >= 0 else "#C62828")
+                        else:
+                            texto_ganancia.append("")
+                            color_ganancia.append("#2E7D32")
                     fig_dow.add_trace(go.Scatter(
                         x=labels_dow, y=contrib_total_dow, name="Contribución total del día",
-                        mode="markers", marker=dict(size=10, symbol="diamond", color="#F4A261",
+                        mode="markers+text", marker=dict(size=10, symbol="diamond", color="#F4A261",
                                                     line=dict(width=1, color="#B96A34")),
+                        text=texto_ganancia, textposition="middle right",
+                        textfont=dict(size=11, color=color_ganancia),
                         hovertemplate="Contribución total: €%{y:.2f}<extra></extra>",
                     ))
                     # Línea de fijo a cubrir: coste fijo prorrateado × nº de días de ese dow en el periodo
-                    cf_dow = [round(dow_data[d]["cf"], 2) for d in range(7)]
                     fig_dow.add_trace(go.Scatter(
                         x=labels_dow, y=cf_dow, name="🏛️ Fijo a cubrir (prorrateado × días)",
                         mode="lines+markers", line=dict(color="#8B5CF6", width=2, dash="dash"),
