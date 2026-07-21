@@ -5,30 +5,22 @@ import plotly.express as px
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 TZ_MADRID = ZoneInfo("Europe/Madrid")
-
 def hoy_madrid():
     """Devuelve la fecha de HOY en zona horaria Europe/Madrid (no UTC del servidor)."""
     return datetime.now(TZ_MADRID).date()
 from supabase import create_client
-
 st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
-
 # ── AUTENTICACIÓN ──
 import hashlib
 import requests as _rq
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-
 # Guard anti fuerza bruta persistido en Supabase (no se salta ni refrescando ni borrando caché)
 _BO_SB_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 _BO_SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
 _GUARD_HDRS = {"apikey": _BO_SB_KEY, "Authorization": f"Bearer {_BO_SB_KEY}", "Content-Type": "application/json"}
-
-
 def _auth_token(pwd: str) -> str:
     """Token derivado de la contraseña (no expone la contraseña en la URL)."""
     return hashlib.sha256(("vietnamito_bo_salt::" + pwd).encode()).hexdigest()[:32]
-
-
 def _guard_leer():
     try:
         r = _rq.get(f"{_BO_SB_URL}/rest/v1/backoffice_login_guard?id=eq.1&select=*", headers=_GUARD_HDRS, timeout=5)
@@ -38,16 +30,12 @@ def _guard_leer():
     except Exception:
         pass
     return {"fails": 0, "lock_until": None}
-
-
 def _guard_escribir(fails, lock_until_iso):
     try:
         _rq.patch(f"{_BO_SB_URL}/rest/v1/backoffice_login_guard?id=eq.1", headers=_GUARD_HDRS,
                   json={"fails": fails, "lock_until": lock_until_iso}, timeout=5)
     except Exception:
         pass
-
-
 def _guard_lock_restante_s(g):
     """Segundos restantes de bloqueo (0 si no hay bloqueo activo)."""
     lu = g.get("lock_until")
@@ -58,44 +46,34 @@ def _guard_lock_restante_s(g):
         return max(0, (t - _dt.now(_tz.utc)).total_seconds())
     except Exception:
         return 0
-
-
 def _guard_duracion_min(fails):
     """Escalado: 3 fallos→5min · 6→15 · 9→30 · 12+→180 (3h) cada vez."""
     ronda = fails // 3
     return {1: 5, 2: 15, 3: 30}.get(ronda, 180 if ronda >= 4 else 0)
-
-
 def _guard_texto_espera(segundos):
     m = int(segundos // 60) + (1 if segundos % 60 else 0)
     if m >= 60:
         h, mm = divmod(m, 60)
         return f"{h}h {mm}min" if mm else f"{h}h"
     return f"{m} min"
-
-
 def check_password():
     """Devuelve True si el usuario está autenticado (sesión, URL token o login)."""
     correct_pwd = st.secrets.get("backoffice_password", "cambiame_en_secrets")
     expected_token = _auth_token(correct_pwd)
-
     # 1. Ya validado en esta sesión
     if st.session_state.get("password_correct"):
         # Asegurar que el token está en la URL para persistir tras refresh
         if st.query_params.get("auth") != expected_token:
             st.query_params["auth"] = expected_token
         return True
-
     # 2. Token válido en la URL (persiste entre sesiones/refresh/marcadores)
     #    Los tokens válidos NO se ven afectados por el bloqueo (son credenciales correctas)
     if st.query_params.get("auth") == expected_token:
         st.session_state["password_correct"] = True
         return True
-
     # 3. Login por contraseña, protegido por bloqueo escalado
     guard = _guard_leer()
     bloqueado_s = _guard_lock_restante_s(guard)
-
     def password_entered():
         g = _guard_leer()
         if _guard_lock_restante_s(g) > 0:
@@ -114,7 +92,6 @@ def check_password():
                 mins = _guard_duracion_min(fails)
                 lock_iso = (_dt.now(_tz.utc) + _td(minutes=mins)).isoformat()
             _guard_escribir(fails, lock_iso)
-
     # Pantalla de login
     st.markdown("""
     <div style="max-width:400px;margin:80px auto;padding:40px;background:var(--background-color, #fff);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.08);text-align:center;">
@@ -122,12 +99,10 @@ def check_password():
       <p style="color:#666;margin:0 0 24px;font-size:14px;">Backoffice — Acceso restringido</p>
     </div>
     """, unsafe_allow_html=True)
-
     if bloqueado_s > 0:
         st.error(f"🔒 Demasiados intentos fallidos. Vuelve a intentarlo en {_guard_texto_espera(bloqueado_s)}.")
         st.caption("El bloqueo se levanta automáticamente. Recarga la página pasado ese tiempo.")
         return False
-
     st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
     if st.session_state.get("password_correct") is False:
         g_post = _guard_leer()
@@ -139,15 +114,11 @@ def check_password():
             st.error(f"❌ Contraseña incorrecta ({quedan} intento{'s' if quedan != 1 else ''} antes de bloqueo)")
     st.caption("Este backoffice contiene datos confidenciales del negocio. Solo personal autorizado.")
     return False
-
 if not check_password():
     st.stop()
-
 # ── FIN AUTENTICACIÓN ──
-
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
-
 st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; }
@@ -155,15 +126,12 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { font-size: 0.9rem; }
 </style>
 """, unsafe_allow_html=True)
-
 try:
     RESEND_API_KEY = st.secrets["RESEND_API_KEY"]
 except Exception:
     RESEND_API_KEY = ""
 RESEND_FROM = "Vietnamito <reservas@vietnamito.es>"
-
 MAPS_URL = "https://maps.app.goo.gl/LWR4Sm5mdAfR3H7v5"
-
 def formato_fecha_email(fecha_str):
     """Convierte '2026-06-11' a 'Jueves 11/06/2026'."""
     try:
@@ -173,7 +141,6 @@ def formato_fecha_email(fecha_str):
         return f"{dias[dt.weekday()]} {dt.strftime('%d/%m/%Y')}"
     except:
         return fecha_str
-
 def _resend_send(to, subject, html_body):
     """Envía email via Resend API usando requests."""
     if not RESEND_API_KEY:
@@ -194,7 +161,6 @@ def _resend_send(to, subject, html_body):
     except Exception as e:
         st.warning(f"⚠️ Error enviando email: {e}")
         return False
-
 def _html_base(titulo, subtitulo, contenido):
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -212,7 +178,6 @@ def _html_base(titulo, subtitulo, contenido):
     </div>
   </div>
 </body></html>"""
-
 def _tabla_reserva(fecha, hora, personas, notas, cfg=None):
     dir_local = (cfg or {}).get("direccion", "Carrer Berlín 64, Barcelona")
     notas_row = f"<tr><td style='padding:8px 0;color:#7A6055;font-size:14px;vertical-align:top;'>📝 Notas</td><td style='padding:8px 0;color:#3D1C0A;font-size:14px;'>{notas}</td></tr>" if notas else ""
@@ -226,7 +191,6 @@ def _tabla_reserva(fecha, hora, personas, notas, cfg=None):
         <tr><td style="padding:8px 0;color:#7A6055;font-size:14px;">📍 Dirección</td><td style="padding:8px 0;font-size:14px;"><a href="{MAPS_URL}" style="color:#D85A30;">{dir_local}</a></td></tr>
       </table>
     </div>"""
-
 def enviar_email_recibida(reserva, cfg=None):
     """Email automático al recibir la solicitud — aún pendiente de confirmar."""
     if not reserva.get("email"):
@@ -244,7 +208,6 @@ def enviar_email_recibida(reserva, cfg=None):
       <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">¿Tienes alguna duda? Responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
     html = _html_base("Solicitud recibida 📬", "Te confirmaremos la reserva por email", contenido)
     return _resend_send(reserva["email"], f"Solicitud de reserva recibida — Vietnamito {fecha} {hora}", html)
-
 def enviar_email_confirmacion(reserva, cfg=None):
     """Email de confirmación cuando se acepta la reserva desde el backoffice."""
     if not reserva.get("email"):
@@ -262,7 +225,6 @@ def enviar_email_confirmacion(reserva, cfg=None):
       <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">Para modificar o cancelar tu reserva, responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
     html = _html_base("Reserva confirmada ✓", f"{fecha} a las {hora} · {personas} personas", contenido)
     return _resend_send(reserva["email"], f"✓ Reserva confirmada — Vietnamito {fecha} {hora}", html)
-
 def enviar_email_cancelacion(reserva, cfg=None):
     """Email de cancelación cuando se cancela la reserva desde el backoffice."""
     if not reserva.get("email"):
@@ -280,8 +242,6 @@ def enviar_email_cancelacion(reserva, cfg=None):
       <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Si quieres hacer una nueva reserva o tienes alguna duda, responde a este email o llámanos al <strong>+34 711 216 862</strong>. ¡Esperamos verte pronto!</p>"""
     html = _html_base("Reserva cancelada", f"{fecha} a las {hora}", contenido)
     return _resend_send(reserva["email"], f"Reserva cancelada — Vietnamito {fecha} {hora}", html)
-
-
 # ── Emails de PEDIDOS ──
 def _tabla_pedido(ped, items, cfg=None):
     """Tabla resumen del pedido para emails."""
@@ -299,8 +259,6 @@ def _tabla_pedido(ped, items, cfg=None):
         {notas_html}
         <tr><td style="padding:12px;color:#3D1C0A;font-size:15px;font-weight:600;">Total</td><td style="padding:12px;text-align:right;color:#3D1C0A;font-size:15px;font-weight:600;">€{float(ped.get('total',0)):.2f}</td></tr>
       </table>"""
-
-
 def enviar_email_pedido_recibido(ped, items, cfg=None):
     """Email automático al recibir el pedido — aún pendiente de aceptar."""
     if not ped.get("email"):
@@ -314,8 +272,6 @@ def enviar_email_pedido_recibido(ped, items, cfg=None):
       <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">¿Tienes alguna duda? Responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
     html = _html_base("Pedido recibido 📬", "Te confirmaremos en breve", contenido)
     return _resend_send(ped["email"], f"Pedido recibido — Vietnamito #{ped.get('id','')}", html)
-
-
 def enviar_email_pedido_aceptado(ped, items, cfg=None):
     """Email de aceptación — el pedido entra en cocina."""
     if not ped.get("email"):
@@ -329,8 +285,6 @@ def enviar_email_pedido_aceptado(ped, items, cfg=None):
       <p style="font-size:13px;color:#7A6055;line-height:1.7;margin:16px 0 0;">Te esperamos a la hora de recogida indicada. Para cualquier cambio, responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
     html = _html_base("Pedido aceptado ✓", f"Recogida: {ped.get('hora_recogida','')}", contenido)
     return _resend_send(ped["email"], f"✓ Pedido aceptado — Vietnamito #{ped.get('id','')}", html)
-
-
 def enviar_email_pedido_rechazado(ped, items, cfg=None):
     """Email cuando se rechaza el pedido."""
     if not ped.get("email"):
@@ -344,8 +298,6 @@ def enviar_email_pedido_rechazado(ped, items, cfg=None):
       <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Esperamos verte pronto en el restaurante o que vuelvas a hacer un pedido más adelante. Si quieres, llámanos al <strong>+34 711 216 862</strong> y vemos qué podemos hacer.</p>"""
     html = _html_base("Pedido no aceptado", "Disculpa las molestias", contenido)
     return _resend_send(ped["email"], f"Pedido no aceptado — Vietnamito #{ped.get('id','')}", html)
-
-
 def enviar_email_pedido_listo(ped, items, cfg=None):
     """Email cuando el pedido pasa a estado listo."""
     if not ped.get("email"):
@@ -359,8 +311,6 @@ def enviar_email_pedido_listo(ped, items, cfg=None):
       <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Te esperamos en <strong>Carrer Berlín 64, Barcelona</strong>. Si necesitas algo, llámanos al <strong>+34 711 216 862</strong>.</p>"""
     html = _html_base("¡Tu pedido está listo! 🥖", "Ven a recogerlo cuando quieras", contenido)
     return _resend_send(ped["email"], f"🥖 Pedido listo para recoger — Vietnamito #{ped.get('id','')}", html)
-
-
 def enviar_email_pedido_cancelado(ped, items, cfg=None):
     """Email cuando se cancela un pedido ya aceptado."""
     if not ped.get("email"):
@@ -374,12 +324,8 @@ def enviar_email_pedido_cancelado(ped, items, cfg=None):
       <p style="font-size:15px;color:#5C4033;line-height:1.7;margin:0 0 20px;">Lo sentimos mucho. Para más información, responde a este email o llámanos al <strong>+34 711 216 862</strong>.</p>"""
     html = _html_base("Pedido cancelado", "", contenido)
     return _resend_send(ped["email"], f"Pedido cancelado — Vietnamito #{ped.get('id','')}", html)
-
-
-
 SUPABASE_URL = "https://rwtpjqvgiiuvniixqapu.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3dHBqcXZnaWl1dm5paXhxYXB1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzEzMjIyMywiZXhwIjoyMDkyNzA4MjIzfQ.GH-3IsaWLUbivHzkjjNmC3Vwg1V5gcaXZx06wom8TB4"
-
 DIAS = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
 DIAS_ORDER = [0, 1, 2, 3, 4, 5, 6]
 COLORS = ["#378ADD", "#5DCAA5", "#D85A30", "#7F77DD", "#BA7517", "#D4537E", "#639922"]
@@ -388,11 +334,9 @@ WEEK_COLORS = [
     "#6A4C93","#1982C4","#8AC926","#FF595E","#6A994E",
     "#BC6C25","#4CC9F0","#F72585","#3A0CA3","#4361EE",
 ]
-
 @st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
-
 def upload_foto(sb, file, prefix):
     import urllib.parse
     ext = file.name.split(".")[-1].lower()
@@ -404,14 +348,12 @@ def upload_foto(sb, file, prefix):
         file.seek(0)
         sb.storage.from_("assets").update(fname, file.read(), {"content-type": f"image/{ext}"})
     return f"{SUPABASE_URL}/storage/v1/object/public/assets/{fname_encoded}"
-
 def detect_format(lines):
     """Detecta si el CSV es de Epos Now o del nuevo POS."""
     header = lines[0].lower()
     if "id documento" in header or "forma de pago" in header or "id\tdocumento" in header:
         return "nuevo"
     return "epos"
-
 def parse_csv_epos(lines):
     """Parser para Epos Now — una fila por franja horaria."""
     sep = ";"
@@ -437,12 +379,10 @@ def parse_csv_epos(lines):
         except:
             continue
     return rows
-
 def parse_csv_nuevo(lines):
     """Parser para nuevo POS — una fila por ticket individual. Soporta CSV (con comillas), TSV y SCSV."""
     from datetime import timezone
     import re, csv, io
-
     # Detectar separador — puede ser tab, coma o punto y coma
     primera = lines[0]
     if "\t" in primera:
@@ -451,12 +391,10 @@ def parse_csv_nuevo(lines):
         sep = ","
     else:
         sep = ";"
-
     rows = []
     # Usar csv.reader que maneja comillas correctamente
     reader = csv.reader(io.StringIO("\n".join(lines)), delimiter=sep, quotechar='"')
     parsed_lines = list(reader)
-
     for parts in parsed_lines[1:]:  # saltar cabecera
         if len(parts) < 6:
             continue
@@ -490,7 +428,6 @@ def parse_csv_nuevo(lines):
         except Exception:
             continue
     return rows
-
 def parse_csv(file):
     content = file.read()
     try:
@@ -505,14 +442,11 @@ def parse_csv(file):
         return parse_csv_nuevo(lines), "nuevo"
     else:
         return parse_csv_epos(lines), "epos"
-
-
 def save_to_supabase(rows, fmt="epos"):
     sb = get_supabase()
     if not rows:
         return
     fechas = list(set(r["fecha"] for r in rows))
-
     if fmt == "epos":
         # Borra solo los registros de Epos Now (id_ticket IS NULL) para las fechas del archivo
         for fecha in fechas:
@@ -532,14 +466,11 @@ def save_to_supabase(rows, fmt="epos"):
             vistos.add(clave)
             rows_dedupe.append(r)
         rows = rows_dedupe
-
     # Upsert: el índice único (fecha, id_ticket) garantiza que re-subidas o re-runs
     # concurrentes de Streamlit no puedan duplicar tickets. Para filas Epos
     # (id_ticket NULL) el conflicto nunca aplica y funciona como insert normal.
     for i in range(0, len(rows), 500):
         sb.table("ventas").upsert(rows[i:i+500], on_conflict="fecha,id_ticket").execute()
-
-
 @st.cache_data(ttl=60)
 def load_from_supabase():
     sb = get_supabase()
@@ -560,24 +491,20 @@ def load_from_supabase():
     df = pd.DataFrame(all_rows)
     df["fecha"] = pd.to_datetime(df["fecha"]).dt.date
     return df
-
 def calcular_promedios_dia(df):
     dias_unicos = df.groupby("dow")["fecha"].nunique()
     totales = df.groupby("dow")["valor"].sum()
     return (totales / dias_unicos).reindex(DIAS_ORDER, fill_value=0)
-
 def calcular_promedios_hora(df):
     dias_por_hora = df.groupby("hora")["fecha"].nunique()
     totales = df.groupby("hora")["valor"].sum()
     return (totales / dias_por_hora).sort_index()
-
 def calcular_heatmap(df):
     dias_unicos = df.groupby(["dow", "hora"])["fecha"].nunique()
     totales = df.groupby(["dow", "hora"])["valor"].sum()
     avg = (totales / dias_unicos).reset_index()
     avg.columns = ["dow", "hora", "avg"]
     return avg
-
 def calcular_por_semana(df):
     df2 = df.copy()
     df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
@@ -592,7 +519,6 @@ def calcular_por_semana(df):
         semana_labels[s] = f"{lunes.strftime('%d/%m')} – {domingo.strftime('%d/%m/%y')}"
     semana_dow["label"] = semana_dow["semana"].map(semana_labels)
     return semana_dow, semana_labels
-
 def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", ymax=None, turnos_data=None, empleados_data=None, dow_filter=None):
     df_filtrado = df_filtrado.copy()
     df_filtrado["fecha_ts"] = pd.to_datetime(df_filtrado["fecha"])
@@ -619,7 +545,6 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption("La caja = rango central del 50% de días. Línea = mediana. Cruz = media. Cada punto = un día real.")
-
     if turnos_data and empleados_data:
         emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
         coste_hora = {}
@@ -631,12 +556,10 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
             h = int(slot.split(":")[0])
             coste_slot = emp_coste.get(tr["empleado_id"], 10) * 0.5
             coste_hora[h] = coste_hora.get(h, 0) + coste_slot
-
         if dow_filter is None and coste_hora:
             dias_con_turnos = len(set(tr["dia_semana"] for tr in turnos_data))
             if dias_con_turnos > 0:
                 coste_hora = {h: v / dias_con_turnos for h, v in coste_hora.items()}
-
         avg_ventas = dia_hora.groupby("hora")["valor"].mean()
         horas_comunes = sorted(avg_ventas.index)
         ventas_vals = [avg_ventas.get(h, 0) / 1.10 * 0.75 for h in horas_comunes]
@@ -644,7 +567,6 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         margen_vals = [v - c for v, c in zip(ventas_vals, coste_vals)]
         margen_colors = ["#5DCAA5" if m >= 0 else "#E63946" for m in margen_vals]
         horas_labels = [f"{h}:00" for h in horas_comunes]
-
         fig_rent = go.Figure()
         fig_rent.add_trace(go.Bar(x=horas_labels, y=ventas_vals, name="Ventas netas promedio (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.5)", marker_line_width=0))
         fig_rent.add_trace(go.Bar(x=horas_labels, y=coste_vals, name="Coste personal", marker_color="rgba(230,57,70,0.5)", marker_line_width=0))
@@ -667,7 +589,6 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         )
         st.plotly_chart(fig_rent, use_container_width=True)
         st.caption("Ventas netas = venta media × 75% (descontado 25% coste de producto). Margen = ventas netas − coste de personal. Verde = rentable, rojo = coste supera ventas netas.")
-
     with st.expander("Ver datos"):
         resumen = dia_hora.groupby("hora")["valor"].agg(
             Media="mean", Mediana="median", Min="min", Max="max", Std="std", Instancias="count"
@@ -675,7 +596,6 @@ def boxplot_horario(df_filtrado, titulo, color="#5DCAA5", line_color="#2A9D8F", 
         resumen["hora"] = resumen["hora"].apply(lambda h: f"{h}:00")
         resumen.columns = ["Hora", "Media (€)", "Mediana (€)", "Mín (€)", "Máx (€)", "Desv. típica", "Nº instancias"]
         st.dataframe(resumen, hide_index=True, use_container_width=True)
-
 def _kds_recibido_badge(row):
     """Badge de acuse de recibo del KDS para un registro con kds_recibido/kds_recibido_at."""
     if row.get("kds_recibido"):
@@ -685,8 +605,6 @@ def _kds_recibido_badge(row):
             ts = ""
         return f"📡 Recibido en KDS {ts}"
     return "🔴 NO recibido en KDS todavía"
-
-
 def render_kds_online_status(sb):
     """Indicador del estado del KDS: activo (visible) / oculto (corre pero no se ve) / sin señal."""
     try:
@@ -696,22 +614,18 @@ def render_kds_online_status(sb):
             return
         s = status[0]
         ahora = pd.Timestamp.now(tz="UTC")
-
         def _ts(v):
             if not v:
                 return None
             t = pd.Timestamp(v)
             return t.tz_localize("UTC") if t.tzinfo is None else t
-
         last_seen = _ts(s.get("last_seen"))
         last_visible = _ts(s.get("last_visible"))
         seg_seen = (ahora - last_seen).total_seconds() if last_seen is not None else 999999
         seg_vis = (ahora - last_visible).total_seconds() if last_visible is not None else 999999
-
         UMBRAL = 120  # 2 min (heartbeat 30s + throttling en background)
         proceso_vivo = seg_seen < UMBRAL
         pantalla_activa = seg_vis < UMBRAL
-
         if pantalla_activa:
             st.success(f"🟢 KDS ACTIVO — visible en pantalla (último latido hace {int(seg_seen)}s)")
         elif proceso_vivo:
@@ -729,14 +643,11 @@ def render_kds_online_status(sb):
                 st.error(f"🔴 KDS SIN SEÑAL — último latido {seen_txt}. App cerrada, tablet apagada o sin WiFi.")
     except Exception:
         st.warning("⚠️ No se pudo comprobar el estado del KDS")
-
-
 def render_kds_msg_tab():
     """Pestaña para enviar mensajes al KDS con alarma sonora."""
     sb_kds = get_supabase()
     st.markdown("### Enviar mensaje al KDS")
     render_kds_online_status(sb_kds)
-
     # Interruptor de alertas Telegram
     try:
         _ks = sb_kds.table("kds_status").select("alertas_activas").eq("id", 1).execute().data
@@ -785,7 +696,6 @@ def render_kds_msg_tab():
     except Exception:
         pass
     st.caption("El mensaje aparecerá en la tablet del KDS con un sonido persistente hasta que alguien pulse 'OK, entendido'.")
-
     # Mensajes rápidos
     st.markdown("**Mensajes rápidos:**")
     cols_q = st.columns(4)
@@ -800,25 +710,20 @@ def render_kds_msg_tab():
             sb_kds.table("kds_mensajes").insert({"mensaje": msg}).execute()
             st.success(f"✅ Mensaje enviado al KDS")
             st.rerun()
-
     st.markdown("---")
-
     # Mensaje personalizado
     st.markdown("**Mensaje personalizado:**")
     # Si el flag de limpieza está activo, limpiamos ANTES de crear el widget
     if st.session_state.get("kds_msg_clear"):
         st.session_state["kds_custom_msg"] = ""
         st.session_state.pop("kds_msg_clear", None)
-
     custom_msg = st.text_area("Escribe el mensaje", key="kds_custom_msg", height=100, placeholder="Ej: Necesito que salgas 5 min a por hielo")
     if st.button("📤 Enviar mensaje personalizado", key="send_custom_msg", type="primary", disabled=not custom_msg.strip()):
         sb_kds.table("kds_mensajes").insert({"mensaje": custom_msg.strip()}).execute()
         st.session_state["kds_msg_clear"] = True
         st.success("✅ Mensaje enviado al KDS")
         st.rerun()
-
     st.markdown("---")
-
     # Historial de mensajes recientes
     st.markdown("**Historial reciente:**")
     hist = sb_kds.table("kds_mensajes").select("*").order("creado_at", desc=True).limit(10).execute().data or []
@@ -830,8 +735,6 @@ def render_kds_msg_tab():
             estado_txt = f"atendido {pd.Timestamp(m['atendido_at']).strftime('%d/%m %H:%M')}" if m.get("atendido") else "esperando"
             recibido_txt = _kds_recibido_badge(m)
             st.markdown(f"{icono} **{pd.Timestamp(m['creado_at']).strftime('%d/%m %H:%M')}** — {m['mensaje']} · _{estado_txt}_ · {recibido_txt}")
-
-
 def render_dashboard(df):
     fecha_min = df["fecha"].min()
     fecha_max = df["fecha"].max()
@@ -839,25 +742,20 @@ def render_dashboard(df):
     total_ventas = df["valor"].sum()
     mejor_dow = calcular_promedios_dia(df).idxmax()
     mejor_hora = calcular_promedios_hora(df).idxmax()
-
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Período", f"{fecha_min.strftime('%d/%m')} – {fecha_max.strftime('%d/%m/%Y')}")
     col2.metric("Días con datos", n_dias)
     col3.metric("Total ventas", f"€{total_ventas:,.2f}")
     col4.metric("Mejor día", DIAS[mejor_dow])
     col5.metric("Mejor franja", f"{mejor_hora}:00h")
-
     st.divider()
-
     @st.cache_data(ttl=10, show_spinner=False)
     def _contar_pendientes():
         _sb = get_supabase()
         p = len((_sb.table("pedidos").select("id").eq("estado", "solicitado").execute().data or []))
         r = len((_sb.table("reservas").select("id").eq("estado", "pendiente").execute().data or []))
         return p, r
-
     ped_pend, res_pend = _contar_pendientes()
-
     # Aviso de pendientes en un slot SIEMPRE presente (st.empty) para que
     # su aparición/desaparición no remonte st.tabs y expulse al usuario de su pestaña.
     aviso_slot = st.empty()
@@ -868,7 +766,6 @@ def render_dashboard(df):
         if res_pend > 0:
             avisos.append(f"🍽️ {res_pend} reserva{'s' if res_pend != 1 else ''} pendiente{'s' if res_pend != 1 else ''}")
         aviso_slot.error("🔴 " + " · ".join(avisos))
-
     # Navegación principal con estado REAL (st.radio + key en session_state):
     # a diferencia de st.tabs, la sección activa NUNCA se resetea por re-runs
     # ni cambios estructurales. Además solo se renderiza la sección activa (más rápido).
@@ -879,56 +776,40 @@ def render_dashboard(df):
     ]
     nav = st.radio("Sección", _SECCIONES, horizontal=True, key="nav_principal", label_visibility="collapsed")
     st.markdown("")
-
     # ── TAB 0: Rentabilidad ─────────────────────────────────
     if nav == "💰 Rentabilidad":
         import datetime as dt_rent
         sb0 = get_supabase()
-
         st.markdown("### Dashboard de rentabilidad")
-
         with st.expander("ℹ️ ¿Cómo se calcula la rentabilidad?"):
             st.markdown("""
 El cálculo sigue este orden de descuentos:
-
 **1. Ventas brutas** → suma total facturada al cliente (IVA del 10% incluido, tal como aparece en el ticket).
-
 **2. Ventas sin IVA** = `Ventas brutas ÷ 1.10`
 El IVA del 10% **no es dinero del negocio**: lo cobras al cliente y se lo entregas a Hacienda. Solo el 90,91% del importe del ticket es ingreso real.
-
 **3. Ventas netas** = `Ventas sin IVA × 0.75`
 Asumimos un **25% de coste de producto** (materia prima, ingredientes, envases) que se descuenta del importe sin IVA. Es una aproximación estándar para fast-casual.
-
 > **Equivalente directo:** `Ventas netas = Ventas brutas × 0.6818` (es decir, ÷1.10 ×0.75)
 > Un ticket de **€10,00** → sin IVA **€9,09** → ventas netas **€6,82**
-
 **4. Coste personal** → suma de las horas trabajadas según los turnos configurados, multiplicado por el coste/hora de cada empleado. Se calcula por franja de 30 min.
-
 **5. Coste fijo** → costes fijos mensuales (alquiler, suministros, gestoría, etc.) divididos entre los días del mes y prorrateados por día. Configurables en la sub-pestaña 🏛️ **Costes fijos mensuales**.
-
 **6. Margen** = `Ventas netas − Coste personal − Coste fijo`
 Es lo que queda después de pagar a Hacienda, el producto, el personal y los gastos fijos. Si es positivo (verde), el negocio es rentable. Si es negativo (rojo), pierde dinero.
-
 > 💡 Las barras "Ventas netas" en las gráficas ya tienen descontado el IVA y el coste de producto.
             """)
-
         nav_rent = st.radio("Vista", ["📊 Análisis", "📆 Por día", "📅 Por semana", "🏛️ Costes fijos mensuales"],
                             horizontal=True, key="nav_rent", label_visibility="collapsed")
-
         # ─── COSTES FIJOS ───
         if nav_rent == "🏛️ Costes fijos mensuales":
             st.markdown("#### Costes fijos mensuales")
             st.caption("⚠️ Introduce los importes **SIN IVA**. Estos costes se reparten proporcionalmente entre los días del mes para calcular la rentabilidad diaria real.")
-
             costes_res = sb0.table("costes_fijos").select("*").eq("activo", True).order("id").execute()
             costes_data = costes_res.data or []
-
             if costes_data:
                 total_mensual = sum(float(c["importe_sin_iva"]) for c in costes_data)
                 cm1, cm2 = st.columns(2)
                 cm1.metric("Total mensual (sin IVA)", f"€{total_mensual:,.2f}")
                 cm2.metric("Coste diario equivalente", f"€{total_mensual/30:,.2f}", help="Asumiendo 30 días/mes")
-
                 st.markdown("##### Conceptos activos")
                 for c in costes_data:
                     cc1, cc2, cc3, cc4 = st.columns([3, 2, 1, 1])
@@ -938,7 +819,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.session_state[f"editing_cf_{c['id']}"] = True
                     if cc4.button("🗑", key=f"del_cf_{c['id']}"):
                         st.session_state[f"confirm_del_cf_{c['id']}"] = True
-
                     if st.session_state.get(f"confirm_del_cf_{c['id']}"):
                         st.warning(f"¿Borrar **{c['concepto']}** (€{float(c['importe_sin_iva']):,.2f}/mes)?")
                         yc, nc = st.columns(2)
@@ -949,7 +829,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if nc.button("❌ No", key=f"no_del_cf_{c['id']}"):
                             st.session_state.pop(f"confirm_del_cf_{c['id']}", None)
                             st.rerun()
-
                     if st.session_state.get(f"editing_cf_{c['id']}"):
                         ec1, ec2, ec3 = st.columns([3, 2, 1])
                         new_concepto = ec1.text_input("Concepto", value=c["concepto"], key=f"e_concepto_{c['id']}", label_visibility="collapsed")
@@ -960,7 +839,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.rerun()
             else:
                 st.info("No hay costes fijos configurados. Añade el primero abajo.")
-
             st.divider()
             st.markdown("##### ➕ Añadir nuevo coste fijo")
             with st.form("nuevo_coste_fijo", clear_on_submit=True):
@@ -974,28 +852,23 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.rerun()
                     else:
                         st.error("Concepto y importe son obligatorios.")
-
         # ─── POR DÍA ───
         if nav_rent == "📆 Por día":
             st.markdown("#### Rentabilidad por hora")
             st.caption("Selecciona un día concreto o un periodo para ver la rentabilidad agregada por franja horaria.")
-
             costes_fijos_d = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
             total_cf_mes_d = sum(float(c["importe_sin_iva"]) for c in costes_fijos_d)
-
             if df.empty:
                 st.info("No hay datos de ventas todavía.")
             else:
                 hoy_dh = hoy_madrid()
                 min_fecha_d = df["fecha"].min()
                 max_fecha_d = df["fecha"].max()
-
                 periodo_dia = st.radio("Periodo:", [
                     "Día concreto", "Esta semana", "Últimos 7 días",
                     "Mes en curso", "Últimos 30 días", "Últimos 60 días",
                     "Últimos 90 días", "Todo el histórico", "Personalizado"
                 ], horizontal=True, key="periodo_por_dia")
-
                 # Determinar rango
                 if periodo_dia == "Día concreto":
                     fechas_disp = sorted(df["fecha"].unique(), reverse=True)
@@ -1031,9 +904,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     rng_c1, rng_c2 = st.columns(2)
                     inicio_d = rng_c1.date_input("Desde:", value=max(hoy_dh - dt_rent.timedelta(days=6), min_fecha_d), min_value=min_fecha_d, max_value=max_fecha_d, key="dh_desde")
                     fin_d = rng_c2.date_input("Hasta:", value=min(hoy_dh, max_fecha_d), min_value=min_fecha_d, max_value=max_fecha_d, key="dh_hasta")
-
                 df_periodo = df[(df["fecha"] >= inicio_d) & (df["fecha"] <= fin_d)].copy()
-
                 if df_periodo.empty:
                     st.info("No hay ventas registradas para ese periodo.")
                 else:
@@ -1041,16 +912,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     turnos_data_d = sb0.table("turnos").select("*").execute().data or []
                     empleados_data_d = sb0.table("empleados").select("*").execute().data or []
                     emp_coste_d = {e["id"]: e["coste_hora"] for e in empleados_data_d}
-
                     # Días distintos con ventas en el periodo
                     dias_con_ventas = df_periodo["fecha"].unique()
                     n_dias_con_ventas = len(dias_con_ventas)
-
                     # Coste personal: sumar por cada día (según su día de la semana) y luego acumular por hora
                     coste_personal_hora_total = {}  # hora → coste personal acumulado en todo el periodo
                     horas_con_staff_total = set()
                     coste_personal_total = 0
-
                     for fd in dias_con_ventas:
                         dow_d = pd.Timestamp(fd).weekday()
                         for tr in turnos_data_d:
@@ -1061,7 +929,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             coste_personal_hora_total[h] = coste_personal_hora_total.get(h, 0) + c
                             horas_con_staff_total.add(h)
                             coste_personal_total += c
-
                     # Coste fijo: prorrateado para cada día del periodo
                     coste_fijo_total = 0
                     cf_por_hora_total = {}  # hora → coste fijo acumulado
@@ -1080,7 +947,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 cf_por_hora_dia = cf_dia / len(horas_staff_dia)
                                 for h in horas_staff_dia:
                                     cf_por_hora_total[h] = cf_por_hora_total.get(h, 0) + cf_por_hora_dia
-
                     # Métricas del periodo
                     ventas_brutas_d = df_periodo["valor"].sum()
                     ventas_netas_d = ventas_brutas_d / 1.10 * 0.75
@@ -1088,12 +954,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     margen_d = ventas_netas_d - coste_total_d
                     n_tickets = df_periodo["ntrans"].sum() if "ntrans" in df_periodo.columns else len(df_periodo)
                     ticket_medio = ventas_brutas_d / n_tickets if n_tickets > 0 else 0
-
                     if inicio_d == fin_d:
                         titulo_periodo = pd.Timestamp(inicio_d).strftime('%A %d/%m/%Y')
                     else:
                         titulo_periodo = f"{pd.Timestamp(inicio_d).strftime('%d/%m/%Y')} → {pd.Timestamp(fin_d).strftime('%d/%m/%Y')} · {n_dias_con_ventas} día{'s' if n_dias_con_ventas!=1 else ''} con ventas"
-
                     st.markdown(f"##### Resumen — {titulo_periodo}")
                     if total_cf_mes_d > 0:
                         md1, md2, md3, md4, md5 = st.columns(5)
@@ -1110,37 +974,30 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         md3.metric("Coste personal", f"€{coste_personal_total:,.2f}")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md4.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
-
                     extra_c1, extra_c2, extra_c3 = st.columns(3)
                     extra_c1.metric("Tickets", f"{int(n_tickets):,}")
                     extra_c2.metric("Ticket medio", f"€{ticket_medio:.2f}")
                     if n_dias_con_ventas > 1:
                         extra_c3.metric("Promedio ventas/día", f"€{ventas_brutas_d/n_dias_con_ventas:,.2f}")
-
                     st.divider()
-
                     # Gráfica por hora (agregada en todo el periodo)
                     st.markdown("##### Ventas netas por hora (sin IVA, sin coste producto) — acumulado en el periodo")
                     df_hora = df_periodo.groupby("hora").agg(
                         ventas=("valor", "sum"),
                     ).reset_index()
-
                     # Rellenar horas sin ventas
                     horas_completas = sorted(set(df_hora["hora"].tolist() + list(horas_con_staff_total)))
                     if horas_completas:
                         h_min, h_max = min(horas_completas), max(horas_completas)
                         full_range = pd.DataFrame({"hora": range(h_min, h_max+1)})
                         df_hora = full_range.merge(df_hora, on="hora", how="left").fillna(0)
-
                     df_hora["coste_personal"] = df_hora["hora"].map(lambda h: round(coste_personal_hora_total.get(h, 0), 2))
                     df_hora["coste_fijo"] = df_hora["hora"].map(lambda h: round(cf_por_hora_total.get(h, 0), 2))
                     df_hora["ventas_netas"] = (df_hora["ventas"] / 1.10 * 0.75).round(2)
                     # Margen por hora SIN coste fijo (el reparto por horas no es significativo)
                     df_hora["margen"] = (df_hora["ventas_netas"] - df_hora["coste_personal"]).round(2)
                     df_hora["label"] = df_hora["hora"].astype(int).astype(str) + "h"
-
                     df_hora["break_even"] = (df_hora["coste_personal"] + df_hora["coste_fijo"]).round(2)
-
                     fig_h = go.Figure()
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["ventas_netas"], name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.7)", marker_line_width=0, text=[f"€{v:.2f}" if v>0 else "" for v in df_hora["ventas_netas"]], textposition="outside"))
                     fig_h.add_trace(go.Bar(x=df_hora["label"], y=df_hora["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
@@ -1156,13 +1013,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         height=440, margin=dict(t=50, b=80),
                     )
                     st.plotly_chart(fig_h, use_container_width=True)
-
                     # Tabla detalle
                     with st.expander("Ver tabla horaria"):
                         tabla_h = df_hora[["label","ventas","ventas_netas","coste_personal","margen"]].copy()
                         tabla_h.columns = ["Hora","Ventas brutas (€)","Ventas netas (€)","Coste personal (€)","Margen (€)"]
                         st.dataframe(tabla_h, hide_index=True, use_container_width=True)
-
                     # ─── GRÁFICA POR DÍA DE LA SEMANA × FRANJA ───
                     st.divider()
                     st.markdown("##### Contribución por día de la semana — mañana vs tarde")
@@ -1171,14 +1026,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                "La línea morada es el **coste fijo que ese día debe cubrir** (prorrateado por días del periodo): "
                                "si el rombo naranja (contribución total del día) queda por encima de la línea, el día es rentable. "
                                "El fijo no se reparte entre franjas — existe igual abras o no.")
-
                     # Para cada día con ventas en el periodo, calcular contribución mañana/tarde
                     # (netas − personal evitable de la franja; SIN coste fijo)
                     dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "cf": 0, "n_dias": 0} for dow in range(7)}
-
                     df_periodo_copy = df_periodo.copy()
                     df_periodo_copy["dow_calc"] = pd.to_datetime(df_periodo_copy["fecha"]).dt.weekday
-
                     # Ventas por día y franja
                     for fd in dias_con_ventas:
                         dow_d = pd.Timestamp(fd).weekday()
@@ -1190,7 +1042,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         dow_data[dow_d]["n_dias"] += 1
                         if total_cf_mes_d > 0:
                             dow_data[dow_d]["cf"] += total_cf_mes_d / pd.Timestamp(fd).days_in_month
-
                         # Coste personal de ese día por franja
                         for tr in turnos_data_d:
                             if int(tr["dia_semana"]) != dow_d:
@@ -1201,7 +1052,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 dow_data[dow_d]["coste_personal_m"] += c
                             elif 18 <= h <= 23:
                                 dow_data[dow_d]["coste_personal_t"] += c
-
                     dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
                     margen_manana = []
                     margen_tarde = []
@@ -1216,7 +1066,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if d["n_dias"] > 0:
                             label_d += f"<br><span style='font-size:10px;color:#888'>({d['n_dias']}d)</span>"
                         labels_dow.append(label_d)
-
                     fig_dow = go.Figure()
                     fig_dow.add_trace(go.Bar(
                         x=labels_dow, y=margen_manana, name="Mañana (9h-17h)",
@@ -1256,8 +1105,96 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="left", x=0),
                         height=440, margin=dict(t=50, b=80),
                     )
-                    st.plotly_chart(fig_dow, use_container_width=True)
-
+                    # Clic real en la barra (on_select nativo, Streamlit ≥1.35) para desglosar el día
+                    dias_es_full = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+                    _label_to_dow = {}
+                    for _d in range(7):
+                        _lbl = dias_es_full[_d]
+                        if dow_data[_d]["n_dias"] > 0:
+                            _lbl += f"<br><span style='font-size:10px;color:#888'>({dow_data[_d]['n_dias']}d)</span>"
+                        _label_to_dow[_lbl] = _d
+                    _sel_dow = st.plotly_chart(fig_dow, use_container_width=True,
+                                               on_select="rerun", key="sel_contrib_dow")
+                    # ── DRILL-DOWN: clic en un día de la semana → cada fecha concreta ──
+                    _dow_click = None
+                    try:
+                        _pts = (_sel_dow.get("selection", {}) or {}).get("points", []) if _sel_dow else []
+                        if _pts:
+                            _xlabel = _pts[0].get("x")
+                            _dow_click = _label_to_dow.get(_xlabel)
+                    except Exception:
+                        _dow_click = None
+                    if _dow_click is not None:
+                        _nom_dia = dias_es_full[_dow_click]
+                        _fechas_dow = sorted([fd for fd in dias_con_ventas if pd.Timestamp(fd).weekday() == _dow_click])
+                        if not _fechas_dow:
+                            st.info(f"No hay {_nom_dia}s con ventas en el periodo.")
+                        else:
+                            st.markdown(f"##### 🔍 Desglose de cada {_nom_dia} del periodo — mañana vs tarde")
+                            st.caption(f"{len(_fechas_dow)} {_nom_dia}{'s' if len(_fechas_dow)!=1 else ''} con ventas. "
+                                       "Cada columna es un día concreto. La línea morada es el fijo de ESE día "
+                                       "(coste mensual ÷ días del mes). Rombo = contribución total del día.")
+                            _labels_inst, _m_man, _m_tar, _contrib_tot, _cf_dia_list = [], [], [], [], []
+                            for _fd in _fechas_dow:
+                                _df_d = df_periodo_copy[df_periodo_copy["fecha"] == _fd]
+                                _v_m = _df_d[(_df_d["hora"] >= 9) & (_df_d["hora"] <= 17)]["valor"].sum()
+                                _v_t = _df_d[(_df_d["hora"] >= 18) & (_df_d["hora"] <= 23)]["valor"].sum()
+                                _cp_m = _cp_t = 0
+                                for _tr in turnos_data_d:
+                                    if int(_tr["dia_semana"]) != _dow_click:
+                                        continue
+                                    _h = int(_tr["slot"].split(":")[0])
+                                    _c = emp_coste_d.get(_tr["empleado_id"], 10) * 0.5
+                                    if 9 <= _h <= 17:
+                                        _cp_m += _c
+                                    elif 18 <= _h <= 23:
+                                        _cp_t += _c
+                                _mm = round((_v_m / 1.10 * 0.75) - _cp_m, 2)
+                                _mt = round((_v_t / 1.10 * 0.75) - _cp_t, 2)
+                                _m_man.append(_mm)
+                                _m_tar.append(_mt)
+                                _contrib_tot.append(round(_mm + _mt, 2))
+                                _cf_dia = round(total_cf_mes_d / pd.Timestamp(_fd).days_in_month, 2) if total_cf_mes_d > 0 else 0
+                                _cf_dia_list.append(_cf_dia)
+                                _labels_inst.append(pd.Timestamp(_fd).strftime("%d/%m"))
+                            _fig_inst = go.Figure()
+                            _fig_inst.add_trace(go.Bar(
+                                x=_labels_inst, y=_m_man, name="Mañana (9h-17h)",
+                                marker_color=["rgba(93,202,165,0.85)" if v >= 0 else "rgba(230,57,70,0.85)" for v in _m_man],
+                                marker_line_width=0,
+                                text=[f"€{v:+.0f}" if v != 0 else "" for v in _m_man], textposition="outside",
+                            ))
+                            _fig_inst.add_trace(go.Bar(
+                                x=_labels_inst, y=_m_tar, name="Tarde (18h-23h)",
+                                marker_color=["rgba(244,162,97,0.85)" if v >= 0 else "rgba(230,57,70,0.55)" for v in _m_tar],
+                                marker_line_width=0,
+                                text=[f"€{v:+.0f}" if v != 0 else "" for v in _m_tar], textposition="outside",
+                            ))
+                            _fig_inst.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
+                            _fig_inst.add_trace(go.Scatter(
+                                x=_labels_inst, y=_contrib_tot, name="Contribución total del día",
+                                mode="markers", marker=dict(size=10, symbol="diamond", color="#F4A261",
+                                                            line=dict(width=1, color="#B96A34")),
+                                hovertemplate="Contribución total: €%{y:.2f}<extra></extra>",
+                            ))
+                            _fig_inst.add_trace(go.Scatter(
+                                x=_labels_inst, y=_cf_dia_list, name="🏛️ Fijo a cubrir (ese día)",
+                                mode="lines+markers", line=dict(color="#8B5CF6", width=2, dash="dash"),
+                                marker=dict(size=5),
+                                hovertemplate="Fijo del día: €%{y:.2f}<extra></extra>",
+                            ))
+                            _fig_inst.update_layout(
+                                title=f"Cada {_nom_dia} del periodo × franja",
+                                yaxis_title="€ contribución", barmode="group",
+                                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                                xaxis=dict(showgrid=False),
+                                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="left", x=0),
+                                height=420, margin=dict(t=50, b=80),
+                            )
+                            st.plotly_chart(_fig_inst, use_container_width=True)
+                    else:
+                        st.caption("💡 Haz clic en una barra de arriba para desglosar ese día de la semana en cada fecha concreta del periodo.")
                     with st.expander("Ver tabla por día de la semana"):
                         tabla_dow_rows = []
                         for dow in range(7):
@@ -1272,12 +1209,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 "Contribución total (€)": round(margen_manana[dow] + margen_tarde[dow], 2),
                             })
                         st.dataframe(pd.DataFrame(tabla_dow_rows), hide_index=True, use_container_width=True)
-
         # ─── POR SEMANA ───
         if nav_rent == "📅 Por semana":
             st.markdown("#### Evolución semanal del margen")
             st.caption("Semanas completas de lunes a domingo. Ventas netas = brutas ÷ 1,10 (IVA) × 75% (coste producto).")
-
             _cf_sem_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
             _total_cf_mes = sum(float(c["importe_sin_iva"]) for c in _cf_sem_data)
             _turnos_sem = sb0.table("turnos").select("*").execute().data or []
@@ -1287,16 +1222,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             for _tr in _turnos_sem:
                 _d = int(_tr["dia_semana"])
                 _coste_dow_sem[_d] = _coste_dow_sem.get(_d, 0) + _emp_coste_sem.get(_tr["empleado_id"], 10) * 0.5
-
             _hoy_s = hoy_madrid()
             _lunes_actual = _hoy_s - dt_rent.timedelta(days=_hoy_s.weekday())
-
             _sel_sem = st.selectbox(
                 "Periodo:",
                 ["Semana en curso", "Última semana completa", "Últimas 2 semanas",
                  "Últimas 4 semanas", "Últimas 8 semanas", "Últimas 12 semanas", "Personalizado…"],
                 index=3, key="rent_sem_periodo")
-
             if _sel_sem == "Semana en curso":
                 _n_sem = 0
                 _incluir_curso = True
@@ -1308,27 +1240,22 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 else:
                     _n_sem = int(st.number_input("Número de semanas completas:", min_value=1, max_value=52, value=6, key="rent_sem_n"))
                 _incluir_curso = st.checkbox("➕ Incluir también la semana en curso (parcial)", value=False, key="rent_sem_inc")
-
             if _n_sem == 0:
                 _inicio_sem = _lunes_actual
                 _fin_sem = _hoy_s
             else:
                 _inicio_sem = _lunes_actual - dt_rent.timedelta(days=7 * _n_sem)
                 _fin_sem = _hoy_s if _incluir_curso else (_lunes_actual - dt_rent.timedelta(days=1))
-
             df_sem = df[(df["fecha"] >= _inicio_sem) & (df["fecha"] <= _fin_sem)].copy()
-
             if df_sem.empty:
                 st.warning("No hay datos de ventas en ese rango de semanas.")
             else:
                 df_sem["fecha_ts"] = pd.to_datetime(df_sem["fecha"])
                 df_sem["lunes"] = df_sem["fecha_ts"] - pd.to_timedelta(df_sem["fecha_ts"].dt.weekday, unit="D")
                 df_sem["semana"] = df_sem["lunes"].dt.strftime("%Y-%m-%d")
-
                 sem_df = df_sem.groupby("semana")["valor"].sum().reset_index()
                 sem_df.columns = ["semana", "ventas_brutas"]
                 sem_df["ventas_netas"] = (sem_df["ventas_brutas"] / 1.10 * 0.75).round(2)
-
                 def _coste_personal_semana(sem_str):
                     _lun = pd.Timestamp(sem_str).date()
                     _tot = 0
@@ -1340,7 +1267,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             _tot += _coste_dow_sem.get(_dd, 0)
                     return round(_tot, 2)
                 sem_df["coste_personal"] = sem_df["semana"].apply(_coste_personal_semana)
-
                 def _coste_fijo_semana(sem_str):
                     if _total_cf_mes == 0:
                         return 0
@@ -1355,7 +1281,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 sem_df["coste_fijo"] = sem_df["semana"].apply(_coste_fijo_semana)
                 sem_df["coste"] = sem_df["coste_personal"] + sem_df["coste_fijo"]
                 sem_df["margen"] = (sem_df["ventas_netas"] - sem_df["coste"]).round(2)
-
                 def _label_semana(sem_str):
                     _lun = pd.Timestamp(sem_str).date()
                     _dom = _lun + dt_rent.timedelta(days=6)
@@ -1365,14 +1290,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     return _lbl
                 sem_df["label"] = sem_df["semana"].apply(_label_semana)
                 sem_df = sem_df.sort_values("semana")
-
                 # Métricas del rango
                 _mc1, _mc2, _mc3, _mc4 = st.columns(4)
                 _mc1.metric("Ventas brutas", f"€{sem_df['ventas_brutas'].sum():,.2f}")
                 _mc2.metric("Ventas netas", f"€{sem_df['ventas_netas'].sum():,.2f}")
                 _mc3.metric("Costes (personal + fijo)", f"€{sem_df['coste'].sum():,.2f}")
                 _mc4.metric("Margen", f"€{sem_df['margen'].sum():,.2f}")
-
                 fig_sem = go.Figure()
                 fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["ventas_netas"], name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
                 fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
@@ -1383,24 +1306,20 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 fig_sem.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                 fig_sem.update_layout(title="Ventas netas vs costes por semana — línea morada: break-even semanal", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
                 st.plotly_chart(fig_sem, use_container_width=True)
-
         # ─── ANÁLISIS ───
         if nav_rent == "📊 Análisis":
             # Cargar costes fijos para usar en los cálculos
             costes_fijos_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
             total_costes_fijos_mes = sum(float(c["importe_sin_iva"]) for c in costes_fijos_data)
             coste_fijo_dia = total_costes_fijos_mes / 30  # promedio diario
-
             if total_costes_fijos_mes > 0:
                 st.caption(f"💡 Costes fijos mensuales configurados: **€{total_costes_fijos_mes:,.2f}** (~€{coste_fijo_dia:,.2f}/día)")
-
             # Periodo selector
             periodo = st.radio("Periodo:", [
                 "Semana en curso", "Últimos 7 días",
                 "Mes en curso", "Últimos 30 días",
                 "Últimos 90 días", "Total registrado"
             ], horizontal=True, key="rent_periodo")
-
             hoy = hoy_madrid()
             if periodo == "Semana en curso":
                 inicio = hoy - dt_rent.timedelta(days=hoy.weekday())
@@ -1420,10 +1339,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             else:
                 inicio = df["fecha"].min()
                 fin = df["fecha"].max()
-
             # Filtrar datos por periodo
             df_rent = df[(df["fecha"] >= inicio) & (df["fecha"] <= fin)].copy()
-
             if df_rent.empty:
                 st.warning("No hay datos para ese periodo.")
             else:
@@ -1431,7 +1348,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 turnos_data = sb0.table("turnos").select("*").execute().data or []
                 empleados_data = sb0.table("empleados").select("*").execute().data or []
                 emp_coste = {e["id"]: e["coste_hora"] for e in empleados_data}
-
                 # Calcular coste de personal por slot (dow, slot) -> coste
                 # Usar slot completo (HH:MM) como key para no perder los :30
                 coste_por_slot_full = {}  # (dow, slot) -> coste total ese slot
@@ -1444,47 +1360,38 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     key = (dow, slot)
                     coste_por_slot_full[key] = coste_por_slot_full.get(key, 0) + coste
                     horas_con_staff.add((dow, h))
-
                 # Coste total por día de la semana (suma de todos sus slots)
                 coste_por_slot = {}  # (dow,) -> coste diario total
                 for (dow, slot), coste in coste_por_slot_full.items():
                     coste_por_slot[(dow, slot)] = coste
-
                 # Filtrar ventas solo en horas con staff (solo para mostrar en gráficas detalladas)
                 df_rent["dow"] = pd.to_datetime(df_rent["fecha"]).dt.weekday
                 df_rent_staff = df_rent[df_rent.apply(
                     lambda r: (int(r["dow"]), int(r["hora"])) in horas_con_staff, axis=1
                 )].copy()
-
                 # Calcular días únicos en el periodo para escalar coste semanal
                 n_dias = (fin - inicio).days + 1
                 n_semanas = n_dias / 7
-
                 # Días reales abiertos por dow (días con al menos una venta) — usar TODAS las ventas
                 dias_abiertos_por_dow = {}
                 for dow_idx in range(7):
                     df_dow_check = df_rent[df_rent["dow"] == dow_idx]
                     dias_con_venta = df_dow_check.groupby("fecha")["valor"].sum()
                     dias_abiertos_por_dow[dow_idx] = int((dias_con_venta > 0).sum())
-
                 # Coste diario por dow = suma de todos sus slots
                 coste_dia_por_dow = {}
                 for (dow_idx, slot), coste in coste_por_slot.items():
                     coste_dia_por_dow[dow_idx] = coste_dia_por_dow.get(dow_idx, 0) + coste
-
                 # Coste real del periodo: coste/día × días abiertos
                 coste_periodo = sum(
                     coste_dia_por_dow.get(dow_idx, 0) * dias_abiertos_por_dow.get(dow_idx, 0)
                     for dow_idx in range(7)
                 )
                 coste_semanal = sum(coste_dia_por_dow.values())
-
                 # Ventas brutas — TODAS las ventas del periodo (no filtramos por staff)
                 ventas_brutas = df_rent["valor"].sum()
-
                 # Ventas netas (sin IVA, sin coste producto)
                 ventas_netas = ventas_brutas / 1.10 * 0.75
-
                 # Margen final
                 # Coste fijo prorrateado para el periodo
                 coste_fijo_periodo = 0
@@ -1493,18 +1400,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     while current <= fin:
                         coste_fijo_periodo += total_costes_fijos_mes / pd.Timestamp(current).days_in_month
                         current = current + dt_rent.timedelta(days=1)
-
                 coste_total_periodo = coste_periodo + coste_fijo_periodo
                 margen = ventas_netas - coste_total_periodo
                 margen_pct = (margen / ventas_brutas * 100) if ventas_brutas > 0 else 0
-
                 # Días con ventas — usar TODAS las ventas
                 dias_con_datos = df_rent[df_rent["valor"] > 0]["fecha"].nunique()
-
                 # Métricas principales
                 st.markdown(f"**{inicio.strftime('%d/%m/%Y')} → {fin.strftime('%d/%m/%Y')}** · {dias_con_datos} días con ventas · {n_dias} días en periodo")
                 st.markdown("")
-
                 if total_costes_fijos_mes > 0:
                     col1, col2, col3, col4, col5 = st.columns(5)
                     col1.metric("Ventas brutas", f"€{ventas_brutas:,.2f}", help="Total facturado al cliente, IVA del 10% incluido")
@@ -1520,21 +1423,16 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     col3.metric("Coste personal", f"€{coste_periodo:,.2f}", help="Basado en turnos y costes actuales")
                     delta_color = "normal" if margen >= 0 else "inverse"
                     col4.metric("Margen", f"€{margen:,.2f}", f"{margen_pct:.1f}% s/ventas", delta_color=delta_color)
-
                 st.markdown("")
-
                 # Semáforo visual
                 if margen > 0:
                     st.success(f"✅ **Rentable** — €{margen:,.2f} de beneficio en el periodo ({margen_pct:.1f}% sobre ventas brutas)")
                 else:
                     st.error(f"🔴 **Pérdidas** — €{abs(margen):,.2f} de déficit en el periodo ({margen_pct:.1f}% sobre ventas brutas)")
-
                 st.divider()
-
                 # Desglose por día de la semana
                 st.markdown("#### Desglose por día de la semana")
                 st.caption("Ventas brutas con IVA, ventas netas sin IVA y sin coste producto. Coste personal = coste diario × días reales abiertos ese dow en el periodo.")
-
                 rows_dow = []
                 suma_ventas_brutas_dow = 0
                 suma_coste_personal_dow = 0
@@ -1543,18 +1441,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     df_dow = df_rent[df_rent["dow"] == dow_idx]
                     v_brutas = df_dow["valor"].sum()
                     v_netas = v_brutas / 1.10 * 0.75
-
                     # Coste personal ese día: coste/día × días reales abiertos ese dow
                     coste_dia_sem = coste_dia_por_dow.get(dow_idx, 0)
                     n_dias_dow_abiertos = dias_abiertos_por_dow.get(dow_idx, 0)
                     coste_dia_periodo = coste_dia_sem * n_dias_dow_abiertos
-
                     margen_dia = v_netas - coste_dia_periodo
                     n_dias_dow = df_dow[df_dow["valor"] > 0]["fecha"].nunique()
-
                     suma_ventas_brutas_dow += v_brutas
                     suma_coste_personal_dow += coste_dia_periodo
-
                     rows_dow.append({
                         "Día": DIAS[dow_idx],
                         "Días c/ventas": n_dias_dow,
@@ -1564,35 +1458,27 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         "Margen": f"€{margen_dia:,.2f}",
                         "✓": "✅" if margen_dia >= 0 else "🔴"
                     })
-
                 st.dataframe(pd.DataFrame(rows_dow), hide_index=True, use_container_width=True)
-
                 # Aviso de consistencia: la suma debería cuadrar con los totales superiores
                 if abs(suma_ventas_brutas_dow - ventas_brutas) > 0.5:
                     st.warning(f"⚠️ Suma desglose dow ventas: €{suma_ventas_brutas_dow:,.2f} vs total: €{ventas_brutas:,.2f}")
                 if abs(suma_coste_personal_dow - coste_periodo) > 0.5:
                     st.warning(f"⚠️ Suma desglose dow coste personal: €{suma_coste_personal_dow:,.2f} vs total: €{coste_periodo:,.2f}")
-
                 st.divider()
-
                 # ── GRÁFICA DIARIA ──
                 st.markdown("#### Rentabilidad por día")
                 st.caption("Ventas netas = ventas brutas × 75%. Coste = según turnos actuales. Solo días con ventas.")
-
                 hoy_d = hoy_madrid()
                 d7_ago = hoy_d - dt_rent.timedelta(days=6)
                 min_fecha = df_rent_staff["fecha"].min() if not df_rent_staff.empty else d7_ago
                 max_fecha = df_rent_staff["fecha"].max() if not df_rent_staff.empty else hoy_d
-
                 dc1, dc2 = st.columns(2)
                 fecha_desde = dc1.date_input("Desde:", value=max(d7_ago, min_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_desde")
                 fecha_hasta = dc2.date_input("Hasta:", value=min(hoy_d, max_fecha), min_value=min_fecha, max_value=max_fecha, key="dia_hasta")
-
                 df_dia = df_rent_staff[
                     (df_rent_staff["fecha"] >= fecha_desde) &
                     (df_rent_staff["fecha"] <= fecha_hasta)
                 ].copy()
-
                 if df_dia.empty:
                     st.info("No hay datos para ese rango de fechas.")
                 else:
@@ -1610,7 +1496,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     dia_data["margen"] = (dia_data["ventas_netas"] - dia_data["coste"]).round(2)
                     dia_data["label"] = pd.to_datetime(dia_data["fecha"]).dt.strftime("%a %d/%m")
                     dia_data = dia_data.sort_values("fecha")
-
                     fig_dia = go.Figure()
                     fig_dia.add_trace(go.Bar(
                         x=dia_data["label"], y=dia_data["ventas_netas"],
@@ -1650,15 +1535,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         height=460, margin=dict(t=50, b=100),
                     )
                     st.plotly_chart(fig_dia, use_container_width=True)
-
                     # Mini tabla resumen
                     resumen_dia = dia_data[["label","ventas_netas","coste_personal","coste_fijo","coste","margen"]].copy()
                     resumen_dia.columns = ["Día","Ventas netas (€)","Coste personal (€)","Coste fijo (€)","Coste total (€)","Margen (€)"]
                     with st.expander("Ver datos"):
                         st.dataframe(resumen_dia, hide_index=True, use_container_width=True)
-
                 st.caption("⚠️ El coste de personal es estimado basándose en la configuración de turnos actual.")
-
     if nav == "📅 Por día de semana":
         avg_dow = calcular_promedios_dia(df)
         labels = [DIAS[d] for d in DIAS_ORDER]
@@ -1676,23 +1558,19 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         st.plotly_chart(fig, use_container_width=True)
         with st.expander("Ver datos"):
             st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
-
         st.divider()
         st.markdown("**Evolución semanal por día**")
         st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en cada semana.")
-
         df_evo = df.copy()
         df_evo["fecha_ts"] = pd.to_datetime(df_evo["fecha"])
         df_evo["lunes"] = df_evo["fecha_ts"] - pd.to_timedelta(df_evo["fecha_ts"].dt.weekday, unit="D")
         df_evo["semana"] = df_evo["lunes"].dt.strftime("%Y-%m-%d")
         df_evo["dow"] = df_evo["fecha_ts"].dt.weekday
         dia_sem = df_evo.groupby(["semana","fecha","dow"])["valor"].sum().reset_index()
-
         semana_labels_evo = {}
         for s in sorted(dia_sem["semana"].unique()):
             lunes = pd.Timestamp(s)
             semana_labels_evo[s] = lunes.strftime("%d/%m")
-
         fig_evo = go.Figure()
         for dow_idx in DIAS_ORDER:
             d = dia_sem[dia_sem["dow"] == dow_idx].sort_values("semana")
@@ -1707,7 +1585,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 marker=dict(size=7, color=COLORS[dow_idx % len(COLORS)]),
                 connectgaps=False,
             ))
-
         fig_evo.update_layout(
             title="Evolución de ventas por día de la semana — ventas brutas (con IVA)",
             yaxis_title="€ brutas (con IVA)", xaxis_title="Semana (lunes)",
@@ -1718,26 +1595,22 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             height=480, margin=dict(t=50, b=100),
         )
         st.plotly_chart(fig_evo, use_container_width=True)
-
     if nav == "🕐 Por franja horaria":
         import datetime as dt_franja
         fecha_min_data = df["fecha"].min()
         fecha_max_data = df["fecha"].max()
         today = hoy_madrid()
-
         opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
         seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
         fc2, fc3 = st.columns(2)
         fecha_desde = fc2.date_input("Desde:", value=fecha_min_data, min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
         fecha_hasta = fc3.date_input("Hasta:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_hasta")
-
         df_f = df.copy()
         df_f["fecha_ts"] = pd.to_datetime(df_f["fecha"])
         df_f["dow_label"] = df_f["fecha_ts"].dt.weekday.map(DIAS)
         df_f = df_f[(df_f["fecha"] >= fecha_desde) & (df_f["fecha"] <= fecha_hasta)]
         if seleccion != "Todos los días":
             df_f = df_f[df_f["dow_label"] == seleccion]
-
         if df_f.empty:
             st.warning("No hay datos para ese filtro.")
         else:
@@ -1754,7 +1627,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 dow_filter_t2 = [d for d in DIAS_ORDER if DIAS[d] == seleccion][0]
             boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} — ventas brutas (con IVA)",
                 ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
-
     if nav == "🌡️ Mapa de calor":
         hm = calcular_heatmap(df)
         pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
@@ -1771,12 +1643,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         )
         fig3.update_traces(textfont_size=11)
         st.plotly_chart(fig3, use_container_width=True)
-
     if nav == "📈 Por semana":
         semana_dow, semana_labels = calcular_por_semana(df)
         semanas_sorted = sorted(semana_labels.keys())
         labels_sorted = [semana_labels[s] for s in semanas_sorted]
-
         st.markdown("**Selecciona las semanas a mostrar:**")
         cols = st.columns(min(len(semanas_sorted), 4))
         seleccionadas = []
@@ -1787,7 +1657,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             c_icon.markdown(f'<div style="width:18px;height:18px;background:{color_sem};border-radius:3px;margin-top:6px;"></div>', unsafe_allow_html=True)
             if c_check.checkbox(lbl, value=True, key=f"semana_{s}"):
                 seleccionadas.append(s)
-
         if not seleccionadas:
             st.warning("Selecciona al menos una semana.")
         else:
@@ -1812,7 +1681,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 height=480, margin=dict(t=50, b=120),
             )
             st.plotly_chart(fig4, use_container_width=True)
-
             df2 = df.copy()
             df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
             df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="D")
@@ -1822,7 +1690,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             avg_semana = avg_semana[avg_semana["semana"].isin(semanas_sorted)]
             avg_semana["label"] = avg_semana["semana"].map(semana_labels)
             avg_semana = avg_semana.sort_values("semana")
-
             fig5 = go.Figure(go.Scatter(
                 x=avg_semana["label"], y=avg_semana["avg_franja"],
                 mode="lines+markers+text", line=dict(color="#5DCAA5", width=2),
@@ -1838,13 +1705,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 showlegend=False, height=350, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig5, use_container_width=True)
-
             total_semana = df2.groupby("semana")["valor"].sum().reset_index()
             total_semana = total_semana[total_semana["semana"].isin(semanas_sorted)]
             total_semana["label"] = total_semana["semana"].map(semana_labels)
             total_semana = total_semana.sort_values("semana")
             bar_colors = [WEEK_COLORS[semanas_sorted.index(s) % len(WEEK_COLORS)] for s in total_semana["semana"]]
-
             fig6 = go.Figure(go.Bar(
                 x=total_semana["label"], y=total_semana["valor"].round(2),
                 marker_color=bar_colors, marker_line_width=0,
@@ -1858,24 +1723,19 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 showlegend=False, height=380, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig6, use_container_width=True)
-
     if nav == "👥 Turnos":
         @st.fragment
         def _frag_seccion_1():
             import datetime as dt_mod
             sb = get_supabase()
-
             emp_res = sb.table("empleados").select("*").order("id").execute()
             empleados = emp_res.data if emp_res.data else []
-
             st.markdown("### Empleados")
             st.caption("Edita nombres y coste/hora. Los cambios se guardan al pulsar el botón al final. Los turnos se eliminan automáticamente al borrar un empleado.")
-
             header = st.columns([3, 2, 1])
             header[0].markdown("**Nombre**")
             header[1].markdown("**€/hora**")
             header[2].markdown("**Eliminar**")
-
             cambios_emp = []  # acumula cambios pendientes
             for emp in empleados:
                 c1, c2, c3 = st.columns([3, 2, 1])
@@ -1898,7 +1758,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     if conf2.button("❌ Cancelar", key=f"no_del_{emp['id']}"):
                         st.session_state.pop(f"confirm_del_{emp['id']}", None)
                         st.rerun()
-
             # Botón único de guardado para empleados
             st.markdown("")
             if cambios_emp:
@@ -1910,7 +1769,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     sb.table("empleados").update({"nombre": c["nombre"], "coste_hora": c["coste_hora"]}).eq("id", c["id"]).execute()
                 st.success(f"✅ {len(cambios_emp)} empleado{'s' if len(cambios_emp)!=1 else ''} guardado{'s' if len(cambios_emp)!=1 else ''}")
                 st.rerun()
-
             st.markdown("")
             with st.expander("➕ Añadir empleado"):
                 na1, na2, na3 = st.columns([3, 2, 1])
@@ -1923,21 +1781,17 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.rerun()
                     else:
                         st.warning("Escribe un nombre.")
-
             st.divider()
             st.markdown("### Turnos por día")
-
             slots = []
             current = dt_mod.datetime(2000, 1, 1, 7, 0)
             end = dt_mod.datetime(2000, 1, 2, 1, 30)
             while current < end:
                 slots.append(current.strftime("%H:%M"))
                 current += dt_mod.timedelta(minutes=30)
-
             emp_ids = [e["id"] for e in empleados]
             emp_nombres = {e["id"]: e["nombre"] for e in empleados}
             emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
-
             with st.expander("📋 Copiar turnos de un día a otro"):
                 cc1, cc2, cc3 = st.columns([2, 3, 1])
                 dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
@@ -1962,17 +1816,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 ]).execute()
                             st.success(f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
                             st.rerun()
-
             turnos_res = sb.table("turnos").select("*").execute()
             turnos_set = set()
             for tr in (turnos_res.data or []):
                 turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
-
             dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
             # Recolectar los edits de cada día para guardar todo de golpe al final
             ediciones_por_dow = {}
             horas_por_dow = {}
-
             for di, dow in enumerate(DIAS_ORDER):
                 with dias_tabs[di]:
                     data = {}
@@ -1984,7 +1835,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     df_grid = pd.DataFrame(data).T
                     df_grid.index.name = "Hora"
                     df_grid = df_grid.reset_index()
-
                     edited = st.data_editor(
                         df_grid,
                         key=f"grid_{dow}",
@@ -1994,7 +1844,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         height=min(400, len(slots) * 35 + 40),
                     )
                     ediciones_por_dow[dow] = edited
-
                     horas_dia = {}
                     for _, row in edited.iterrows():
                         for eid in emp_ids:
@@ -2009,7 +1858,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             h = horas_dia.get(eid, 0)
                             coste = h * emp_coste.get(eid, 10)
                             res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
-
             # ── Botón único de guardar TODOS los turnos ──
             st.divider()
             st.markdown("#### Guardar cambios en turnos")
@@ -2031,9 +1879,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         total_insertados += len(to_insert)
                 st.success(f"✅ {total_insertados} slots guardados en total (toda la semana)")
                 st.rerun()
-
             st.divider()
-
             st.markdown("### Resumen semanal")
             turnos_all = sb.table("turnos").select("*").execute().data or []
             resumen_rows = []
@@ -2053,7 +1899,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 for e in empleados
             )
             st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
-
         _frag_seccion_1()
     # ── TAB 6: Checklists (admin) ────────────────────────────
     if nav == "📋 Checklists":
@@ -2061,10 +1906,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         def _frag_seccion_2():
             sb6 = get_supabase()
             st.markdown("### Procesos")
-
             proc_res = sb6.table("procesos").select("*").order("orden").execute()
             procesos = proc_res.data or []
-
             with st.expander("➕ Nuevo proceso"):
                 new_proc_nombre = st.text_input("Nombre:", key="new_proc_nombre")
                 new_proc_desc = st.text_input("Descripción (opcional):", key="new_proc_desc")
@@ -2084,7 +1927,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.error(f"Error al crear proceso: {e}")
                     else:
                         st.warning("Escribe un nombre.")
-
             if not procesos:
                 st.info("No hay procesos. Crea uno arriba.")
             else:
@@ -2095,7 +1937,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     key="proc_sel"
                 )
                 proc = next(p for p in procesos if p["id"] == proc_sel)
-
                 with st.expander(f"✏️ Editar proceso: {proc['nombre']}"):
                     e1, e2 = st.columns([3, 1])
                     edit_nombre = e1.text_input("Nombre:", value=proc["nombre"], key=f"ep_nom_{proc['id']}")
@@ -2125,16 +1966,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if dc2.button("❌ Cancelar", key=f"no_del_proc_{proc['id']}"):
                             st.session_state.pop(f"confirm_del_proc_{proc['id']}", None)
                             st.rerun()
-
                 st.markdown(f"### Pasos de: {proc['nombre']}")
-
                 pasos_res = sb6.table("pasos").select("*").eq("proceso_id", proc_sel).order("orden").execute()
                 pasos = sorted(pasos_res.data or [], key=lambda p: p.get("orden", 0))
-
                 if "add_paso_counter" not in st.session_state:
                     st.session_state.add_paso_counter = 0
                 counter = st.session_state.add_paso_counter
-
                 with st.expander("➕ Añadir paso"):
                     pa1, pa2 = st.columns([3, 1])
                     new_paso_titulo = pa1.text_input("Título del paso:", key=f"new_paso_titulo_{counter}")
@@ -2171,7 +2008,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.rerun()
                         else:
                             st.warning("Escribe un título.")
-
                 if not pasos:
                     st.info("Este proceso no tiene pasos. Añade uno arriba.")
                 else:
@@ -2215,16 +2051,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 if dp2.button("❌ Cancelar", key=f"no_del_paso_{paso['id']}"):
                                     st.session_state.pop(f"confirm_del_paso_{paso['id']}", None)
                                     st.rerun()
-
             st.divider()
             st.markdown("### Historial de ejecuciones")
-
             ejec_res = sb6.table("ejecuciones").select("*").order("iniciado_at", desc=True).limit(50).execute()
             ejecuciones = ejec_res.data or []
-
             emp_lookup = {e["id"]: e["nombre"] for e in (sb6.table("empleados").select("id, nombre").execute().data or [])}
             proc_lookup = {p["id"]: p["nombre"] for p in (sb6.table("procesos").select("id, nombre").execute().data or [])}
-
             if not ejecuciones:
                 st.info("Aún no hay ejecuciones registradas.")
             else:
@@ -2237,7 +2069,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         "Completado": "✅" if e["completado"] else "⏳",
                     })
                 st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-
                 ejec_ids = {
                     f"{emp_lookup.get(e['empleado_id'],'?')} — {proc_lookup.get(e['proceso_id'],'?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"]
                     for e in ejecuciones
@@ -2259,7 +2090,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 st.caption(f"📝 {ep['nota']}")
                     else:
                         st.info("No hay pasos registrados para esta ejecución.")
-
         _frag_seccion_2()
     # ── TAB 7: Pedidos ──────────────────────────────────────
     if nav == "🛍️ Pedidos":
@@ -2268,11 +2098,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             import datetime as dt_mod
             sb7 = get_supabase()
             st.markdown("### Pedidos")
-
             # Auto-enviar email de recepción a pedidos solicitados sin email enviado
             cfg_p = sb7.table("config").select("*").execute()
             cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
-
             # ── Auto-emails: detecta cambios de estado pendientes de notificar ──
             # 1) Pedidos recién recibidos (solicitado, sin email_recibido_ok)
             nuevos_ped = sb7.table("pedidos").select("*").eq("estado","solicitado").eq("email_recibido_ok", False).execute().data or []
@@ -2284,7 +2112,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             rechazados_ped = sb7.table("pedidos").select("*").eq("estado","rechazado").eq("email_rechazo_ok", False).execute().data or []
             # 4) Pedidos cancelados (sin email_cancelacion_ok)
             cancelados_ped = sb7.table("pedidos").select("*").eq("estado","cancelado").eq("email_cancelacion_ok", False).execute().data or []
-
             # Bulk de items para todos los pedidos que necesitan emails
             todos_ids_email = [p["id"] for p in (nuevos_ped + aceptados_ped + listos_ped + rechazados_ped + cancelados_ped)]
             items_email_por_id = {}
@@ -2292,9 +2119,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 items_bulk_email = sb7.table("pedido_items").select("*").in_("pedido_id", todos_ids_email).execute().data or []
                 for it in items_bulk_email:
                     items_email_por_id.setdefault(it["pedido_id"], []).append(it)
-
             emails_enviados_count = 0
-
             for np_ in nuevos_ped:
                 if np_.get("email"):
                     items_np = items_email_por_id.get(np_["id"], [])
@@ -2304,7 +2129,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 else:
                     # sin email del cliente — marcar como "no aplica" para no reintentar
                     sb7.table("pedidos").update({"email_recibido_ok": True}).eq("id", np_["id"]).execute()
-
             for ap in aceptados_ped:
                 if ap.get("email"):
                     items_ap = items_email_por_id.get(ap["id"], [])
@@ -2313,7 +2137,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         emails_enviados_count += 1
                 else:
                     sb7.table("pedidos").update({"email_confirmacion_ok": True}).eq("id", ap["id"]).execute()
-
             for lp in listos_ped:
                 if lp.get("email"):
                     items_lp = items_email_por_id.get(lp["id"], [])
@@ -2322,7 +2145,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         emails_enviados_count += 1
                 else:
                     sb7.table("pedidos").update({"email_listo_ok": True}).eq("id", lp["id"]).execute()
-
             for rp in rechazados_ped:
                 if rp.get("email"):
                     items_rp = items_email_por_id.get(rp["id"], [])
@@ -2331,7 +2153,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         emails_enviados_count += 1
                 else:
                     sb7.table("pedidos").update({"email_rechazo_ok": True}).eq("id", rp["id"]).execute()
-
             for cp in cancelados_ped:
                 if cp.get("email"):
                     items_cp = items_email_por_id.get(cp["id"], [])
@@ -2340,15 +2161,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         emails_enviados_count += 1
                 else:
                     sb7.table("pedidos").update({"email_cancelacion_ok": True}).eq("id", cp["id"]).execute()
-
             if emails_enviados_count > 0:
                 st.toast(f"📧 {emails_enviados_count} email{'s' if emails_enviados_count!=1 else ''} enviado{'s' if emails_enviados_count!=1 else ''} automáticamente")
-
             ped_sub1, ped_sub2, ped_sub3 = st.tabs(["📥 Solicitados", "🔥 Activos", "📋 Todos"])
-
             def _items_de(pedido_id, items_por_pedido):
                 return items_por_pedido.get(pedido_id, [])
-
             def _bulk_items(pedido_ids):
                 """Trae todos los items de una lista de pedido_ids en una sola query, agrupados por pedido_id."""
                 if not pedido_ids:
@@ -2358,7 +2175,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 for it in res:
                     grupos.setdefault(it["pedido_id"], []).append(it)
                 return grupos
-
             def _render_pedido_completo(ped, items_res):
                 productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
                 c1, c2 = st.columns(2)
@@ -2372,7 +2188,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 if ped.get("notas"):
                     st.markdown(f"**Notas:** {ped['notas']}")
                 st.markdown(f"**Productos:** {productos_str}")
-
             # ─── SOLICITADOS — aceptar/rechazar ───
             with ped_sub1:
                 solicitados = sb7.table("pedidos").select("*").eq("estado","solicitado").order("creado_at", desc=True).execute().data or []
@@ -2413,7 +2228,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 if nc.button("Cancelar", key=f"no_rechazar_{ped['id']}"):
                                     st.session_state.pop(f"confirm_rechazar_{ped['id']}", None)
                                     st.rerun()
-
             # ─── ACTIVOS — solo ver estado + cancelar ───
             with ped_sub2:
                 activos = sb7.table("pedidos").select("*").in_("estado", ["pendiente","preparando","listo"]).order("creado_at", desc=True).execute().data or []
@@ -2443,13 +2257,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 if nc2.button("No", key=f"no_cancel_active_{ped['id']}"):
                                     st.session_state.pop(f"confirm_cancel_active_{ped['id']}", None)
                                     st.rerun()
-
             # ─── TODOS — vista histórica con filtro ───
             with ped_sub3:
                 col_filt_p, col_del_p = st.columns([3, 1])
                 filtro_ped = col_filt_p.selectbox("Filtrar:", ["Todos", "Solicitados", "Pendientes", "Preparando", "Listos", "Entregados", "Cancelados", "Rechazados"], key="filtro_ped")
                 filtro_map = {"Todos": None, "Esperando pago": "esperando_pago", "Solicitados": "solicitado", "Pendientes": "pendiente", "Preparando": "preparando", "Listos": "listo", "Entregados": "entregado", "Cancelados": "cancelado", "Rechazados": "rechazado"}
-
                 if col_del_p.button("🗑️ Borrar finalizados", key="del_finalizados_ped", help="Borra cancelados, rechazados y entregados de más de 7 días"):
                     st.session_state["confirm_del_finalizados"] = True
                 if st.session_state.get("confirm_del_finalizados"):
@@ -2469,7 +2281,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     if df2.button("❌", key="no_del_finalizados"):
                         st.session_state.pop("confirm_del_finalizados", None)
                         st.rerun()
-
                 q = sb7.table("pedidos").select("*").order("creado_at", desc=True)
                 if filtro_map[filtro_ped]:
                     q = q.eq("estado", filtro_map[filtro_ped])
@@ -2504,7 +2315,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     if nc3.button("No", key=f"no_cancel_todos_{ped['id']}"):
                                         st.session_state.pop(f"confirm_cancel_todos_{ped['id']}", None)
                                         st.rerun()
-
                             # Botón "Borrar sin email" — disponible en TODOS los estados
                             st.markdown("")
                             st.caption("⚠️ Uso administrativo — no notifica al cliente")
@@ -2522,7 +2332,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 if nds.button("No", key=f"no_del_silent_{ped['id']}"):
                                     st.session_state.pop(f"confirm_del_silent_{ped['id']}", None)
                                     st.rerun()
-
         _frag_seccion_3()
     # ── TAB 8: Reservas ─────────────────────────────────────
     if nav == "🍽️ Reservas":
@@ -2531,14 +2340,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             import datetime as dt_mod
             sb8 = get_supabase()
             st.markdown("### Reservas")
-
             # Los emails de reservas (recibida/confirmada/rechazada/cancelada) los envía
             # automáticamente la Edge Function `send-reserva-email` vía Database Webhook.
             cfg_res = sb8.table("config").select("*").execute()
             cfg_email = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
-
             res_subtab1, res_subtab2, res_subtab3 = st.tabs(["📆 Próximas", "🗓️ Calendario", "📋 Lista completa"])
-
             def _cambiar_estado_reserva(res, est, sb_ref, cfg_email_ref, key_suffix=""):
                 """Helper reutilizable para cambiar estado + enviar email."""
                 estado_actual = res["estado"]
@@ -2567,12 +2373,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         else:
                             st.success(f"✅ → {est}")
                         st.rerun()
-
             # ── SUBTAB: PRÓXIMAS ──
             with res_subtab1:
                 hoy_r = hoy_madrid()
                 todas_res = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(hoy_r)).order("fecha").order("hora").execute().data or []
-
                 grupos = {}
                 for r in todas_res:
                     fecha_r = dt_mod.date.fromisoformat(r["fecha"])
@@ -2587,7 +2391,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     else:
                         label = f"📅 {fecha_r.strftime('%d/%m/%Y')}"
                     grupos.setdefault((dias_dif, label), []).append(r)
-
                 if not grupos:
                     st.info("No hay próximas reservas.")
                 else:
@@ -2610,16 +2413,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     with col:
                                         _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="prox")
                         st.divider()
-
             # ── SUBTAB: CALENDARIO ──
             with res_subtab2:
                 import calendar as _cal
-
                 if "cal_res_year" not in st.session_state:
                     st.session_state.cal_res_year = hoy_madrid().year
                 if "cal_res_month" not in st.session_state:
                     st.session_state.cal_res_month = hoy_madrid().month
-
                 nc1, nc2, nc3 = st.columns([1,3,1])
                 if nc1.button("◀", key="cal_prev_month"):
                     st.session_state.cal_res_month -= 1
@@ -2635,25 +2435,20 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         st.session_state.cal_res_month = 1
                         st.session_state.cal_res_year += 1
                     st.rerun()
-
                 y, m = st.session_state.cal_res_year, st.session_state.cal_res_month
                 primer_dia = dt_mod.date(y, m, 1)
                 ultimo_dia = dt_mod.date(y, m, _cal.monthrange(y, m)[1])
-
                 res_mes = sb8.table("reservas").select("*").neq("estado","cancelada").gte("fecha", str(primer_dia)).lte("fecha", str(ultimo_dia)).execute().data or []
                 res_por_dia = {}
                 for r in res_mes:
                     res_por_dia.setdefault(r["fecha"], []).append(r)
-
                 cal_matrix = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
                 dias_header = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
                 hoy_str = str(hoy_madrid())
-
                 # Construir tabla HTML completa de una vez — evita 35+ widgets de Streamlit
                 html_rows = []
                 header_html = "".join(f"<th style='padding:6px;font-size:11px;font-weight:600;color:#888;width:14.28%;'>{dh}</th>" for dh in dias_header)
                 html_rows.append(f"<tr>{header_html}</tr>")
-
                 for semana in cal_matrix:
                     cells = []
                     for dia in semana:
@@ -2669,10 +2464,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             badge = f"<div style='font-size:10px;color:#22C55E;font-weight:700;'>{len(res_dia)} res · {n_pax}p</div>" if res_dia else ""
                             cells.append(f"<td style='height:64px;vertical-align:top;border:{border};border-radius:6px;background:{bg};padding:4px 6px;'><div style='font-size:13px;font-weight:600;'>{dia}</div>{badge}</td>")
                     html_rows.append(f"<tr>{''.join(cells)}</tr>")
-
                 calendar_html = "<table style='width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;'>" + "".join(html_rows) + "</table>"
                 st.markdown(calendar_html, unsafe_allow_html=True)
-
                 # Selector simple para ver detalle de un día con reservas
                 dias_con_res = sorted(res_por_dia.keys())
                 if dias_con_res:
@@ -2682,7 +2475,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 else:
                     st.caption("No hay reservas este mes.")
                     dia_sel = None
-
                 if dia_sel and dia_sel in res_por_dia:
                     st.divider()
                     st.markdown(f"#### Reservas del {dt_mod.date.fromisoformat(dia_sel).strftime('%d/%m/%Y')}")
@@ -2701,13 +2493,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             for col, est in zip([pc1,pc2,pc3], ["pendiente","confirmada","cancelada"]):
                                 with col:
                                     _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="cal")
-
             # ── SUBTAB: LISTA COMPLETA ──
             with res_subtab3:
                 col_filt_r, col_del_r = st.columns([3,1])
                 filtro_res = col_filt_r.selectbox("Filtrar:", ["Todos", "Pendientes", "Confirmadas", "Canceladas"], key="filtro_res")
                 filtro_res_map = {"Todos": None, "Pendientes": "pendiente", "Confirmadas": "confirmada", "Canceladas": "cancelada"}
-
                 if col_del_r.button("🗑️ Borrar canceladas", key="del_cancelled_res"):
                     st.session_state["confirm_del_cancelled_res"] = True
                 if st.session_state.get("confirm_del_cancelled_res"):
@@ -2721,7 +2511,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     if dc2.button("❌ Cancelar", key="no_del_cancelled_res"):
                         st.session_state.pop("confirm_del_cancelled_res", None)
                         st.rerun()
-
                 q2 = sb8.table("reservas").select("*").order("creado_at", desc=True)
                 if filtro_res_map[filtro_res]:
                     q2 = q2.eq("estado", filtro_res_map[filtro_res])
@@ -2751,7 +2540,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             for col, est in zip([rc1, rc2, rc3], ["pendiente", "confirmada", "cancelada"]):
                                 with col:
                                     _cambiar_estado_reserva(res, est, sb8, cfg_email, key_suffix="lista")
-
         _frag_seccion_4()
     # ── TAB 9: Web ──────────────────────────────────────────
     if nav == "🌐 Web":
@@ -2759,24 +2547,19 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         def _frag_seccion_5():
             sb9 = get_supabase()
             st.markdown("### Gestión de la web")
-
             nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías"],
                                    horizontal=True, key="nav_web", label_visibility="collapsed")
-
             # ── CONFIG ──
             if nav_web == "⚙️ Configuración":
                 st.markdown("#### Datos del local y horarios")
                 cfg_res = sb9.table("config").select("*").execute()
                 cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
-
                 # ── Métodos de pago por canal (guardado instantáneo) ──
                 st.markdown("**💳 Métodos de pago aceptados**")
                 st.caption("Controla qué opciones de pago ve el cliente en cada canal. Los cambios se aplican al instante en la web.")
-
                 def _flag_cfg(clave):
                     v = cfg.get(clave)
                     return True if v is None or v == "" else v == "1"
-
                 pc1, pc2 = st.columns(2)
                 with pc1:
                     st.markdown("🪑 *Pedidos en mesa (QR)*")
@@ -2786,7 +2569,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.markdown("🛍️ *Pedidos para recoger (web)*")
                     t_tarj_rec = st.toggle("💳 Tarjeta online (Stripe)", value=_flag_cfg("pago_tarjeta_recogida"), key="tg_tarj_rec")
                     t_caja_rec = st.toggle("🏧 Pago al recoger", value=_flag_cfg("pago_caja_recogida"), key="tg_caja_rec")
-
                 _pagos_nuevos = {
                     "pago_tarjeta_mesa": t_tarj_mesa, "pago_caja_mesa": t_caja_mesa,
                     "pago_tarjeta_recogida": t_tarj_rec, "pago_caja_recogida": t_caja_rec,
@@ -2803,7 +2585,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 if not (t_tarj_rec or t_caja_rec):
                     st.error("⚠️ Pedidos para RECOGER sin ningún método de pago: la web NO aceptará pedidos.")
                 st.divider()
-
                 st.markdown("**Información general**")
                 c1, c2 = st.columns(2)
                 new_cfg = {}
@@ -2817,18 +2598,15 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 st.markdown("**Textos del hero (página de inicio)**")
                 new_cfg["hero_titulo"] = st.text_input("Título hero (HTML permitido, ej: El mejor<br>Banh mi de<br><em>Barcelona</em>)", value=cfg.get("hero_titulo","El mejor<br>Banh mi de<br><em>Barcelona</em>"), key="cfg_hero_titulo")
                 new_cfg["hero_subtitulo"] = st.text_input("Subtítulo hero", value=cfg.get("hero_subtitulo",""), placeholder="Ej: Comida vietnamita auténtica en el corazón de Barcelona", key="cfg_hero_sub")
-
                 st.markdown("**Horarios**")
                 dias_cfg = [("lunes","Lun"),("martes","Mar"),("miercoles","Mié"),("jueves","Jue"),("viernes","Vie"),("sabado","Sáb"),("domingo","Dom")]
                 cols_h = st.columns(7)
                 for (dia, label), col in zip(dias_cfg, cols_h):
                     new_cfg[f"horario_{dia}"] = col.text_input(label, value=cfg.get(f"horario_{dia}",""), key=f"cfg_h_{dia}")
-
                 st.markdown("**Activar / desactivar**")
                 act1, act2 = st.columns(2)
                 new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
                 new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
-
                 st.markdown("##### 📅 Días bloqueados para reservas")
                 st.caption("Selecciona fechas en las que no se pueden hacer reservas (festivos, cierre, etc.)")
                 import json as _json
@@ -2838,7 +2616,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 except:
                     dias_bloq_actual = []
                 dias_bloq_dates = [dt_mod.date.fromisoformat(d) for d in dias_bloq_actual if d]
-
                 nueva_fecha = st.date_input("Añadir fecha bloqueada:", value=None, key="nueva_fecha_bloq", min_value=hoy_madrid())
                 if nueva_fecha and str(nueva_fecha) not in dias_bloq_actual:
                     if st.button("➕ Añadir", key="add_fecha_bloq"):
@@ -2847,7 +2624,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         sb9.table("config").upsert({"clave": "dias_bloqueados", "valor": _json.dumps(dias_bloq_actual)}).execute()
                         st.success(f"✅ {nueva_fecha} añadida")
                         st.rerun()
-
                 if dias_bloq_actual:
                     st.markdown("**Fechas bloqueadas:**")
                     for d in sorted(dias_bloq_actual):
@@ -2859,19 +2635,15 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.rerun()
                 else:
                     st.caption("No hay fechas bloqueadas.")
-
                 new_cfg["dias_bloqueados"] = cfg.get("dias_bloqueados", "[]")
-
                 if st.button("💾 Guardar configuración", key="save_cfg", type="primary"):
                     for clave, valor in new_cfg.items():
                         sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
                     st.success("✅ Configuración guardada")
                     st.rerun()
-
                 st.divider()
                 st.markdown("#### Fotos de la web")
                 st.caption("Estas fotos aparecen en la página de inicio de vietnamito.es")
-
                 fotos_config = [
                     ("foto_hero", "🖼️ Hero principal", "Fondo grande al entrar a la web"),
                     ("foto_franja", "🖼️ Franja intermedia", "Segunda sección de la página de inicio"),
@@ -2880,7 +2652,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     ("foto_mural_banner", "🖼️ Banner inferior", "Justo encima del footer"),
                     ("foto_mapa", "🗺️ Mapa del local", "Mapa ilustrado que aparece debajo de los horarios"),
                 ]
-
                 import urllib.parse as _ul
                 cols_foto = st.columns(2)
                 for idx, (clave_foto, label_foto, desc_foto) in enumerate(fotos_config):
@@ -2903,21 +2674,18 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             except Exception as e:
                                 st.warning(f"Error: {e}")
                         st.markdown("")
-
             # ── MENÚ ──
             if nav_web == "🍜 Menú":
                 cats_res = sb9.table("categorias").select("*").order("orden").execute()
                 cats_web = cats_res.data or []
                 prods_res = sb9.table("productos").select("*").order("orden").execute()
                 prods_web = prods_res.data or []
-
                 if not cats_web:
                     st.info("No hay categorías. Créalas en la pestaña Categorías primero.")
                 else:
                     cat_sel_web = st.selectbox("Categoría:", [c["nombre"] for c in cats_web], key="cat_sel_web")
                     cat_obj = next(c for c in cats_web if c["nombre"] == cat_sel_web)
                     prods_cat_web = [p for p in prods_web if p["categoria_id"] == cat_obj["id"]]
-
                     # Añadir producto
                     with st.expander("➕ Añadir producto"):
                         if "prod_counter" not in st.session_state:
@@ -2939,7 +2707,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if new_prod_foto_file:
                             st.image(new_prod_foto_file, width=150)
                         new_prod_orden = st.number_input("Orden:", value=len(prods_cat_web)+1, min_value=1, key=f"po_{pc}")
-
                         if st.button("➕ Añadir producto", key=f"add_prod_{pc}"):
                             if new_prod_nom.strip():
                                 foto_url = new_prod_foto_url.strip() or None
@@ -2972,7 +2739,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 st.rerun()
                             else:
                                 st.warning("Escribe un nombre.")
-
                     # Editar productos existentes
                     st.markdown(f"**{len(prods_cat_web)} productos en {cat_sel_web}:**")
                     for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
@@ -2989,7 +2755,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             e_desc_vi = st.text_area("🇻🇳 Mô tả (VI):", value=prod.get("descripcion_vi") or "", key=f"ed_vi_{prod['id']}", height=68)
                             e_orden = ep2.number_input("Orden:", value=int(prod.get("orden",0)), min_value=1, key=f"eord_{prod['id']}")
                             e_disp = ep1.checkbox("Disponible", value=prod.get("disponible",True), key=f"edis_{prod['id']}")
-
                             # Cambiar categoría
                             otras_cats = [c for c in cats_web if c["id"] != cat_obj["id"]]
                             if otras_cats:
@@ -3004,7 +2769,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     sb9.table("productos").update({"categoria_id": cat_dest_id, "orden": nuevo_orden}).eq("id", prod["id"]).execute()
                                     st.success(f"✅ Movido a {cat_mover_sel} (orden {nuevo_orden})")
                                     st.rerun()
-
                             e_foto = st.text_input("URL foto:", value=prod.get("foto_url") or "", key=f"ef_{prod['id']}")
                             e_foto_file = st.file_uploader("Cambiar foto:", type=["jpg","jpeg","png","webp"], key=f"eff_{prod['id']}")
                             if e_foto_file:
@@ -3020,7 +2784,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     st.warning(f"Error foto: {ex}")
                             elif e_foto:
                                 st.image(e_foto, width=150)
-
                             sc1, sc2 = st.columns(2)
                             if sc1.button("💾 Guardar", key=f"save_prod_{prod['id']}"):
                                 sb9.table("productos").update({
@@ -3055,13 +2818,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 if dc3.button("❌ Cancelar", key=f"no_prod_{prod['id']}"):
                                     st.session_state.pop(f"confirm_del_prod_{prod['id']}", None)
                                     st.rerun()
-
             # ── CATEGORÍAS ──
             if nav_web == "📸 Categorías":
                 st.markdown("#### Categorías del menú")
                 cats_web = sb9.table("categorias").select("*").order("orden").execute().data or []
                 prods_web = sb9.table("productos").select("id,categoria_id").execute().data or []
-
                 with st.expander("➕ Nueva categoría"):
                     nc1, nc2 = st.columns([3,1])
                     new_cat_nom = nc1.text_input("Nombre (ES):", key="new_cat_nom")
@@ -3088,7 +2849,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             st.rerun()
                         else:
                             st.warning("Escribe un nombre.")
-
                 for cat in cats_web:
                     n_prods = len([p for p in prods_web if p["categoria_id"] == cat["id"]])
                     icono_local = " 🪑" if cat.get("solo_local") else ""
@@ -3129,26 +2889,21 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             if dc2.button("❌ No", key=f"no_cat_{cat['id']}"):
                                 st.session_state.pop(f"confirm_del_cat_{cat['id']}", None)
                                 st.rerun()
-
         _frag_seccion_5()
     if nav == "📢 KDS":
         @st.fragment
         def _frag_seccion_6():
             render_kds_msg_tab()
-
         _frag_seccion_6()
     st.divider()
     st.caption(f"Datos: {fecha_min.strftime('%d/%m/%Y')} → {fecha_max.strftime('%d/%m/%Y')} · {len(df)} franjas · Total €{total_ventas:,.2f} (IVA incl.)")
-
 # ── UI principal ──────────────────────────────────────────────
 st.title("☕ Vietnamito — Dashboard de Ventas")
-
 uploaded = st.file_uploader(
     "Sube un CSV de ventas (Epos Now o nuevo POS)",
     type=["csv"],
     help="Compatible con Epos Now (Sales Breakdown by Hour) y el nuevo POS (por ticket)"
 )
-
 if uploaded:
     # Procesar cada archivo UNA sola vez: el file_uploader mantiene el archivo entre
     # re-runs y sin esta marca se re-procesaba en cada interacción del dashboard.
@@ -3172,10 +2927,8 @@ if uploaded:
                 st.success(f"✅ {len(rows)} registros guardados · Formato detectado: {fmt_label} · Archivo: {_nombre_archivo}")
             else:
                 st.error("No se pudieron leer datos del CSV. Verifica el formato.")
-
 with st.spinner("Cargando datos..."):
     df = load_from_supabase()
-
 if df.empty:
     st.info("No hay datos de ventas. Sube un CSV de Epos Now para ver el dashboard de ventas.")
     st.divider()
@@ -3191,15 +2944,12 @@ if df.empty:
         if _res_pend > 0:
             _avisos.append(f"🍽️ {_res_pend} reserva{'s' if _res_pend != 1 else ''} pendiente{'s' if _res_pend != 1 else ''}")
         _aviso_slot.error("🔴 " + " · ".join(_avisos))
-
     _nav = st.radio("Sección", ["👥 Turnos", "📋 Checklists", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS"],
                     horizontal=True, key="nav_sin_datos", label_visibility="collapsed")
-
     # Reutilizar el mismo código de las pestañas del dashboard
     # Para ello creamos un df vacío con las columnas necesarias
     import pandas as _pd2
     _df_empty = _pd2.DataFrame(columns=["fecha","hora","dow","valor","ntrans","items"])
-
     if _nav == "👥 Turnos":
         import datetime as _dt_mod
         sb = _sb0
@@ -3233,7 +2983,6 @@ if df.empty:
                 if nuevo_emp_nombre.strip():
                     sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
                     st.success(f"✅ {nuevo_emp_nombre} añadido"); st.rerun()
-
     if _nav == "📋 Checklists":
         sb6 = _sb0
         st.markdown("### Procesos")
@@ -3263,7 +3012,6 @@ if df.empty:
                     if new_paso_titulo2.strip():
                         sb6.table("pasos").insert({"proceso_id": proc_sel2, "titulo": new_paso_titulo2.strip(), "descripcion": new_paso_desc2.strip() or None, "orden": int(new_paso_orden2)}).execute()
                         st.success("✅ Paso añadido"); st.rerun()
-
     if _nav == "🛍️ Pedidos":
         sb7 = _sb0
         st.markdown("### Pedidos")
@@ -3289,7 +3037,6 @@ if df.empty:
                             if st.button(est2.capitalize(), key=f"ped2_{ped['id']}_{est2}"):
                                 sb7.table("pedidos").update({"estado": est2}).eq("id", ped["id"]).execute()
                                 st.rerun()
-
     if _nav == "🍽️ Reservas":
         sb8 = _sb0
         st.markdown("### Reservas")
@@ -3316,7 +3063,6 @@ if df.empty:
                                 else:
                                     st.success(f"✅ → {est3}")
                                 st.rerun()
-
     if _nav == "🌐 Web":
         # Reutilizar exactamente el mismo código del tab9
         sb9 = _sb0
@@ -3351,7 +3097,6 @@ if df.empty:
                 for clave, valor in new_cfg.items():
                     sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
                 st.success("✅ Configuración guardada"); st.rerun()
-
         if nav_web == "🍜 Menú":
             cats_res_e = sb9.table("categorias").select("*").order("orden").execute()
             cats_web_e = cats_res_e.data or []
@@ -3372,7 +3117,6 @@ if df.empty:
                         if st.button("💾 Guardar", key=f"save_prod_e_{prod_e['id']}"):
                             sb9.table("productos").update({"nombre": e_nom_e, "descripcion": e_desc_e or None, "precio": float(e_precio_e), "disponible": e_disp_e}).eq("id", prod_e["id"]).execute()
                             st.success("✅ Guardado"); st.rerun()
-
         if nav_web == "📸 Categorías":
             st.markdown("#### Categorías")
             cats_web_e = sb9.table("categorias").select("*").order("orden").execute().data or []
@@ -3391,9 +3135,7 @@ if df.empty:
                             "nombre_vi": c_nom_vi or None,
                         }).eq("id", cat_e["id"]).execute()
                         st.success("✅ Guardado"); st.rerun()
-
     if _nav == "📢 KDS":
         render_kds_msg_tab()
-
 else:
     render_dashboard(df)
