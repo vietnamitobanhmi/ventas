@@ -1286,18 +1286,21 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     # ─── GRÁFICA POR DÍA DE LA SEMANA × FRANJA ───
                     st.divider()
                     st.markdown("##### Contribución por día de la semana — mañana vs tarde")
-                    st.caption("Mañana: 9h–17h · Tarde: 18h–23h. **Contribución = ventas netas − personal de la franja** "
+                    st.caption("Mañana: 9h–17h · Tarde: 18h–23h · Delivery: margen neto del día (Glovo ×0,30 · Uber ×0,40, sin franja horaria). "
+                               "**Contribución = ventas netas − personal de la franja** "
                                "(los únicos costes que desaparecen si cierras la franja). "
                                "La línea morada es el **coste fijo que ese día debe cubrir** (prorrateado por días del periodo): "
-                               "si el rombo naranja (contribución total del día) queda por encima de la línea, el día es rentable. "
+                               "si el rombo naranja (contribución total del día, incluye delivery) queda por encima de la línea, el día es rentable. "
                                "El número al lado del rombo es la ganancia real del día (distancia del rombo al break-even): "
                                "verde si gana, rojo si falta para cubrir el fijo. "
                                "El fijo no se reparte entre franjas — existe igual abras o no.")
                     # Para cada día con ventas en el periodo, calcular contribución mañana/tarde
                     # (netas − personal evitable de la franja; SIN coste fijo)
-                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "cf": 0, "n_dias": 0} for dow in range(7)}
+                    dow_data = {dow: {"ventas_m": 0, "ventas_t": 0, "coste_personal_m": 0, "coste_personal_t": 0, "cf": 0, "delivery": 0, "n_dias": 0} for dow in range(7)}
                     df_periodo_copy = df_periodo.copy()
                     df_periodo_copy["dow_calc"] = pd.to_datetime(df_periodo_copy["fecha"]).dt.weekday
+                    # Margen neto de delivery por fecha (para repartir por día de la semana)
+                    _dlv_dow_map = cargar_delivery_neto(sb0, df_periodo["fecha"].min(), df_periodo["fecha"].max())
                     # Ventas por día y franja
                     for fd in dias_con_ventas:
                         dow_d = pd.Timestamp(fd).weekday()
@@ -1306,6 +1309,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         ventas_t_d = df_d[(df_d["hora"] >= 18) & (df_d["hora"] <= 23)]["valor"].sum()
                         dow_data[dow_d]["ventas_m"] += ventas_m_d
                         dow_data[dow_d]["ventas_t"] += ventas_t_d
+                        dow_data[dow_d]["delivery"] += _dlv_dow_map.get(fd, 0)
                         dow_data[dow_d]["n_dias"] += 1
                         if total_cf_mes_d > 0:
                             dow_data[dow_d]["cf"] += total_cf_mes_d / pd.Timestamp(fd).days_in_month
@@ -1322,6 +1326,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     dias_es = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
                     margen_manana = []
                     margen_tarde = []
+                    margen_delivery_dow = []
                     labels_dow = []
                     for dow in range(7):
                         d = dow_data[dow]
@@ -1329,6 +1334,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         margen_t = (d["ventas_t"] / 1.10 * 0.75) - d["coste_personal_t"]
                         margen_manana.append(round(margen_m, 2))
                         margen_tarde.append(round(margen_t, 2))
+                        margen_delivery_dow.append(round(d["delivery"], 2))
                         label_d = dias_es[dow]
                         if d["n_dias"] > 0:
                             label_d += f"<br><span style='font-size:10px;color:#888'>({d['n_dias']}d)</span>"
@@ -1346,9 +1352,18 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         marker_line_width=0,
                         text=[f"€{v:+.0f}" if v != 0 else "" for v in margen_tarde], textposition="outside",
                     ))
+                    # Tercera columna: Delivery (margen neto, sin franja horaria) — solo si hay
+                    _hay_dlv_dow = sum(margen_delivery_dow) > 0
+                    if _hay_dlv_dow:
+                        fig_dow.add_trace(go.Bar(
+                            x=labels_dow, y=margen_delivery_dow, name="Delivery (margen neto)",
+                            marker_color=["rgba(56,138,221,0.85)" if v >= 0 else "rgba(230,57,70,0.4)" for v in margen_delivery_dow],
+                            marker_line_width=0,
+                            text=[f"€{v:+.0f}" if v != 0 else "" for v in margen_delivery_dow], textposition="outside",
+                        ))
                     fig_dow.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
-                    # Contribución total del día (mañana + tarde) — para comparar contra el fijo a cubrir
-                    contrib_total_dow = [round(margen_manana[d] + margen_tarde[d], 2) for d in range(7)]
+                    # Contribución total del día (mañana + tarde + delivery) — para comparar contra el fijo a cubrir
+                    contrib_total_dow = [round(margen_manana[d] + margen_tarde[d] + margen_delivery_dow[d], 2) for d in range(7)]
                     cf_dow = [round(dow_data[d]["cf"], 2) for d in range(7)]
                     # Ganancia real del día = contribución total − fijo a cubrir (distancia del rombo al break-even)
                     ganancia_dow = [round(contrib_total_dow[d] - cf_dow[d], 2) for d in range(7)]
@@ -1413,9 +1428,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         else:
                             st.markdown(f"##### 🔍 Desglose de cada {_nom_dia} del periodo — mañana vs tarde")
                             st.caption(f"{len(_fechas_dow)} {_nom_dia}{'s' if len(_fechas_dow)!=1 else ''} con ventas. "
-                                       "Cada columna es un día concreto. La línea morada es el fijo de ESE día "
-                                       "(coste mensual ÷ días del mes). Rombo = contribución total del día.")
-                            _labels_inst, _m_man, _m_tar, _contrib_tot, _cf_dia_list = [], [], [], [], []
+                                       "Cada columna es un día concreto (mañana, tarde y delivery). La línea morada es el fijo de ESE día "
+                                       "(coste mensual ÷ días del mes). Rombo = contribución total del día (incluye delivery).")
+                            _labels_inst, _m_man, _m_tar, _m_dlv, _contrib_tot, _cf_dia_list = [], [], [], [], [], []
                             for _fd in _fechas_dow:
                                 _df_d = df_periodo_copy[df_periodo_copy["fecha"] == _fd]
                                 _v_m = _df_d[(_df_d["hora"] >= 9) & (_df_d["hora"] <= 17)]["valor"].sum()
@@ -1432,9 +1447,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                         _cp_t += _c
                                 _mm = round((_v_m / 1.10 * 0.75) - _cp_m, 2)
                                 _mt = round((_v_t / 1.10 * 0.75) - _cp_t, 2)
+                                _md = round(_dlv_dow_map.get(_fd, 0), 2)
                                 _m_man.append(_mm)
                                 _m_tar.append(_mt)
-                                _contrib_tot.append(round(_mm + _mt, 2))
+                                _m_dlv.append(_md)
+                                _contrib_tot.append(round(_mm + _mt + _md, 2))
                                 _cf_dia = round(total_cf_mes_d / pd.Timestamp(_fd).days_in_month, 2) if total_cf_mes_d > 0 else 0
                                 _cf_dia_list.append(_cf_dia)
                                 _labels_inst.append(pd.Timestamp(_fd).strftime("%d/%m"))
@@ -1451,6 +1468,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 marker_line_width=0,
                                 text=[f"€{v:+.0f}" if v != 0 else "" for v in _m_tar], textposition="outside",
                             ))
+                            if sum(_m_dlv) > 0:
+                                _fig_inst.add_trace(go.Bar(
+                                    x=_labels_inst, y=_m_dlv, name="Delivery (margen neto)",
+                                    marker_color=["rgba(56,138,221,0.85)" if v >= 0 else "rgba(230,57,70,0.4)" for v in _m_dlv],
+                                    marker_line_width=0,
+                                    text=[f"€{v:+.0f}" if v != 0 else "" for v in _m_dlv], textposition="outside",
+                                ))
                             _fig_inst.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
                             _fig_inst.add_trace(go.Scatter(
                                 x=_labels_inst, y=_contrib_tot, name="Contribución total del día",
