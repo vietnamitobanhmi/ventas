@@ -2068,8 +2068,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
         # ── Subir CSV de Glovo (columnas "Date" DD/MM/YYYY y "Sales") ──
         with st.expander("📤 Subir CSV de Glovo"):
-            st.caption("El CSV debe tener una columna **Date** (formato DD/MM/YYYY, p.ej. 24/06/2026) y una columna **Sales** "
-                       "(p.ej. 101.5). Cada fila es un día ya totalizado. Al subirlo, cada fecha del CSV **machaca el Glovo** "
+            st.caption("El CSV debe tener una columna **Date** y una columna **Sales**. "
+                       "Acepta el formato de Glovo (fecha tipo 2026-05-01) o europeo (24/06/2026). Cada fila es un día ya totalizado. "
+                       "Al subirlo, cada fecha del CSV **machaca el Glovo** "
                        "de esa fecha (el Uber introducido a mano no se toca); las fechas nuevas se crean. Luego puedes seguir editando a mano.")
             _csv_glovo = st.file_uploader("Archivo CSV de Glovo", type=["csv"], key="csv_glovo_upload")
             if _csv_glovo is not None:
@@ -2099,15 +2100,62 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             # Parsear: fecha DD/MM/YYYY → ISO; cada fila un día (si repetida, la última gana)
                             _glovo_por_fecha = {}
                             _errores = 0
+                            _ejemplos_fallo = []
+                            import re as _re_csv
                             for _, _fila in _raw.iterrows():
+                                _raw_fecha = str(_fila[_col_date]).strip()
+                                _raw_sales = str(_fila[_col_sales]).strip()
+                                # Saltar filas totalmente vacías
+                                if _raw_fecha in ("", "nan", "NaN", "None") or _raw_sales in ("", "nan", "NaN", "None"):
+                                    continue
+                                _fecha_iso = None
+                                # 1a) Formato ISO: YYYY-MM-DD (año primero) — el que usa Glovo
+                                _m_iso = _re_csv.search(r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})", _raw_fecha)
+                                if _m_iso:
+                                    try:
+                                        _fecha_iso = _pd_csv.Timestamp(year=int(_m_iso.group(1)), month=int(_m_iso.group(2)), day=int(_m_iso.group(3))).date().isoformat()
+                                    except Exception:
+                                        _fecha_iso = None
+                                # 1b) Formato europeo: DD/MM/YYYY (día primero)
+                                if _fecha_iso is None:
+                                    _m_fecha = _re_csv.search(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})", _raw_fecha)
+                                    if _m_fecha:
+                                        _dd, _mm, _yy = _m_fecha.group(1), _m_fecha.group(2), _m_fecha.group(3)
+                                        if len(_yy) == 2:
+                                            _yy = "20" + _yy
+                                        try:
+                                            _fecha_iso = _pd_csv.Timestamp(year=int(_yy), month=int(_mm), day=int(_dd)).date().isoformat()
+                                        except Exception:
+                                            _fecha_iso = None
+                                # 2) Fallback: dejar que pandas lo intente
+                                if _fecha_iso is None:
+                                    try:
+                                        _fecha_iso = _pd_csv.to_datetime(_raw_fecha, dayfirst=True, errors="raise").date().isoformat()
+                                    except Exception:
+                                        _fecha_iso = None
+                                # Ventas: quitar símbolos de moneda y espacios, normalizar decimal
+                                _sales_limpio = _re_csv.sub(r"[^\d,.\-]", "", _raw_sales)
+                                # Si hay coma y punto, asumir coma = miles → quitarla; si solo coma, es decimal
+                                if "," in _sales_limpio and "." in _sales_limpio:
+                                    _sales_limpio = _sales_limpio.replace(",", "")
+                                elif "," in _sales_limpio:
+                                    _sales_limpio = _sales_limpio.replace(",", ".")
+                                _val = None
                                 try:
-                                    _fecha_iso = _pd_csv.to_datetime(str(_fila[_col_date]).strip(), format="%d/%m/%Y").date().isoformat()
-                                    _val = str(_fila[_col_sales]).strip().replace(",", ".")
-                                    _glovo_por_fecha[_fecha_iso] = float(_val)  # última fila con esa fecha gana
+                                    _val = float(_sales_limpio)
                                 except Exception:
+                                    _val = None
+                                if _fecha_iso is not None and _val is not None:
+                                    _glovo_por_fecha[_fecha_iso] = _val  # última fila con esa fecha gana
+                                else:
                                     _errores += 1
+                                    if len(_ejemplos_fallo) < 3:
+                                        _ejemplos_fallo.append(f"fecha='{_raw_fecha}' ventas='{_raw_sales}'")
                             if not _glovo_por_fecha:
-                                st.error("No se pudo interpretar ninguna fila. Revisa el formato de fecha (DD/MM/YYYY) y de ventas.")
+                                _detalle = (" Ejemplos: " + " · ".join(_ejemplos_fallo)) if _ejemplos_fallo else ""
+                                st.error(f"No se pudo interpretar ninguna fila.{_detalle}")
+                                st.caption(f"Columnas detectadas en el CSV: {list(_raw.columns)}. Primeras filas:")
+                                st.dataframe(_raw.head(5), use_container_width=True)
                             else:
                                 st.success(f"✅ Leídas {len(_glovo_por_fecha)} fecha(s) del CSV" + (f" ({_errores} fila(s) ignoradas)" if _errores else "") + ".")
                                 st.dataframe(_pd_csv.DataFrame([{"Fecha": _f, "Glovo €": _v} for _f, _v in sorted(_glovo_por_fecha.items(), reverse=True)]), use_container_width=True, hide_index=True)
