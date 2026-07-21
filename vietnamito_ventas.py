@@ -838,7 +838,7 @@ def render_dashboard(df):
         st.markdown(f"<h3 style='text-align:center;margin:0 0 4px;'>🐱 Chinita-meter</h3>"
                     f"<p style='text-align:center;color:#888;margin:0 0 18px;'>{_dias_es_chi[_hoy_chi.weekday()]} {_hoy_chi.strftime('%d/%m/%Y')}</p>",
                     unsafe_allow_html=True)
-        _c_izq, _c_centro, _c_der = st.columns([1, 2, 1])
+        _c_izq, _c_centro, _c_der = st.columns([1, 2, 1.4])
         with _c_centro:
             st.image(_chi_url(_CHI_IMGS[_estado_chi]), use_container_width=True)
             if _margen_hoy is None:
@@ -846,6 +846,82 @@ def render_dashboard(df):
             else:
                 _color_chi = "#2E7D32" if _margen_hoy >= 0 else "#C62828"
                 st.markdown(f"<p style='text-align:center;font-size:22px;font-weight:600;color:{_color_chi};margin-top:12px;'>Margen de hoy: €{_margen_hoy:,.2f}</p>", unsafe_allow_html=True)
+        with _c_der:
+            # Barra vertical del margen: umbrales de ánimo + composición (personal / fijo / ganancia)
+            if _margen_hoy is None:
+                st.markdown("<p style='text-align:center;color:#aaa;font-size:13px;margin-top:40px;'>Sin datos de hoy<br>para la barra.</p>", unsafe_allow_html=True)
+            else:
+                # Rango del eje: cubrir siempre los umbrales clave y el margen real, con holgura
+                _lo = min(-150, _margen_hoy - 30)
+                _hi = max(250, _margen_hoy + 30)
+                # Bandas de ánimo de fondo (tramo: (desde, hasta, color, carita))
+                _bandas = [
+                    (_lo,   -100, "rgba(198,40,40,0.16)",  "😠"),   # angry
+                    (-100,     0, "rgba(244,162,97,0.16)", "😟"),   # worried
+                    (0,       50, "rgba(255,213,79,0.16)", "🙂"),   # ok
+                    (50,     100, "rgba(139,195,74,0.16)", "😊"),   # happy
+                    (100,    200, "rgba(93,202,165,0.16)", "😄"),   # very_happy
+                    (200,    _hi, "rgba(56,138,221,0.16)", "🤑"),   # rich
+                ]
+                _fig_chi = go.Figure()
+                # Franjas de color de fondo por tramo de ánimo
+                for _d, _h, _col, _emo in _bandas:
+                    if _h <= _lo or _d >= _hi:
+                        continue
+                    _d2, _h2 = max(_d, _lo), min(_h, _hi)
+                    _fig_chi.add_shape(type="rect", xref="x", yref="y",
+                                       x0=0, x1=1, y0=_d2, y1=_h2,
+                                       fillcolor=_col, line_width=0, layer="below")
+                    # Carita al centro del tramo (a la derecha)
+                    _fig_chi.add_annotation(x=1.12, y=(_d2 + _h2) / 2, xref="x", yref="y",
+                                            text=_emo, showarrow=False, font=dict(size=20))
+                # Líneas de umbral de ánimo con etiqueta del importe
+                for _u in [-100, 0, 50, 100, 200]:
+                    if _lo < _u < _hi:
+                        _dash = "solid" if _u == 0 else "dot"
+                        _wid = 2 if _u == 0 else 1
+                        _colu = "rgba(80,80,80,0.55)" if _u == 0 else "rgba(120,120,120,0.4)"
+                        _fig_chi.add_shape(type="line", xref="x", yref="y",
+                                           x0=-0.05, x1=1.05, y0=_u, y1=_u,
+                                           line=dict(color=_colu, width=_wid, dash=_dash))
+                        _txt_u = "0 € · a partir de aquí, GANANCIA" if _u == 0 else f"{_u:+d} €"
+                        _fig_chi.add_annotation(x=-0.08, y=_u, xref="x", yref="y",
+                                                text=_txt_u, showarrow=False, xanchor="right",
+                                                font=dict(size=10, color="#666"))
+                # Barra del margen: de 0 hasta el margen de hoy (verde si +, roja si −)
+                _barra_col = "rgba(46,125,50,0.85)" if _margen_hoy >= 0 else "rgba(198,40,40,0.85)"
+                _fig_chi.add_trace(go.Bar(
+                    x=[0.5], y=[_margen_hoy], width=[0.44],
+                    marker_color=_barra_col, marker_line_width=0,
+                    hovertemplate=f"Margen de hoy: €{_margen_hoy:,.2f}<extra></extra>",
+                ))
+                # Marcador/etiqueta del valor de hoy en la punta de la barra
+                _fig_chi.add_annotation(x=0.5, y=_margen_hoy, xref="x", yref="y",
+                                        text=f"<b>€{_margen_hoy:,.0f}</b>", showarrow=False,
+                                        yshift=(14 if _margen_hoy >= 0 else -14),
+                                        font=dict(size=13, color=_barra_col.replace("0.85", "1")))
+                _fig_chi.update_layout(
+                    height=440, margin=dict(t=20, b=20, l=10, r=10),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    showlegend=False,
+                    xaxis=dict(range=[-0.15, 1.25], showgrid=False, showticklabels=False, zeroline=False, fixedrange=True),
+                    yaxis=dict(range=[_lo, _hi], title="€ margen del día", gridcolor="rgba(128,128,128,0.12)",
+                               zeroline=False, fixedrange=True),
+                )
+                st.plotly_chart(_fig_chi, use_container_width=True, config={"displayModeBar": False})
+                with st.expander("¿Cómo leo esta barra?"):
+                    st.markdown(
+                        f"""La barra parte de **0 €** y sube (o baja) hasta el **margen de hoy**.
+
+Se calcula restando por orden desde lo que facturas:
+- **Ventas netas:** €{_ventas_netas_hoy:,.2f}  _(brutas ÷ 1,10 IVA × 0,75 coste producto)_
+- **− Coste de personal:** €{_coste_personal_hoy:,.2f}
+- **− Coste fijo del día:** €{_coste_fijo_hoy:,.2f}  _(mensual ÷ días del mes)_
+- **= Margen:** €{_margen_hoy:,.2f}
+
+Por eso el **0 € es el punto en el que ya has cubierto personal Y fijo**: a partir de ahí, todo es ganancia. Por debajo de 0, aún no cubres esos costes.
+
+Las líneas de puntos son los umbrales donde la chinita cambia de cara: **−100 😠 · 0 · 50 🙂 · 100 😊 · 200 😄 · +200 🤑**.""")
     # ── TAB 0: Rentabilidad ─────────────────────────────────
     if nav == "💰 Rentabilidad":
         import datetime as dt_rent
