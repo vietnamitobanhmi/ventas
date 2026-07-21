@@ -772,7 +772,7 @@ def render_dashboard(df):
     _SECCIONES = [
         "🐱 Chinita-meter",
         "💰 Rentabilidad", "📅 Por día de semana", "🕐 Por franja horaria",
-        "🌡️ Mapa de calor", "📈 Por semana", "👥 Turnos", "📋 Checklists",
+        "🌡️ Mapa de calor", "📈 Por semana", "🛵 Delivery", "👥 Turnos", "📋 Checklists",
         "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
     ]
     nav = st.radio("Sección", _SECCIONES, horizontal=True, key="nav_principal", label_visibility="collapsed")
@@ -861,6 +861,13 @@ def render_dashboard(df):
             _ventas_brutas_hoy = _df_hoy["valor"].sum()
             _ventas_netas_hoy = _ventas_brutas_hoy / 1.10 * 0.75
             _margen_hoy = _ventas_netas_hoy - _coste_personal_hoy - _coste_fijo_hoy
+            # ── Sumar margen neto de delivery de HOY (Glovo ×0,30 · Uber ×0,40) ──
+            try:
+                _dlv_hoy = sb_chi.table("ventas_delivery").select("glovo_bruto,uber_bruto").eq("fecha", str(_hoy_chi)).execute().data or []
+                _dlv_neto_hoy = sum(float(d.get("glovo_bruto", 0) or 0) * 0.30 + float(d.get("uber_bruto", 0) or 0) * 0.40 for d in _dlv_hoy)
+            except Exception:
+                _dlv_neto_hoy = 0
+            _margen_hoy += _dlv_neto_hoy
         # Elegir imagen según el margen real acumulado (costes prorrateados por la jornada)
         if _margen_hoy is None:
             _estado_chi = "unknown"
@@ -1173,7 +1180,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     ventas_brutas_d = df_periodo["valor"].sum()
                     ventas_netas_d = ventas_brutas_d / 1.10 * 0.75
                     coste_total_d = coste_personal_total + coste_fijo_total
-                    margen_d = ventas_netas_d - coste_total_d
+                    # ── Margen neto de delivery del periodo (Glovo ×0,30 · Uber ×0,40) ──
+                    try:
+                        _dlv_per = sb0.table("ventas_delivery").select("glovo_bruto,uber_bruto").gte("fecha", str(inicio_d)).lte("fecha", str(fin_d)).execute().data or []
+                        delivery_neto_d = sum(float(d.get("glovo_bruto", 0) or 0) * 0.30 + float(d.get("uber_bruto", 0) or 0) * 0.40 for d in _dlv_per)
+                    except Exception:
+                        delivery_neto_d = 0
+                    margen_d = ventas_netas_d - coste_total_d + delivery_neto_d
                     n_tickets = df_periodo["ntrans"].sum() if "ntrans" in df_periodo.columns else len(df_periodo)
                     ticket_medio = ventas_brutas_d / n_tickets if n_tickets > 0 else 0
                     if inicio_d == fin_d:
@@ -1189,6 +1202,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         md4.metric("Coste fijo", f"€{coste_fijo_total:,.2f}", help=f"Prorrateado proporcionalmente por días")
                         dc_md = "normal" if margen_d >= 0 else "inverse"
                         md5.metric("Margen", f"€{margen_d:,.2f}", f"{(margen_d/ventas_brutas_d*100 if ventas_brutas_d>0 else 0):.1f}% s/ventas", delta_color=dc_md)
+                    if delivery_neto_d > 0:
+                        st.caption(f"🛵 Incluye **€{delivery_neto_d:,.2f}** de margen neto de delivery (Glovo ×0,30 · Uber ×0,40) sumado al margen.")
                     else:
                         md1, md2, md3, md4 = st.columns(4)
                         md1.metric("Ventas brutas", f"€{ventas_brutas_d:,.2f}", help="Total facturado al cliente, IVA del 10% incluido")
@@ -1961,6 +1976,75 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 showlegend=False, height=380, margin=dict(t=50, b=80),
             )
             st.plotly_chart(fig6, use_container_width=True)
+
+    # ── TAB: Delivery (Glovo / Uber Eats) ──────────────────────
+    if nav == "🛵 Delivery":
+        st.markdown("#### 🛵 Ventas de delivery (Glovo / Uber Eats)")
+        st.caption("Introduce las **ventas brutas** de cada plataforma por fecha. "
+                   "El margen neto se calcula así: **Glovo** = bruto × 30 % (se descuenta 25 % de producto + 45 % de comisión con IVA). "
+                   "**Uber Eats** = bruto × 40 % (25 % de producto + 35 % de comisión con IVA). "
+                   "Ese margen neto se suma al total del día en la Rentabilidad.")
+        # Factores de margen neto por plataforma
+        _F_GLOVO = 0.30
+        _F_UBER = 0.40
+        # Cargar datos existentes
+        _dlv_res = sb0.table("ventas_delivery").select("*").order("fecha", desc=True).execute()
+        _dlv_data = _dlv_res.data or []
+        import pandas as _pd_dlv
+        if _dlv_data:
+            _df_dlv = _pd_dlv.DataFrame(_dlv_data)
+            for _c in ["glovo_bruto", "uber_bruto"]:
+                if _c not in _df_dlv.columns:
+                    _df_dlv[_c] = 0.0
+            _df_dlv = _df_dlv[["fecha", "glovo_bruto", "uber_bruto"]].copy()
+            _df_dlv["fecha"] = _pd_dlv.to_datetime(_df_dlv["fecha"]).dt.date
+        else:
+            _df_dlv = _pd_dlv.DataFrame(columns=["fecha", "glovo_bruto", "uber_bruto"])
+        # Resumen de márgenes netos totales
+        if not _df_dlv.empty:
+            _tot_glovo_bruto = _df_dlv["glovo_bruto"].fillna(0).sum()
+            _tot_uber_bruto = _df_dlv["uber_bruto"].fillna(0).sum()
+            _tot_glovo_neto = _tot_glovo_bruto * _F_GLOVO
+            _tot_uber_neto = _tot_uber_bruto * _F_UBER
+            _dm1, _dm2, _dm3 = st.columns(3)
+            _dm1.metric("Glovo — bruto / neto", f"€{_tot_glovo_bruto:,.0f}", help=f"Margen neto: €{_tot_glovo_neto:,.2f}")
+            _dm2.metric("Uber — bruto / neto", f"€{_tot_uber_bruto:,.0f}", help=f"Margen neto: €{_tot_uber_neto:,.2f}")
+            _dm3.metric("Margen neto delivery total", f"€{_tot_glovo_neto + _tot_uber_neto:,.2f}")
+        st.markdown("##### Tabla por fecha")
+        st.caption("Edita las celdas, añade filas nuevas con el **+** de abajo, y pulsa 💾 Guardar.")
+        _df_dlv_edit = st.data_editor(
+            _df_dlv, num_rows="dynamic", use_container_width=True, key="editor_delivery",
+            column_config={
+                "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", required=True),
+                "glovo_bruto": st.column_config.NumberColumn("Glovo bruto €", min_value=0.0, step=5.0, format="%.2f"),
+                "uber_bruto": st.column_config.NumberColumn("Uber Eats bruto €", min_value=0.0, step=5.0, format="%.2f"),
+            },
+        )
+        if st.button("💾 Guardar cambios de delivery", type="primary"):
+            try:
+                _rows_ok = 0
+                _fechas_vistas = set()
+                for _, _row in _df_dlv_edit.iterrows():
+                    if _pd_dlv.isna(_row.get("fecha")):
+                        continue
+                    _f_iso = str(_row["fecha"])[:10]
+                    _fechas_vistas.add(_f_iso)
+                    _g = float(_row["glovo_bruto"]) if not _pd_dlv.isna(_row.get("glovo_bruto")) else 0.0
+                    _u = float(_row["uber_bruto"]) if not _pd_dlv.isna(_row.get("uber_bruto")) else 0.0
+                    # upsert por fecha (clave única)
+                    sb0.table("ventas_delivery").upsert(
+                        {"fecha": _f_iso, "glovo_bruto": _g, "uber_bruto": _u},
+                        on_conflict="fecha").execute()
+                    _rows_ok += 1
+                # Borrar filas que estaban y el usuario eliminó de la tabla
+                _fechas_previas = {str(d["fecha"])[:10] for d in _dlv_data}
+                for _f_borrar in (_fechas_previas - _fechas_vistas):
+                    sb0.table("ventas_delivery").delete().eq("fecha", _f_borrar).execute()
+                st.success(f"✅ Guardado: {_rows_ok} fecha(s) de delivery.")
+                st.rerun()
+            except Exception as _e_dlv:
+                st.error(f"Error al guardar: {_e_dlv}")
+
     if nav == "👥 Turnos":
         @st.fragment
         def _frag_seccion_1():
