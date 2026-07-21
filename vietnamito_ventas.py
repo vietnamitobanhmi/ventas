@@ -1006,8 +1006,9 @@ def render_dashboard(df):
 
 **Barra derecha — Ventas netas de hoy:** €{_ventas_netas_hoy:,.2f}  _(facturación − IVA − coste de producto; aún SIN restar personal ni fijo)_
 - La parte clara cubre los costes; la parte verde oscura que **sobresale por encima del break-even es tu ganancia**.
+{("- **+ Delivery:** €" + format(_dlv_neto_hoy, ",.2f") + " de margen neto (Glovo ×0,30 · Uber ×0,40), sumado al margen." ) if _dlv_neto_hoy > 0 else ""}
 
-**El margen es la diferencia entre las dos barras:** €{_margen_hoy:,.2f}
+**El margen{" (con delivery)" if _dlv_neto_hoy > 0 else ""} es:** €{_margen_hoy:,.2f}
 - Si la barra de ventas **pasa la línea morada**, ganas (margen positivo).
 - Si **no llega**, pierdes (te faltan €{abs(min(0,_margen_hoy)):,.2f} para el break-even).""")
     # ── TAB 0: Rentabilidad ─────────────────────────────────
