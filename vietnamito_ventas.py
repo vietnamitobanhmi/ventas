@@ -854,11 +854,9 @@ def render_dashboard(df):
                 st.markdown("<p style='text-align:center;color:#aaa;font-size:13px;margin-top:40px;'>Sin datos de hoy<br>para la barra.</p>", unsafe_allow_html=True)
             else:
                 _break_even = _coste_personal_hoy + _coste_fijo_hoy  # tope de la barra de costes
-                # Rango del eje: desde el margen si es negativo, hasta lo más alto (break-even o ventas netas)
-                _tope = max(_break_even, _ventas_netas_hoy, _margen_hoy)
-                _lo = min(0, _margen_hoy) * 1.15 if _margen_hoy < 0 else 0
-                _lo = min(_lo, -20)  # un poco de aire bajo el 0 siempre
-                _hi = _tope * 1.15 if _tope > 0 else 50
+                # Ambas barras crecen desde 0; el eje sube hasta lo más alto (costes o ventas)
+                _tope = max(_break_even, _ventas_netas_hoy)
+                _hi = _tope * 1.18 if _tope > 0 else 50
                 _fig_chi = go.Figure()
                 # ── Barra IZQUIERDA: costes apilados (personal abajo, fijo encima) ──
                 _fig_chi.add_trace(go.Bar(
@@ -875,15 +873,32 @@ def render_dashboard(df):
                     insidetextanchor="middle", textfont=dict(size=11, color="white"),
                     hovertemplate=f"Fijo: €{_coste_fijo_hoy:,.2f}<extra></extra>",
                 ))
-                # ── Barra DERECHA: margen neto (verde si +, roja si −) ──
-                _col_margen = "rgba(46,125,50,0.85)" if _margen_hoy >= 0 else "rgba(198,40,40,0.85)"
+                # ── Barra DERECHA: VENTAS NETAS (lo que cubre los costes), misma escala ──
+                # Se parte en dos: la porción que cubre costes + la porción de ganancia.
+                # Así la comparación con la barra de costes es directa: el margen es la diferencia.
+                _cubierto = min(_ventas_netas_hoy, _break_even)          # parte de ventas que cubre costes
+                _ganancia = max(0, _ventas_netas_hoy - _break_even)     # excedente = ganancia
                 _fig_chi.add_trace(go.Bar(
-                    x=["Margen<br>de hoy"], y=[_margen_hoy], name="Margen neto",
-                    marker_color=_col_margen, marker_line_width=0,
-                    text=[f"€{_margen_hoy:,.0f}"], textposition="outside",
-                    textfont=dict(size=14, color=_col_margen.replace("0.85", "1")),
-                    hovertemplate=f"Margen neto: €{_margen_hoy:,.2f}<extra></extra>",
+                    x=["Ventas<br>netas hoy"], y=[max(0, _cubierto)], name="Cubre costes",
+                    marker_color="rgba(93,202,165,0.55)", marker_line_width=0,
+                    text=[f"€{_cubierto:,.0f}"], textposition="inside",
+                    insidetextanchor="middle", textfont=dict(size=11, color="#0b3d2e"),
+                    hovertemplate=f"Ventas que cubren costes: €{_cubierto:,.2f}<extra></extra>",
                 ))
+                if _ganancia > 0:
+                    _fig_chi.add_trace(go.Bar(
+                        x=["Ventas<br>netas hoy"], y=[_ganancia], name="Ganancia",
+                        marker_color="rgba(46,125,50,0.9)", marker_line_width=0,
+                        text=[f"+€{_ganancia:,.0f}"], textposition="inside",
+                        insidetextanchor="middle", textfont=dict(size=12, color="white"),
+                        hovertemplate=f"Ganancia (margen): €{_ganancia:,.2f}<extra></extra>",
+                    ))
+                # Etiqueta del margen encima de la barra de ventas (positivo o negativo)
+                _col_m = "rgba(46,125,50,1)" if _margen_hoy >= 0 else "rgba(198,40,40,1)"
+                _txt_m = f"Margen: €{_margen_hoy:,.0f}" if _margen_hoy >= 0 else f"Faltan €{abs(_margen_hoy):,.0f}"
+                _fig_chi.add_annotation(x="Ventas<br>netas hoy", y=max(_ventas_netas_hoy, _break_even),
+                                        text=f"<b>{_txt_m}</b>", showarrow=False, yshift=16,
+                                        font=dict(size=13, color=_col_m))
                 # Línea "cubre personal" (altura del bloque de personal)
                 _fig_chi.add_hline(y=_coste_personal_hoy, line_dash="dot", line_color="rgba(230,57,70,0.6)",
                                    annotation_text=f"cubre personal (€{_coste_personal_hoy:,.0f})",
@@ -892,30 +907,30 @@ def render_dashboard(df):
                 _fig_chi.add_hline(y=_break_even, line_dash="dash", line_color="rgba(139,92,246,0.9)",
                                    annotation_text=f"break-even · personal+fijo (€{_break_even:,.0f})",
                                    annotation_position="top left", annotation_font_size=10)
-                # Línea del 0 (ni gano ni pierdo)
-                _fig_chi.add_hline(y=0, line_width=1.5, line_color="rgba(80,80,80,0.55)")
                 _fig_chi.update_layout(
-                    barmode="stack", height=460, margin=dict(t=30, b=20, l=10, r=10),
+                    barmode="stack", height=460, margin=dict(t=40, b=20, l=10, r=10),
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                     showlegend=False, bargap=0.35,
                     xaxis=dict(showgrid=False, tickfont=dict(size=11)),
-                    yaxis=dict(range=[_lo, _hi], title="€", gridcolor="rgba(128,128,128,0.12)",
+                    yaxis=dict(range=[0, _hi], title="€", gridcolor="rgba(128,128,128,0.12)",
                                zeroline=False, fixedrange=True),
                 )
                 st.plotly_chart(_fig_chi, use_container_width=True, config={"displayModeBar": False})
                 with st.expander("¿Cómo leo estas barras?"):
                     st.markdown(
-                        f"""**Barra izquierda — Costes a cubrir hoy** (lo que tienes que ganar para no perder):
+                        f"""Las dos barras están en la **misma escala de euros**, para compararlas directamente.
+
+**Barra izquierda — Costes a cubrir hoy:**
 - **Personal** (abajo): €{_coste_personal_hoy:,.2f}
 - **Fijo** (encima): €{_coste_fijo_hoy:,.2f}  _(mensual ÷ días del mes)_
 - El tope morado es el **break-even**: €{_break_even:,.2f}
 
-**Barra derecha — Margen neto de hoy:** €{_margen_hoy:,.2f}
-Es lo que queda tras restar TODO: ventas netas (€{_ventas_netas_hoy:,.2f}, ya sin IVA ni coste de producto) − personal − fijo.
-- Si es **positiva (verde)**, has superado el break-even → ganancia.
-- Si es **negativa (roja)**, aún no cubres personal+fijo → pérdida.
+**Barra derecha — Ventas netas de hoy:** €{_ventas_netas_hoy:,.2f}  _(facturación − IVA − coste de producto; aún SIN restar personal ni fijo)_
+- La parte clara cubre los costes; la parte verde oscura que **sobresale por encima del break-even es tu ganancia**.
 
-La línea de puntos roja marca cuándo cubres el personal; la morada, cuándo cubres personal + fijo (el punto en que el margen pasa a positivo).""")
+**El margen es la diferencia entre las dos barras:** €{_margen_hoy:,.2f}
+- Si la barra de ventas **pasa la línea morada**, ganas (margen positivo).
+- Si **no llega**, pierdes (te faltan €{abs(min(0,_margen_hoy)):,.2f} para el break-even).""")
     # ── TAB 0: Rentabilidad ─────────────────────────────────
     if nav == "💰 Rentabilidad":
         import datetime as dt_rent
