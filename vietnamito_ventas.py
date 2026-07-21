@@ -812,36 +812,75 @@ def render_dashboard(df):
             _emps_chi = sb_chi.table("empleados").select("*").execute().data or []
             _emp_coste_chi = {e["id"]: e["coste_hora"] for e in _emps_chi}
             _dow_hoy = _hoy_chi.weekday()
+            # ── Hora actual (Madrid) y fracción de jornada operativa transcurrida ──
+            from datetime import datetime as _dtchi
+            from zoneinfo import ZoneInfo as _ZIchi
+            _ahora_chi = _dtchi.now(_ZIchi("Europe/Madrid"))
+            _min_ahora_chi = _ahora_chi.hour * 60 + _ahora_chi.minute
+            # Solo prorratear si HOY es el día que se muestra (si miras un día pasado, jornada completa)
+            _es_hoy_real = (_ahora_chi.date() == _hoy_chi)
+            _dias_keys_chi = ["lunes","martes","miercoles","jueves","viernes","sabado","domingo"]
+            _cfg_hor_chi = sb_chi.table("config").select("valor").eq("clave", f"horario_{_dias_keys_chi[_dow_hoy]}").execute().data
+            _horario_str_chi = (_cfg_hor_chi[0]["valor"] if _cfg_hor_chi else "") or ""
+            import re as _rechi
+            _rangos_chi = []
+            for _mh in _rechi.finditer(r"(\d{1,2})[:.]?(\d{0,2})\s*[-–—]\s*(\d{1,2})[:.]?(\d{0,2})", _horario_str_chi):
+                _ini_r = int(_mh.group(1))*60 + int(_mh.group(2) or 0)
+                _fin_r = int(_mh.group(3))*60 + int(_mh.group(4) or 0)
+                if _fin_r > _ini_r:
+                    _rangos_chi.append((_ini_r, _fin_r))
+            _min_totales_chi = sum(_f - _i for _i, _f in _rangos_chi)
+            if _es_hoy_real and _rangos_chi and _min_totales_chi > 0:
+                _min_transc_chi = 0
+                for _i, _f in _rangos_chi:
+                    if _min_ahora_chi >= _f:
+                        _min_transc_chi += (_f - _i)
+                    elif _min_ahora_chi > _i:
+                        _min_transc_chi += (_min_ahora_chi - _i)
+                _frac_chi = min(1.0, max(0.0, _min_transc_chi / _min_totales_chi))
+            else:
+                _frac_chi = 1.0  # día pasado, sin horario configurado, o fuera de fecha → jornada completa
+            # ── Personal: solo turnos cuyo slot YA ha ocurrido (si es hoy en curso) ──
             _coste_personal_hoy = 0
             for _tr in _turnos_chi:
                 if int(_tr["dia_semana"]) == _dow_hoy:
-                    _coste_personal_hoy += _emp_coste_chi.get(_tr["empleado_id"], 10) * 0.5
-            # Coste fijo prorrateado del día = importe mensual ÷ días del mes actual
-            _coste_fijo_hoy = (_total_cf_mes_chi / pd.Timestamp(_hoy_chi).days_in_month) if _total_cf_mes_chi > 0 else 0
+                    _slot_ok = True
+                    if _es_hoy_real:
+                        try:
+                            _h_slot = int(str(_tr["slot"]).split(":")[0])
+                            _m_slot = int(str(_tr["slot"]).split(":")[1]) if ":" in str(_tr["slot"]) else 0
+                            _slot_ok = (_h_slot * 60 + _m_slot) <= _min_ahora_chi
+                        except Exception:
+                            _slot_ok = True
+                    if _slot_ok:
+                        _coste_personal_hoy += _emp_coste_chi.get(_tr["empleado_id"], 10) * 0.5
+            # Coste fijo del día = importe mensual ÷ días del mes, PRORRATEADO por fracción operativa
+            _coste_fijo_dia_completo = (_total_cf_mes_chi / pd.Timestamp(_hoy_chi).days_in_month) if _total_cf_mes_chi > 0 else 0
+            _coste_fijo_hoy = _coste_fijo_dia_completo * _frac_chi
             # Ventas netas de hoy = brutas ÷ 1,10 × 0,75
             _ventas_brutas_hoy = _df_hoy["valor"].sum()
             _ventas_netas_hoy = _ventas_brutas_hoy / 1.10 * 0.75
             _margen_hoy = _ventas_netas_hoy - _coste_personal_hoy - _coste_fijo_hoy
-        # Elegir imagen según el tramo del margen (11 estados, misma escala que el cmeter.html)
+        # Elegir imagen según el margen real acumulado (costes prorrateados por la jornada)
         if _margen_hoy is None:
             _estado_chi = "unknown"
-        elif _margen_hoy <= -150:
+        elif _margen_hoy <= -200:
             _estado_chi = "disaster"
-        elif _margen_hoy <= -75:
+        elif _margen_hoy <= -100:
             _estado_chi = "terrible"
         elif _margen_hoy < 0:
             _estado_chi = "bad"
-        elif _margen_hoy <= 25:
+        elif _margen_hoy <= 40:
             _estado_chi = "worried"
-        elif _margen_hoy <= 50:
-            _estado_chi = "neutral"
         elif _margen_hoy <= 90:
+            _estado_chi = "neutral"
+        elif _margen_hoy <= 150:
             _estado_chi = "ok"
-        elif _margen_hoy <= 130:
+        elif _margen_hoy <= 250:
             _estado_chi = "happy"
-        elif _margen_hoy <= 180:
+        elif _margen_hoy <= 350:
             _estado_chi = "great"
-        elif _margen_hoy <= 280:
+        elif _margen_hoy <= 500:
             _estado_chi = "amazing"
         else:
             _estado_chi = "rich"
