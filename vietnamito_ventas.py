@@ -770,12 +770,82 @@ def render_dashboard(df):
     # a diferencia de st.tabs, la sección activa NUNCA se resetea por re-runs
     # ni cambios estructurales. Además solo se renderiza la sección activa (más rápido).
     _SECCIONES = [
+        "🐱 Chinita-meter",
         "💰 Rentabilidad", "📅 Por día de semana", "🕐 Por franja horaria",
         "🌡️ Mapa de calor", "📈 Por semana", "👥 Turnos", "📋 Checklists",
         "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
     ]
     nav = st.radio("Sección", _SECCIONES, horizontal=True, key="nav_principal", label_visibility="collapsed")
     st.markdown("")
+    # ── TAB: Chinita-meter ──────────────────────────────────
+    # Semáforo visual del margen de HOY (ventas netas − personal − fijo),
+    # calculado igual que la sección "Por día". Muestra una imagen según el tramo.
+    if nav == "🐱 Chinita-meter":
+        import datetime as dt_chi
+        sb_chi = get_supabase()
+        _hoy_chi = hoy_madrid()
+        # Nombres de imagen por tramo (bucket assets, raíz, .png)
+        _CHI_IMGS = {
+            "unknown": "margin_unknown",
+            "angry": "margin_angry",
+            "worried": "margin_worried",
+            "ok": "margin_ok",
+            "happy": "margin_happy",
+            "very_happy": "margin_very_happy",
+            "rich": "chinita_rich",
+        }
+        def _chi_url(nombre):
+            return f"{SUPABASE_URL}/storage/v1/object/public/assets/{nombre}.png"
+        # ¿Hay ventas HOY?
+        _df_hoy = df[df["fecha"] == _hoy_chi].copy() if not df.empty else df.iloc[0:0].copy()
+        _margen_hoy = None
+        if not _df_hoy.empty:
+            # Coste fijo mensual configurado
+            _cf_chi = sb_chi.table("costes_fijos").select("importe_sin_iva").eq("activo", True).execute().data or []
+            _total_cf_mes_chi = sum(float(c["importe_sin_iva"]) for c in _cf_chi)
+            # Turnos y empleados para el coste de personal del día de la semana de HOY
+            _turnos_chi = sb_chi.table("turnos").select("*").execute().data or []
+            _emps_chi = sb_chi.table("empleados").select("*").execute().data or []
+            _emp_coste_chi = {e["id"]: e["coste_hora"] for e in _emps_chi}
+            _dow_hoy = _hoy_chi.weekday()
+            _coste_personal_hoy = 0
+            for _tr in _turnos_chi:
+                if int(_tr["dia_semana"]) == _dow_hoy:
+                    _coste_personal_hoy += _emp_coste_chi.get(_tr["empleado_id"], 10) * 0.5
+            # Coste fijo prorrateado del día = importe mensual ÷ días del mes actual
+            _coste_fijo_hoy = (_total_cf_mes_chi / pd.Timestamp(_hoy_chi).days_in_month) if _total_cf_mes_chi > 0 else 0
+            # Ventas netas de hoy = brutas ÷ 1,10 × 0,75
+            _ventas_brutas_hoy = _df_hoy["valor"].sum()
+            _ventas_netas_hoy = _ventas_brutas_hoy / 1.10 * 0.75
+            _margen_hoy = _ventas_netas_hoy - _coste_personal_hoy - _coste_fijo_hoy
+        # Elegir imagen según el tramo del margen
+        if _margen_hoy is None:
+            _estado_chi = "unknown"
+        elif _margen_hoy <= -100:
+            _estado_chi = "angry"
+        elif _margen_hoy < 0:
+            _estado_chi = "worried"
+        elif _margen_hoy <= 50:
+            _estado_chi = "ok"
+        elif _margen_hoy <= 100:
+            _estado_chi = "happy"
+        elif _margen_hoy <= 200:
+            _estado_chi = "very_happy"
+        else:
+            _estado_chi = "rich"
+        # Título + imagen centrada
+        _dias_es_chi = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+        st.markdown(f"<h3 style='text-align:center;margin:0 0 4px;'>🐱 Chinita-meter</h3>"
+                    f"<p style='text-align:center;color:#888;margin:0 0 18px;'>{_dias_es_chi[_hoy_chi.weekday()]} {_hoy_chi.strftime('%d/%m/%Y')}</p>",
+                    unsafe_allow_html=True)
+        _c_izq, _c_centro, _c_der = st.columns([1, 2, 1])
+        with _c_centro:
+            st.image(_chi_url(_CHI_IMGS[_estado_chi]), use_container_width=True)
+            if _margen_hoy is None:
+                st.markdown("<p style='text-align:center;color:#888;font-size:15px;margin-top:12px;'>Todavía no hay ventas registradas hoy.</p>", unsafe_allow_html=True)
+            else:
+                _color_chi = "#2E7D32" if _margen_hoy >= 0 else "#C62828"
+                st.markdown(f"<p style='text-align:center;font-size:22px;font-weight:600;color:{_color_chi};margin-top:12px;'>Margen de hoy: €{_margen_hoy:,.2f}</p>", unsafe_allow_html=True)
     # ── TAB 0: Rentabilidad ─────────────────────────────────
     if nav == "💰 Rentabilidad":
         import datetime as dt_rent
