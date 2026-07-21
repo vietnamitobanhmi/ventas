@@ -1979,6 +1979,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
 
     # ── TAB: Delivery (Glovo / Uber Eats) ──────────────────────
     if nav == "🛵 Delivery":
+        sb0 = get_supabase()
         st.markdown("#### 🛵 Ventas de delivery (Glovo / Uber Eats)")
         st.caption("Introduce las **ventas brutas** de cada plataforma por fecha. "
                    "El margen neto se calcula así: **Glovo** = bruto × 30 % (se descuenta 25 % de producto + 45 % de comisión con IVA). "
