@@ -862,11 +862,14 @@ def render_dashboard(df):
             _ventas_netas_hoy = _ventas_brutas_hoy / 1.10 * 0.75
             _margen_hoy = _ventas_netas_hoy - _coste_personal_hoy - _coste_fijo_hoy
             # ── Sumar margen neto de delivery de HOY (Glovo ×0,30 · Uber ×0,40) ──
+            _dlv_neto_hoy = 0
+            _dlv_diag = ""
             try:
-                _dlv_hoy = sb_chi.table("ventas_delivery").select("glovo_bruto,uber_bruto").eq("fecha", str(_hoy_chi)).execute().data or []
+                _dlv_hoy = sb_chi.table("ventas_delivery").select("glovo_bruto,uber_bruto,fecha").eq("fecha", str(_hoy_chi)).execute().data or []
                 _dlv_neto_hoy = sum(float(d.get("glovo_bruto", 0) or 0) * 0.30 + float(d.get("uber_bruto", 0) or 0) * 0.40 for d in _dlv_hoy)
-            except Exception:
-                _dlv_neto_hoy = 0
+                _dlv_diag = f"delivery hoy ({_hoy_chi}): {len(_dlv_hoy)} fila(s), neto €{_dlv_neto_hoy:.2f}"
+            except Exception as _e_dlv_chi:
+                _dlv_diag = f"ERROR leyendo delivery: {_e_dlv_chi}"
             _margen_hoy += _dlv_neto_hoy
         # Elegir imagen según el margen real acumulado (costes prorrateados por la jornada)
         if _margen_hoy is None:
@@ -920,6 +923,8 @@ def render_dashboard(df):
             else:
                 _color_chi = "#2E7D32" if _margen_hoy >= 0 else "#C62828"
                 st.markdown(f"<p style='text-align:center;font-size:22px;font-weight:600;color:{_color_chi};margin-top:12px;'>Margen de hoy: €{_margen_hoy:,.2f}</p>", unsafe_allow_html=True)
+                if _dlv_diag:
+                    st.caption(f"🔍 {_dlv_diag}")
         with _c_der:
             # Dos barras verticales lado a lado, mismo eje €:
             #  · Izquierda "Costes a cubrir": personal abajo + fijo encima (tope = break-even)
