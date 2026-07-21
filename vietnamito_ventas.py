@@ -2065,6 +2065,69 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         # Factores de margen neto por plataforma
         _F_GLOVO = 0.30
         _F_UBER = 0.40
+
+        # ── Subir CSV de Glovo (columnas "Date" DD/MM/YYYY y "Sales") ──
+        with st.expander("📤 Subir CSV de Glovo"):
+            st.caption("El CSV debe tener una columna **Date** (formato DD/MM/YYYY, p.ej. 24/06/2026) y una columna **Sales** "
+                       "(p.ej. 101.5). Cada fila es un día ya totalizado. Al subirlo, cada fecha del CSV **machaca el Glovo** "
+                       "de esa fecha (el Uber introducido a mano no se toca); las fechas nuevas se crean. Luego puedes seguir editando a mano.")
+            _csv_glovo = st.file_uploader("Archivo CSV de Glovo", type=["csv"], key="csv_glovo_upload")
+            if _csv_glovo is not None:
+                import pandas as _pd_csv
+                try:
+                    # Intentar varios separadores y codificaciones habituales
+                    _raw = None
+                    for _sep in [",", ";", "\t"]:
+                        try:
+                            _csv_glovo.seek(0)
+                            _tmp = _pd_csv.read_csv(_csv_glovo, sep=_sep)
+                            if _tmp.shape[1] >= 2:
+                                _raw = _tmp
+                                break
+                        except Exception:
+                            continue
+                    if _raw is None:
+                        st.error("No se pudo leer el CSV. Comprueba el formato.")
+                    else:
+                        # Localizar columnas Date y Sales (insensible a mayúsculas/espacios)
+                        _cols_norm = {str(c).strip().lower(): c for c in _raw.columns}
+                        _col_date = _cols_norm.get("date")
+                        _col_sales = _cols_norm.get("sales")
+                        if _col_date is None or _col_sales is None:
+                            st.error(f"El CSV debe tener columnas 'Date' y 'Sales'. Columnas encontradas: {list(_raw.columns)}")
+                        else:
+                            # Parsear: fecha DD/MM/YYYY → ISO; cada fila un día (si repetida, la última gana)
+                            _glovo_por_fecha = {}
+                            _errores = 0
+                            for _, _fila in _raw.iterrows():
+                                try:
+                                    _fecha_iso = _pd_csv.to_datetime(str(_fila[_col_date]).strip(), format="%d/%m/%Y").date().isoformat()
+                                    _val = str(_fila[_col_sales]).strip().replace(",", ".")
+                                    _glovo_por_fecha[_fecha_iso] = float(_val)  # última fila con esa fecha gana
+                                except Exception:
+                                    _errores += 1
+                            if not _glovo_por_fecha:
+                                st.error("No se pudo interpretar ninguna fila. Revisa el formato de fecha (DD/MM/YYYY) y de ventas.")
+                            else:
+                                st.success(f"✅ Leídas {len(_glovo_por_fecha)} fecha(s) del CSV" + (f" ({_errores} fila(s) ignoradas)" if _errores else "") + ".")
+                                st.dataframe(_pd_csv.DataFrame([{"Fecha": _f, "Glovo €": _v} for _f, _v in sorted(_glovo_por_fecha.items(), reverse=True)]), use_container_width=True, hide_index=True)
+                                if st.button("💾 Aplicar CSV a la tabla de Glovo", type="primary", key="aplicar_csv_glovo"):
+                                    # Fechas ya existentes (para respetar el uber al machacar)
+                                    _existentes = {str(d["fecha"])[:10]: d for d in (sb0.table("ventas_delivery").select("*").execute().data or [])}
+                                    _n_upd = _n_new = 0
+                                    for _f_iso, _g_val in _glovo_por_fecha.items():
+                                        if _f_iso in _existentes:
+                                            # Machacar solo glovo_bruto; respetar uber_bruto
+                                            sb0.table("ventas_delivery").update({"glovo_bruto": _g_val}).eq("fecha", _f_iso).execute()
+                                            _n_upd += 1
+                                        else:
+                                            sb0.table("ventas_delivery").insert({"fecha": _f_iso, "glovo_bruto": _g_val, "uber_bruto": 0}).execute()
+                                            _n_new += 1
+                                    st.success(f"✅ Aplicado: {_n_upd} fecha(s) actualizada(s), {_n_new} nueva(s).")
+                                    st.rerun()
+                except Exception as _e_csv:
+                    st.error(f"Error procesando el CSV: {_e_csv}")
+
         # Cargar datos existentes
         _dlv_res = sb0.table("ventas_delivery").select("*").order("fecha", desc=True).execute()
         _dlv_data = _dlv_res.data or []
