@@ -495,6 +495,28 @@ def calcular_promedios_dia(df):
     dias_unicos = df.groupby("dow")["fecha"].nunique()
     totales = df.groupby("dow")["valor"].sum()
     return (totales / dias_unicos).reindex(DIAS_ORDER, fill_value=0)
+def cargar_delivery_neto(_sb, fecha_ini=None, fecha_fin=None):
+    """Devuelve {fecha(date): margen_neto_delivery} (Glovo ×0,30 · Uber ×0,40).
+    Si se dan fechas, filtra por rango [ini, fin] inclusive."""
+    import pandas as _pd_d
+    try:
+        _q = _sb.table("ventas_delivery").select("fecha,glovo_bruto,uber_bruto")
+        if fecha_ini is not None:
+            _q = _q.gte("fecha", str(fecha_ini))
+        if fecha_fin is not None:
+            _q = _q.lte("fecha", str(fecha_fin))
+        _rows = _q.execute().data or []
+    except Exception:
+        _rows = []
+    _out = {}
+    for _r in _rows:
+        try:
+            _f = _pd_d.to_datetime(_r["fecha"]).date()
+            _neto = float(_r.get("glovo_bruto", 0) or 0) * 0.30 + float(_r.get("uber_bruto", 0) or 0) * 0.40
+            _out[_f] = _out.get(_f, 0) + _neto
+        except Exception:
+            continue
+    return _out
 def calcular_promedios_hora(df):
     dias_por_hora = df.groupby("hora")["fecha"].nunique()
     totales = df.groupby("hora")["valor"].sum()
@@ -1538,8 +1560,19 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         _cf += _total_cf_mes / pd.Timestamp(_fd).days_in_month
                     return round(_cf, 2)
                 sem_df["coste_fijo"] = sem_df["semana"].apply(_coste_fijo_semana)
+                # Margen neto de delivery agregado por semana (Glovo ×0,30 · Uber ×0,40)
+                _dlv_sem_map = cargar_delivery_neto(sb0, df_sem["fecha"].min(), df_sem["fecha"].max())
+                def _delivery_semana(sem_str):
+                    _lun = pd.Timestamp(sem_str).date()
+                    _d = 0
+                    for _f, _neto in _dlv_sem_map.items():
+                        _lun_f = _f - dt_rent.timedelta(days=_f.weekday())
+                        if _lun_f == _lun:
+                            _d += _neto
+                    return round(_d, 2)
+                sem_df["delivery"] = sem_df["semana"].apply(_delivery_semana)
                 sem_df["coste"] = sem_df["coste_personal"] + sem_df["coste_fijo"]
-                sem_df["margen"] = (sem_df["ventas_netas"] - sem_df["coste"]).round(2)
+                sem_df["margen"] = (sem_df["ventas_netas"] + sem_df["delivery"] - sem_df["coste"]).round(2)
                 def _label_semana(sem_str):
                     _lun = pd.Timestamp(sem_str).date()
                     _dom = _lun + dt_rent.timedelta(days=6)
@@ -1556,10 +1589,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 _mc3.metric("Costes (personal + fijo)", f"€{sem_df['coste'].sum():,.2f}")
                 _mc4.metric("Margen", f"€{sem_df['margen'].sum():,.2f}")
                 fig_sem = go.Figure()
-                fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["ventas_netas"], name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
-                fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_personal"], name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
+                fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["ventas_netas"], offsetgroup="ventas", name="Ventas netas local", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
+                if sem_df["delivery"].sum() > 0:
+                    fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["delivery"], base=sem_df["ventas_netas"], offsetgroup="ventas", name="Delivery (margen neto)", marker_color="rgba(56,138,221,0.75)", marker_line_width=0, hovertemplate="Delivery: €%{y:.2f}<extra></extra>"))
+                fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_personal"], offsetgroup="personal", name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
                 if _total_cf_mes > 0:
-                    fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_fijo"], name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
+                    fig_sem.add_trace(go.Bar(x=sem_df["label"], y=sem_df["coste_fijo"], offsetgroup="fijo", name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
                 fig_sem.add_trace(go.Scatter(x=sem_df["label"], y=sem_df["coste"], name="Break-even semanal (personal + fijo)", mode="lines", line=dict(color="#8B5CF6", width=2, dash="dash"), hovertemplate="Break-even: €%{y:.2f}<extra></extra>"))
                 fig_sem.add_trace(go.Scatter(x=sem_df["label"], y=sem_df["margen"], name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=8, color=["#5DCAA5" if v >= 0 else "#E63946" for v in sem_df["margen"]]), text=[f"€{v:+.0f}" for v in sem_df["margen"]], textposition="top center", textfont=dict(size=11)))
                 fig_sem.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
@@ -1751,22 +1786,34 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     dia_data["coste_fijo"] = pd.to_datetime(dia_data["fecha"]).apply(
                         lambda d: round(total_costes_fijos_mes / pd.Timestamp(d).days_in_month, 2)
                     )
+                    # Margen neto de delivery por fecha (Glovo ×0,30 · Uber ×0,40)
+                    _dlv_dia = cargar_delivery_neto(sb0, dia_data["fecha"].min(), dia_data["fecha"].max())
+                    dia_data["delivery"] = dia_data["fecha"].map(lambda f: round(_dlv_dia.get(f, 0), 2))
                     dia_data["coste"] = (dia_data["coste_personal"] + dia_data["coste_fijo"]).round(2)
-                    dia_data["margen"] = (dia_data["ventas_netas"] - dia_data["coste"]).round(2)
+                    dia_data["margen"] = (dia_data["ventas_netas"] + dia_data["delivery"] - dia_data["coste"]).round(2)
                     dia_data["label"] = pd.to_datetime(dia_data["fecha"]).dt.strftime("%a %d/%m")
                     dia_data = dia_data.sort_values("fecha")
+                    _hay_dlv_dia = dia_data["delivery"].sum() > 0
                     fig_dia = go.Figure()
+                    # Ventas netas LOCAL (abajo)
                     fig_dia.add_trace(go.Bar(
-                        x=dia_data["label"], y=dia_data["ventas_netas"],
-                        name="Ventas netas (sin IVA, sin coste producto)", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
+                        x=dia_data["label"], y=dia_data["ventas_netas"], offsetgroup="ventas",
+                        name="Ventas netas local", marker_color="rgba(93,202,165,0.7)", marker_line_width=0,
                     ))
+                    # Ventas netas DELIVERY (encima, apilado con base)
+                    if _hay_dlv_dia:
+                        fig_dia.add_trace(go.Bar(
+                            x=dia_data["label"], y=dia_data["delivery"], base=dia_data["ventas_netas"], offsetgroup="ventas",
+                            name="Delivery (margen neto)", marker_color="rgba(56,138,221,0.75)", marker_line_width=0,
+                            hovertemplate="Delivery: €%{y:.2f}<extra></extra>",
+                        ))
                     fig_dia.add_trace(go.Bar(
-                        x=dia_data["label"], y=dia_data["coste_personal"],
+                        x=dia_data["label"], y=dia_data["coste_personal"], offsetgroup="personal",
                         name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0,
                     ))
                     if total_costes_fijos_mes > 0:
                         fig_dia.add_trace(go.Bar(
-                            x=dia_data["label"], y=dia_data["coste_fijo"],
+                            x=dia_data["label"], y=dia_data["coste_fijo"], offsetgroup="fijo",
                             name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0,
                         ))
                     fig_dia.add_trace(go.Scatter(
