@@ -455,7 +455,7 @@ def save_to_supabase(rows, fmt="epos"):
         # Borra solo los registros del nuevo POS (id_ticket IS NOT NULL) para las fechas del archivo
         # PERO excluye las ventas Stripe (id_ticket 'stripe_...'), que no vienen del CSV de Glop
         for fecha in fechas:
-            sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").not_.like("id_ticket", "stripe_%").execute()
+            sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").not_.like("id_ticket", "stripe_%").not_.like("id_ticket", "manual_%").execute()
         # Dedupe en memoria: si el CSV trae el mismo ticket varias veces, conservar solo el primero
         # (también evita el error de upsert "cannot affect row a second time")
         vistos = set()
@@ -2650,6 +2650,71 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             import datetime as dt_mod
             sb7 = get_supabase()
             st.markdown("### Pedidos")
+
+            # ── INGRESO EXTRA MANUAL ──
+            # Para cuadrar el día cuando algo no entró por los canales normales
+            # (un pago de Stripe perdido, descuadre de Glovo/caja, ventas no registradas...).
+            # Se guarda como una venta BRUTA normal en la tabla ventas.
+            with st.expander("➕ Añadir ingreso extra manual"):
+                st.caption("Añade un importe **bruto** (con IVA, como una venta normal) a un día concreto. "
+                           "Úsalo para cuadrar cuando algo no entró por los canales habituales: un pago de Stripe que se perdió, "
+                           "un descuadre de caja o Glovo, ventas que no se registraron, etc. Se le aplica el mismo cálculo que a "
+                           "cualquier venta (÷1,10 IVA, ×0,75 coste producto) para las ventas netas.")
+                _ie_col1, _ie_col2 = st.columns(2)
+                with _ie_col1:
+                    _ie_fecha = st.date_input("Fecha del ingreso", value=hoy_madrid(), key="ie_fecha")
+                with _ie_col2:
+                    _ie_importe = st.number_input("Importe bruto (€)", min_value=0.0, step=10.0, value=0.0, key="ie_importe", help="Con IVA incluido, como una venta normal")
+                _ie_hora = st.number_input("Hora (0-23, opcional para franja)", min_value=0, max_value=23, value=14, key="ie_hora", help="Para que cuente en mañana (9-17) o tarde (18-23). Deja 14 si no importa.")
+                _ie_comentario = st.text_input("Comentario", key="ie_comentario", placeholder="Ej: pago Stripe perdido del pedido de Laia, descuadre de caja...")
+                if st.button("💾 Añadir ingreso extra", type="primary", key="ie_guardar"):
+                    if _ie_importe <= 0:
+                        st.error("El importe debe ser mayor que 0.")
+                    else:
+                        try:
+                            import time as _time_ie
+                            _ie_fecha_str = _ie_fecha.isoformat()
+                            _ie_dow = _ie_fecha.weekday()
+                            _ie_ticket = f"manual_{_ie_fecha_str}_{int(_time_ie.time())}"
+                            _ie_row = {
+                                "fecha": _ie_fecha_str,
+                                "hora": int(_ie_hora),
+                                "dow": int(_ie_dow),
+                                "valor": float(_ie_importe),
+                                "id_ticket": _ie_ticket,
+                                "forma_pago": "manual",
+                            }
+                            try:
+                                sb7.table("ventas").insert({**_ie_row, "comentario": _ie_comentario or None}).execute()
+                            except Exception:
+                                sb7.table("ventas").insert(_ie_row).execute()
+                            load_from_supabase.clear()
+                            st.success(f"✅ Ingreso extra de €{_ie_importe:,.2f} añadido al {_ie_fecha_str}. Recarga para verlo reflejado.")
+                        except Exception as _e_ie:
+                            st.error(f"Error al añadir el ingreso: {_e_ie}")
+
+                try:
+                    _ie_previos = sb7.table("ventas").select("id,fecha,hora,valor,comentario,id_ticket").like("id_ticket", "manual_%").order("fecha", desc=True).limit(50).execute().data or []
+                except Exception:
+                    try:
+                        _ie_previos = sb7.table("ventas").select("id,fecha,hora,valor,id_ticket").like("id_ticket", "manual_%").order("fecha", desc=True).limit(50).execute().data or []
+                    except Exception:
+                        _ie_previos = []
+                if _ie_previos:
+                    st.markdown("**Ingresos extra registrados:**")
+                    for _iep in _ie_previos:
+                        _iec1, _iec2 = st.columns([5, 1])
+                        with _iec1:
+                            _com = f" · {_iep.get('comentario')}" if _iep.get('comentario') else ""
+                            st.caption(f"📅 {str(_iep['fecha'])[:10]} · €{float(_iep['valor']):,.2f}{_com}")
+                        with _iec2:
+                            if st.button("🗑️", key=f"ie_del_{_iep['id']}", help="Borrar este ingreso extra"):
+                                try:
+                                    sb7.table("ventas").delete().eq("id", _iep["id"]).execute()
+                                    load_from_supabase.clear()
+                                    st.rerun()
+                                except Exception:
+                                    st.error("No se pudo borrar.")
             # Auto-enviar email de recepción a pedidos solicitados sin email enviado
             cfg_p = sb7.table("config").select("*").execute()
             cfg_ped = {r["clave"]: r["valor"] for r in (cfg_p.data or [])}
