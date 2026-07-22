@@ -996,8 +996,10 @@ def render_dashboard(df):
                 st.markdown("<p style='text-align:center;color:#aaa;font-size:13px;margin-top:40px;'>Sin datos de hoy<br>para la barra.</p>", unsafe_allow_html=True)
             else:
                 _break_even = _coste_personal_hoy + _coste_fijo_hoy  # tope de la barra de costes
-                # Ambas barras crecen desde 0; el eje sube hasta lo más alto (costes o ventas)
-                _tope = max(_break_even, _ventas_netas_hoy)
+                # Ambas barras crecen desde 0; el eje sube hasta lo más alto.
+                # La barra de ventas ahora incluye el delivery apilado encima, así que
+                # el tope debe contemplar ventas_netas + delivery.
+                _tope = max(_break_even, _ventas_netas_hoy + _dlv_neto_hoy)
                 _hi = _tope * 1.18 if _tope > 0 else 50
                 _fig_chi = go.Figure()
                 # ── Barra IZQUIERDA: costes apilados (personal abajo, fijo encima) ──
@@ -1033,12 +1035,23 @@ def render_dashboard(df):
                         marker_color="rgba(46,125,50,0.9)", marker_line_width=0,
                         text=[f"+€{_ganancia:,.0f}"], textposition="inside",
                         insidetextanchor="middle", textfont=dict(size=12, color="white"),
-                        hovertemplate=f"Ganancia (margen): €{_ganancia:,.2f}<extra></extra>",
+                        hovertemplate=f"Ganancia local (margen): €{_ganancia:,.2f}<extra></extra>",
+                    ))
+                # ── Delivery apilado ARRIBA DE TODO: así la barra total = margen real ──
+                if _dlv_neto_hoy > 0:
+                    _fig_chi.add_trace(go.Bar(
+                        x=["Ventas<br>netas hoy"], y=[_dlv_neto_hoy], name="Delivery",
+                        marker_color="rgba(37,99,235,0.85)", marker_line_width=0,
+                        text=[f"+€{_dlv_neto_hoy:,.0f} 🛵"], textposition="inside",
+                        insidetextanchor="middle", textfont=dict(size=11, color="white"),
+                        hovertemplate=f"Delivery (margen neto): €{_dlv_neto_hoy:,.2f}<extra></extra>",
                     ))
                 # Etiqueta del margen encima de la barra de ventas (positivo o negativo)
+                # La barra total llega ahora hasta ventas_netas + delivery (= margen + break-even cubierto)
+                _tope_barra = max(_ventas_netas_hoy + _dlv_neto_hoy, _break_even)
                 _col_m = "rgba(46,125,50,1)" if _margen_hoy >= 0 else "rgba(198,40,40,1)"
                 _txt_m = f"Margen: €{_margen_hoy:,.0f}" if _margen_hoy >= 0 else f"Faltan €{abs(_margen_hoy):,.0f}"
-                _fig_chi.add_annotation(x="Ventas<br>netas hoy", y=max(_ventas_netas_hoy, _break_even),
+                _fig_chi.add_annotation(x="Ventas<br>netas hoy", y=_tope_barra,
                                         text=f"<b>{_txt_m}</b>", showarrow=False, yshift=16,
                                         font=dict(size=13, color=_col_m))
                 # Línea "cubre personal" (altura del bloque de personal)
@@ -1068,10 +1081,11 @@ def render_dashboard(df):
 - El tope morado es el **break-even**: €{_break_even:,.2f}
 
 **Barra derecha — Ventas netas de hoy:** €{_ventas_netas_hoy:,.2f}  _(facturación − IVA − coste de producto; aún SIN restar personal ni fijo)_
-- La parte clara cubre los costes; la parte verde oscura que **sobresale por encima del break-even es tu ganancia**.
-{("- **+ Delivery:** €" + format(_dlv_neto_hoy, ",.2f") + " de margen neto (Glovo ×0,30 · Uber ×0,40), sumado al margen." ) if _dlv_neto_hoy > 0 else ""}
+- La parte clara cubre los costes; la parte verde oscura que **sobresale por encima del break-even es tu ganancia del local**.
+{("- La franja **azul de arriba** es el **Delivery**: €" + format(_dlv_neto_hoy, ",.2f") + " de margen neto (Glovo ×0,30 · Uber ×0,40), apilada encima." ) if _dlv_neto_hoy > 0 else ""}
+- **Todo lo que sobresale por encima de la línea morada (break-even) es tu margen real.**
 
-**El margen{" (con delivery)" if _dlv_neto_hoy > 0 else ""} es:** €{_margen_hoy:,.2f}
+**El margen{" (local + delivery)" if _dlv_neto_hoy > 0 else ""} es:** €{_margen_hoy:,.2f}
 - Si la barra de ventas **pasa la línea morada**, ganas (margen positivo).
 - Si **no llega**, pierdes (te faltan €{abs(min(0,_margen_hoy)):,.2f} para el break-even).""")
     # ── TAB 0: Rentabilidad ─────────────────────────────────
