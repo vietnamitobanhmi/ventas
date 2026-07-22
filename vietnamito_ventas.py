@@ -453,8 +453,9 @@ def save_to_supabase(rows, fmt="epos"):
             sb.table("ventas").delete().eq("fecha", fecha).is_("id_ticket", "null").execute()
     else:
         # Borra solo los registros del nuevo POS (id_ticket IS NOT NULL) para las fechas del archivo
+        # PERO excluye las ventas Stripe (id_ticket 'stripe_...'), que no vienen del CSV de Glop
         for fecha in fechas:
-            sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").execute()
+            sb.table("ventas").delete().eq("fecha", fecha).not_.is_("id_ticket", "null").not_.like("id_ticket", "stripe_%").execute()
         # Dedupe en memoria: si el CSV trae el mismo ticket varias veces, conservar solo el primero
         # (también evita el error de upsert "cannot affect row a second time")
         vistos = set()
@@ -495,6 +496,46 @@ def calcular_promedios_dia(df):
     dias_unicos = df.groupby("dow")["fecha"].nunique()
     totales = df.groupby("dow")["valor"].sum()
     return (totales / dias_unicos).reindex(DIAS_ORDER, fill_value=0)
+def sincronizar_ventas_stripe(_sb):
+    """Vuelca los pedidos pagados por Stripe (pagado=true, pago_id != 'caja') a la tabla
+    ventas, con id_ticket='stripe_<id>' y forma_pago='stripe'. Idempotente: el upsert por
+    (fecha, id_ticket) evita duplicados, así que puede ejecutarse las veces que haga falta.
+    Devuelve (n_insertadas_o_actualizadas, total_bruto)."""
+    import pandas as _pd_sy
+    try:
+        _peds = _sb.table("pedidos").select("id,total,pago_id,pagado,creado_at").eq("pagado", True).execute().data or []
+    except Exception:
+        return 0, 0
+    _rows = []
+    _total = 0
+    for _p in _peds:
+        if _p.get("pago_id") == "caja":
+            continue  # los de caja ya pasan por Glop → ya están en el CSV
+        try:
+            _dt = _pd_sy.to_datetime(_p["creado_at"])
+            _fecha = _dt.date().isoformat()
+            _hora = int(_dt.hour)
+            _dow = int(_dt.weekday())
+            _valor = float(_p.get("total", 0) or 0)
+        except Exception:
+            continue
+        if _valor <= 0:
+            continue
+        _rows.append({
+            "fecha": _fecha,
+            "hora": _hora,
+            "dow": _dow,
+            "valor": _valor,
+            "id_ticket": f"stripe_{_p['id']}",
+            "forma_pago": "stripe",
+        })
+        _total += _valor
+    if not _rows:
+        return 0, 0
+    # Upsert por (fecha, id_ticket): idempotente, nunca duplica
+    for _i in range(0, len(_rows), 500):
+        _sb.table("ventas").upsert(_rows[_i:_i+500], on_conflict="fecha,id_ticket").execute()
+    return len(_rows), _total
 def cargar_delivery_neto(_sb, fecha_ini=None, fecha_fin=None):
     """Devuelve {fecha(date): margen_neto_delivery} (Glovo ×0,30 · Uber ×0,40).
     Si se dan fechas, filtra por rango [ini, fin] inclusive."""
@@ -3415,6 +3456,17 @@ uploaded = st.file_uploader(
     type=["csv"],
     help="Compatible con Epos Now (Sales Breakdown by Hour) y el nuevo POS (por ticket)"
 )
+# Botón para volcar las ventas pagadas por Stripe (pedidos online) a la tabla de ventas
+_col_stripe, _ = st.columns([1, 2])
+with _col_stripe:
+    if st.button("💳 Sincronizar ventas Stripe", help="Añade a las ventas los pedidos online pagados por Stripe (no pasan por Glop). Es seguro pulsarlo varias veces: no duplica."):
+        with st.spinner("Sincronizando pagos de Stripe..."):
+            _n_stripe, _tot_stripe = sincronizar_ventas_stripe(get_supabase())
+            load_from_supabase.clear()
+        if _n_stripe > 0:
+            st.success(f"✅ {_n_stripe} venta(s) de Stripe sincronizada(s) · Total bruto €{_tot_stripe:,.2f}. Recarga para ver los datos actualizados.")
+        else:
+            st.info("No hay ventas nuevas de Stripe para sincronizar.")
 if uploaded:
     # Procesar cada archivo UNA sola vez: el file_uploader mantiene el archivo entre
     # re-runs y sin esta marca se re-procesaba en cada interacción del dashboard.
