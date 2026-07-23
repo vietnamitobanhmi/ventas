@@ -9,6 +9,17 @@ def hoy_madrid():
     """Devuelve la fecha de HOY en zona horaria Europe/Madrid (no UTC del servidor)."""
     return datetime.now(TZ_MADRID).date()
 
+def _pago_txt(ped):
+    """Texto del estado de pago de un pedido: caja, tarjeta (Stripe) o sin pagar."""
+    if not ped.get("pagado"):
+        return "💰 Sin pagar (pagará en caja)"
+    pid = ped.get("pago_id") or ""
+    if pid == "caja":
+        return "🏧 PAGADO en caja"
+    if pid:
+        return f"💳 PAGADO con tarjeta (Stripe · {pid[:14]}…)"
+    return "✅ PAGADO (sin referencia)"
+
 def fmt_madrid(ts, fmt="%d/%m %H:%M"):
     """Formatea un timestamp de la BBDD (UTC) en hora local de Madrid.
     La BBDD guarda en UTC; sin convertir, las horas salían 2h antes en verano
@@ -2870,6 +2881,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
                 c2.markdown(f"**Total:** €{float(ped['total']):.2f}")
                 c2.markdown(f"**Estado:** {ped['estado']}")
+                c2.markdown(f"**Pago:** {_pago_txt(ped)}")
                 c2.markdown(f"**Solicitado:** {fmt_madrid(ped['creado_at'], '%d/%m/%Y %H:%M')}")
                 if ped.get("notas"):
                     st.markdown(f"**Notas:** {ped['notas']}")
@@ -2885,7 +2897,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     for ped in solicitados:
                         items_res = items_bulk_s.get(ped["id"], [])
                         productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-                        with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'], '%H:%M')}", expanded=True):
+                        with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {'💳' if (ped.get('pagado') and ped.get('pago_id') != 'caja') else '💰'} · recoger {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'], '%H:%M')}", expanded=True):
                             st.caption(_kds_recibido_badge(ped))
                             _render_pedido_completo(ped, items_res)
                             st.markdown("")
@@ -2925,7 +2937,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     items_bulk_a = _bulk_items([p["id"] for p in activos])
                     for ped in activos:
                         items_res = items_bulk_a.get(ped["id"], [])
-                        with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']}"):
+                        with st.expander(f"{estado_emoji.get(ped['estado'],ped['estado'])} · #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {'💳' if (ped.get('pagado') and ped.get('pago_id') != 'caja') else '💰'} · recoger {ped['hora_recogida']}"):
                             st.caption(_kds_recibido_badge(ped))
                             _render_pedido_completo(ped, items_res)
                             st.markdown("")
@@ -2982,7 +2994,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         estado = ped["estado"]
                         color_map = {"esperando_pago":"💳⏳","solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
                         icono = color_map.get(estado, "⚪")
-                        with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'])}"):
+                        with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {'💳' if (ped.get('pagado') and ped.get('pago_id') != 'caja') else ('🏧' if ped.get('pagado') else '💰')} · {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'])}"):
                             st.caption(_kds_recibido_badge(ped))
                             _render_pedido_completo(ped, items_res)
                             # Botón cancelar solo para estados activos (no para cancelado/rechazado/entregado)
