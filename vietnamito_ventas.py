@@ -8,6 +8,21 @@ TZ_MADRID = ZoneInfo("Europe/Madrid")
 def hoy_madrid():
     """Devuelve la fecha de HOY en zona horaria Europe/Madrid (no UTC del servidor)."""
     return datetime.now(TZ_MADRID).date()
+
+def fmt_madrid(ts, fmt="%d/%m %H:%M"):
+    """Formatea un timestamp de la BBDD (UTC) en hora local de Madrid.
+    La BBDD guarda en UTC; sin convertir, las horas salían 2h antes en verano
+    (p.ej. un mensaje 'atendido' parecía anterior a su 'recibido')."""
+    if ts is None or ts == "":
+        return "—"
+    try:
+        import pandas as _pd
+        t = _pd.Timestamp(ts)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        return t.tz_convert(TZ_MADRID).strftime(fmt)
+    except Exception:
+        return str(ts)[:16]
 from supabase import create_client
 st.set_page_config(page_title="Vietnamito — Ventas", page_icon="☕", layout="wide")
 # ── AUTENTICACIÓN ──
@@ -795,9 +810,9 @@ def render_kds_msg_tab():
     else:
         for m in hist:
             icono = "✅" if m.get("atendido") else "⏳"
-            estado_txt = f"atendido {pd.Timestamp(m['atendido_at']).strftime('%d/%m %H:%M')}" if m.get("atendido") else "esperando"
+            estado_txt = f"atendido {fmt_madrid(m['atendido_at'])}" if m.get("atendido") else "esperando"
             recibido_txt = _kds_recibido_badge(m)
-            st.markdown(f"{icono} **{pd.Timestamp(m['creado_at']).strftime('%d/%m %H:%M')}** — {m['mensaje']} · _{estado_txt}_ · {recibido_txt}")
+            st.markdown(f"{icono} **{fmt_madrid(m['creado_at'])}** — {m['mensaje']} · _{estado_txt}_ · {recibido_txt}")
 def render_dashboard(df):
     fecha_min = df["fecha"].min()
     fecha_max = df["fecha"].max()
@@ -2629,14 +2644,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 rows = []
                 for e in ejecuciones:
                     rows.append({
-                        "Fecha": pd.Timestamp(e["iniciado_at"]).strftime("%d/%m/%Y %H:%M"),
+                        "Fecha": fmt_madrid(e["iniciado_at"], "%d/%m/%Y %H:%M"),
                         "Empleado": emp_lookup.get(e["empleado_id"], "—"),
                         "Proceso": proc_lookup.get(e["proceso_id"], "—"),
                         "Completado": "✅" if e["completado"] else "⏳",
                     })
                 st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
                 ejec_ids = {
-                    f"{emp_lookup.get(e['empleado_id'],'?')} — {proc_lookup.get(e['proceso_id'],'?')} — {pd.Timestamp(e['iniciado_at']).strftime('%d/%m %H:%M')}": e["id"]
+                    f"{emp_lookup.get(e['empleado_id'],'?')} — {proc_lookup.get(e['proceso_id'],'?')} — {fmt_madrid(e['iniciado_at'])}": e["id"]
                     for e in ejecuciones
                 }
                 sel_ejec = st.selectbox("Ver detalle de ejecución:", list(ejec_ids.keys()), key="sel_ejec")
@@ -2815,7 +2830,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 c1.markdown(f"**Recogida:** {ped['hora_recogida']}")
                 c2.markdown(f"**Total:** €{float(ped['total']):.2f}")
                 c2.markdown(f"**Estado:** {ped['estado']}")
-                c2.markdown(f"**Solicitado:** {pd.Timestamp(ped['creado_at']).strftime('%d/%m/%Y %H:%M')}")
+                c2.markdown(f"**Solicitado:** {fmt_madrid(ped['creado_at'], '%d/%m/%Y %H:%M')}")
                 if ped.get("notas"):
                     st.markdown(f"**Notas:** {ped['notas']}")
                 st.markdown(f"**Productos:** {productos_str}")
@@ -2830,7 +2845,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     for ped in solicitados:
                         items_res = items_bulk_s.get(ped["id"], [])
                         productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-                        with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%H:%M')}", expanded=True):
+                        with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · recoger {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'], '%H:%M')}", expanded=True):
                             st.caption(_kds_recibido_badge(ped))
                             _render_pedido_completo(ped, items_res)
                             st.markdown("")
@@ -2927,7 +2942,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         estado = ped["estado"]
                         color_map = {"esperando_pago":"💳⏳","solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
                         icono = color_map.get(estado, "⚪")
-                        with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {pd.Timestamp(ped['creado_at']).strftime('%d/%m %H:%M')}"):
+                        with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'])}"):
                             st.caption(_kds_recibido_badge(ped))
                             _render_pedido_completo(ped, items_res)
                             # Botón cancelar solo para estados activos (no para cancelado/rechazado/entregado)
@@ -3155,7 +3170,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         color_map = {"pendiente": "🔴", "confirmada": "🟢", "cancelada": "⚫"}
                         icono = color_map.get(estado, "⚪")
                     
-                        with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {pd.Timestamp(res['creado_at']).strftime('%d/%m %H:%M')}"):
+                        with st.expander(f"{icono} #{res['id']} · {res['nombre']} · {res['personas']} pax · {res['fecha']} {res['hora']} · {fmt_madrid(res['creado_at'])}"):
                             c1, c2 = st.columns(2)
                             c1.markdown(f"**Nombre:** {res['nombre']}")
                             c1.markdown(f"**Teléfono:** {res['telefono']}")
