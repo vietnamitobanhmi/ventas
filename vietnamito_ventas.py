@@ -949,8 +949,32 @@ def render_dashboard(df):
             except Exception as _e_dlv_chi:
                 _dlv_diag = f"ERROR leyendo delivery: {_e_dlv_chi}"
             _margen_hoy += _dlv_neto_hoy
+        # ── ¿Están frescos los datos? ──
+        # Miramos cuándo se insertó la última fila en ventas (última subida de CSV,
+        # sync de Stripe o ingreso manual). Si hace 2h+ que no entra nada, el margen
+        # mostrado puede estar desactualizado y la Chinita no puede opinar con criterio.
+        # OJO: no miramos la última VENTA (podría no haber ninguna legítimamente),
+        # sino la última SUBIDA de datos.
+        _horas_sin_datos = None
+        _ultima_subida_txt = "nunca"
+        try:
+            _ult = sb_chi.table("ventas").select("created_at").order("created_at", desc=True).limit(1).execute().data or []
+            if _ult and _ult[0].get("created_at"):
+                _t_ult = pd.Timestamp(_ult[0]["created_at"])
+                if _t_ult.tzinfo is None:
+                    _t_ult = _t_ult.tz_localize("UTC")
+                _ahora_utc = pd.Timestamp.now(tz="UTC")
+                _horas_sin_datos = (_ahora_utc - _t_ult).total_seconds() / 3600.0
+                _ultima_subida_txt = _t_ult.tz_convert(TZ_MADRID).strftime("%d/%m %H:%M")
+        except Exception:
+            _horas_sin_datos = None
+        _datos_obsoletos = (_horas_sin_datos is not None and _horas_sin_datos >= 2)
+
         # Elegir imagen según el margen real acumulado (costes prorrateados por la jornada)
-        if _margen_hoy is None:
+        if _datos_obsoletos:
+            # Sin datos frescos no se puede saber si estar contenta o enfadada
+            _estado_chi = "unknown"
+        elif _margen_hoy is None:
             _estado_chi = "unknown"
         elif _margen_hoy <= -200:
             _estado_chi = "disaster"
@@ -994,9 +1018,25 @@ def render_dashboard(df):
                 "amazing":  ("AMAZING!!!",     "#1B8A5A"),
                 "rich":     ("CHITA RICH!!!!", "#1565C0"),
             }
-            _mood_txt, _mood_col = _CHI_MOOD.get(_estado_chi, _CHI_MOOD["unknown"])
+            if _datos_obsoletos:
+                _mood_txt, _mood_col = ("NOT SURE… 🤔", "#7B5EA7")
+            else:
+                _mood_txt, _mood_col = _CHI_MOOD.get(_estado_chi, _CHI_MOOD["unknown"])
             st.markdown(f"<p style='text-align:center;font-size:20px;font-weight:800;letter-spacing:0.5px;margin-top:10px;'>Chinita is… <span style='color:{_mood_col}'>{_mood_txt}</span></p>", unsafe_allow_html=True)
-            if _margen_hoy is None:
+            if _datos_obsoletos:
+                _hrs = int(_horas_sin_datos)
+                st.markdown(
+                    f"<p style='text-align:center;color:#7B5EA7;font-size:15px;margin-top:12px;line-height:1.5;'>"
+                    f"🤔 <b>No puedo saber si estar contenta o enfadada.</b><br>"
+                    f"Hace <b>{_hrs}h</b> que no se suben datos (última subida: {_ultima_subida_txt}).<br>"
+                    f"<span style='color:#888;font-size:13px;'>Sube el CSV de Glop para saber cómo va el día de verdad.</span>"
+                    f"</p>", unsafe_allow_html=True)
+                # Mostrar el último margen conocido, pero atenuado (es un dato viejo)
+                if _margen_hoy is not None:
+                    st.markdown(
+                        f"<p style='text-align:center;color:#aaa;font-size:15px;margin-top:-6px;'>"
+                        f"<i>Con los datos que tengo: €{_margen_hoy:,.2f}</i></p>", unsafe_allow_html=True)
+            elif _margen_hoy is None:
                 st.markdown("<p style='text-align:center;color:#888;font-size:15px;margin-top:12px;'>Todavía no hay ventas registradas hoy.</p>", unsafe_allow_html=True)
             else:
                 _color_chi = "#2E7D32" if _margen_hoy >= 0 else "#C62828"
