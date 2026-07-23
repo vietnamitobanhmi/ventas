@@ -872,7 +872,32 @@ def render_dashboard(df):
     if nav == "🐱 Chinita-meter":
         import datetime as dt_chi
         sb_chi = get_supabase()
-        _hoy_chi = hoy_madrid()
+        # ── Navegador de días: por defecto hoy, con flechas ← → para ver otros días ──
+        if "chi_fecha" not in st.session_state:
+            st.session_state.chi_fecha = hoy_madrid()
+        _nav_c1, _nav_c2, _nav_c3, _nav_c4 = st.columns([1, 3, 1, 2])
+        with _nav_c1:
+            if st.button("←", key="chi_prev", help="Día anterior"):
+                st.session_state.chi_fecha = st.session_state.chi_fecha - dt_chi.timedelta(days=1)
+                st.rerun()
+        with _nav_c3:
+            _chi_es_futuro = st.session_state.chi_fecha >= hoy_madrid()
+            if st.button("→", key="chi_next", help="Día siguiente", disabled=_chi_es_futuro):
+                st.session_state.chi_fecha = st.session_state.chi_fecha + dt_chi.timedelta(days=1)
+                st.rerun()
+        with _nav_c2:
+            _chi_pick = st.date_input("Día", value=st.session_state.chi_fecha,
+                                      max_value=hoy_madrid(), key="chi_datepick",
+                                      label_visibility="collapsed")
+            if _chi_pick != st.session_state.chi_fecha:
+                st.session_state.chi_fecha = _chi_pick
+                st.rerun()
+        with _nav_c4:
+            if st.session_state.chi_fecha != hoy_madrid():
+                if st.button("📅 Volver a hoy", key="chi_hoy"):
+                    st.session_state.chi_fecha = hoy_madrid()
+                    st.rerun()
+        _hoy_chi = st.session_state.chi_fecha
         # Nombres de imagen por tramo (bucket assets, raíz, .png)
         _CHI_IMGS = {
             "unknown": "margin_unknown",
@@ -979,7 +1004,10 @@ def render_dashboard(df):
                 _ultima_subida_txt = _t_ult.tz_convert(TZ_MADRID).strftime("%d/%m %H:%M")
         except Exception:
             _horas_sin_datos = None
-        _datos_obsoletos = (_horas_sin_datos is not None and _horas_sin_datos >= 2)
+        # Solo aplica si se está mirando el día de HOY: un día pasado ya está cerrado
+        # y sus datos no van a cambiar — no tiene sentido que la Chinita "dude".
+        _datos_obsoletos = (_horas_sin_datos is not None and _horas_sin_datos >= 2
+                            and _hoy_chi == hoy_madrid())
 
         # Elegir imagen según el margen real acumulado (costes prorrateados por la jornada)
         if _datos_obsoletos:
@@ -1051,7 +1079,8 @@ def render_dashboard(df):
                 st.markdown("<p style='text-align:center;color:#888;font-size:15px;margin-top:12px;'>Todavía no hay ventas registradas hoy.</p>", unsafe_allow_html=True)
             else:
                 _color_chi = "#2E7D32" if _margen_hoy >= 0 else "#C62828"
-                st.markdown(f"<p style='text-align:center;font-size:22px;font-weight:600;color:{_color_chi};margin-top:12px;'>Margen de hoy: €{_margen_hoy:,.2f}</p>", unsafe_allow_html=True)
+                _lbl_margen = "Margen de hoy" if _hoy_chi == hoy_madrid() else f"Margen del {_hoy_chi.strftime('%d/%m')}"
+                st.markdown(f"<p style='text-align:center;font-size:22px;font-weight:600;color:{_color_chi};margin-top:12px;'>{_lbl_margen}: €{_margen_hoy:,.2f}</p>", unsafe_allow_html=True)
                 if _dlv_diag:
                     st.caption(f"🔍 {_dlv_diag}")
         with _c_der:
