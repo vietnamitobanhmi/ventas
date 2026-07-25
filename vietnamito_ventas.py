@@ -554,6 +554,7 @@ def sincronizar_ventas_stripe(_sb):
             "valor": _valor,
             "id_ticket": f"stripe_{_p['id']}",
             "forma_pago": "stripe",
+            "pedido_id": _p["id"],
         })
         _total += _valor
     if not _rows:
