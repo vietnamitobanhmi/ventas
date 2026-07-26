@@ -1148,8 +1148,13 @@ def render_dashboard(df):
                 _col_m = "rgba(46,125,50,1)" if _margen_hoy >= 0 else "rgba(198,40,40,1)"
                 _txt_m = f"Margen: €{_margen_hoy:,.0f}" if _margen_hoy >= 0 else f"Faltan €{abs(_margen_hoy):,.0f}"
                 _fig_chi.add_annotation(x="Ventas<br>netas hoy", y=_tope_barra,
-                                        text=f"<b>{_txt_m}</b>", showarrow=False, yshift=16,
+                                        text=f"<b>{_txt_m}</b>", showarrow=False, yshift=32,
                                         font=dict(size=13, color=_col_m))
+                # Altura TOTAL de la columna (ventas netas + delivery), justo encima de la barra
+                _total_col = _ventas_netas_hoy + _dlv_neto_hoy
+                _fig_chi.add_annotation(x="Ventas<br>netas hoy", y=_tope_barra,
+                                        text=f"Total €{_total_col:,.0f}", showarrow=False, yshift=15,
+                                        font=dict(size=11, color="rgba(90,74,63,1)"))
                 # Línea "cubre personal" (altura del bloque de personal)
                 _fig_chi.add_hline(y=_coste_personal_hoy, line_dash="dot", line_color="rgba(230,57,70,0.6)",
                                    annotation_text=f"cubre personal (€{_coste_personal_hoy:,.0f})",
@@ -1176,7 +1181,18 @@ def render_dashboard(df):
 - **Fijo** (encima): €{_coste_fijo_hoy:,.2f}  _(mensual ÷ días del mes)_
 - El tope morado es el **break-even**: €{_break_even:,.2f}
 
-**Barra derecha — Ventas netas de hoy:** €{_ventas_netas_hoy:,.2f}  _(facturación − IVA − coste de producto; aún SIN restar personal ni fijo)_
+**Barra derecha — Ventas netas de hoy:** €{_ventas_netas_hoy:,.2f}
+
+De dónde sale esa cifra:
+
+| | |
+|---|---:|
+| Facturación bruta _(lo que entró en caja)_ | **€{_ventas_brutas_hoy:,.2f}** |
+| − IVA _(÷ 1,10)_ | −€{_ventas_brutas_hoy - _ventas_brutas_hoy/1.10:,.2f} |
+| − Coste de producto _(25%)_ | −€{_ventas_brutas_hoy/1.10*0.25:,.2f} |
+| **= Ventas netas** | **€{_ventas_netas_hoy:,.2f}** |
+
+_(aún SIN restar personal ni fijo)_
 - La parte clara cubre los costes; la parte verde oscura que **sobresale por encima del break-even es tu ganancia del local**.
 {("- La franja **azul de arriba** es el **Delivery**: €" + format(_dlv_neto_hoy, ",.2f") + " de margen neto (Glovo ×0,30 · Uber ×0,40), apilada encima." ) if _dlv_neto_hoy > 0 else ""}
 - **Todo lo que sobresale por encima de la línea morada (break-even) es tu margen real.**
