@@ -3567,6 +3567,51 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 st.markdown("#### Categorías del menú")
                 cats_web = sb9.table("categorias").select("*").order("orden").execute().data or []
                 prods_web = sb9.table("productos").select("id,categoria_id").execute().data or []
+
+                # ═══ ZONAS DEL KDS (multi-tablet) ═══
+                with st.expander("🗺️ Zonas del KDS (tablets de COCINA / BANHMI / BARRA)"):
+                    try:
+                        _zonas_kds = sb9.table("zonas").select("*").order("orden").execute().data or []
+                    except Exception:
+                        _zonas_kds = None
+                    if _zonas_kds is None:
+                        st.warning("La tabla `zonas` no existe todavía. Ejecuta el SQL de creación de zonas en Supabase.")
+                    else:
+                        st.markdown("**Zonas** — la marcada con 🔔 recibe las reservas y los mensajes:")
+                        for _z in _zonas_kds:
+                            _zc1, _zc2, _zc3 = st.columns([3, 2, 1])
+                            _zc1.markdown(f"**{_z['nombre']}**" + (" 🔔" if _z.get("recibe_avisos") else ""))
+                            _nuevo_avisos = _zc2.checkbox("Recibe reservas y mensajes", value=bool(_z.get("recibe_avisos")), key=f"zon_av_{_z['id']}")
+                            if _nuevo_avisos != bool(_z.get("recibe_avisos")):
+                                sb9.table("zonas").update({"recibe_avisos": _nuevo_avisos}).eq("id", _z["id"]).execute()
+                                st.rerun()
+                        _znc1, _znc2 = st.columns([3, 1])
+                        _zn_nombre = _znc1.text_input("Nueva zona:", key="zona_nueva_nom", placeholder="p. ej. POSTRES")
+                        if _znc2.button("➕ Crear", key="zona_nueva_btn"):
+                            if _zn_nombre.strip():
+                                sb9.table("zonas").insert({
+                                    "nombre": _zn_nombre.strip().upper(),
+                                    "recibe_avisos": False,
+                                    "orden": len(_zonas_kds) + 1,
+                                }).execute()
+                                st.rerun()
+
+                        st.divider()
+                        st.markdown("**Zona de cada categoría** — sin zona = sus productos salen en TODAS las tablets:")
+                        _zop_nombres = ["— TODAS las zonas —"] + [z["nombre"] for z in _zonas_kds]
+                        _zop_ids = {z["nombre"]: z["id"] for z in _zonas_kds}
+                        _zid_a_nombre = {z["id"]: z["nombre"] for z in _zonas_kds}
+                        for _cat in cats_web:
+                            _cz1, _cz2 = st.columns([3, 2])
+                            _cz1.markdown(f"{_cat['nombre']}")
+                            _actual = _zid_a_nombre.get(_cat.get("zona_id"), "— TODAS las zonas —")
+                            _sel = _cz2.selectbox("Zona", _zop_nombres,
+                                                  index=_zop_nombres.index(_actual),
+                                                  key=f"cat_zona_{_cat['id']}", label_visibility="collapsed")
+                            _sel_id = _zop_ids.get(_sel)  # None si "TODAS"
+                            if _sel_id != _cat.get("zona_id"):
+                                sb9.table("categorias").update({"zona_id": _sel_id}).eq("id", _cat["id"]).execute()
+                                st.rerun()
                 with st.expander("➕ Nueva categoría"):
                     nc1, nc2 = st.columns([3,1])
                     new_cat_nom = nc1.text_input("Nombre (ES):", key="new_cat_nom")
