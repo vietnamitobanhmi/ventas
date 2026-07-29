@@ -737,7 +737,7 @@ def _render_kds_zone_management(sb):
         try:
             _zonas = (
                 sb.table("zonas")
-                .select("id,nombre,orden,recibe_avisos,monitorizar_kds")
+                .select("id,nombre,orden,recibe_avisos,es_kds_principal,monitorizar_kds")
                 .order("orden")
                 .execute()
                 .data
@@ -745,7 +745,7 @@ def _render_kds_zone_management(sb):
             )
         except Exception:
             st.warning(
-                "Falta aplicar la actualización de base de datos para configurar la monitorización por zona."
+                "Falta aplicar la actualización de base de datos de las zonas KDS."
             )
             return
 
@@ -754,15 +754,16 @@ def _render_kds_zone_management(sb):
         }
 
         if _zonas:
-            _hc1, _hc2, _hc3, _hc4 = st.columns([2.2, 1.5, 1.5, 0.8])
+            _hc1, _hc2, _hc3, _hc4, _hc5 = st.columns([2.0, 1.3, 1.4, 1.4, 0.8])
             _hc1.caption("NOMBRE")
             _hc2.caption("RESERVAS Y MENSAJES")
-            _hc3.caption("MONITORIZAR CONEXIÓN")
-            _hc4.caption("CAMBIOS")
+            _hc3.caption("KDS PRINCIPAL / COBROS")
+            _hc4.caption("MONITORIZAR CONEXIÓN")
+            _hc5.caption("CAMBIOS")
 
         for _z in _zonas:
             with st.form(f"kds_zona_form_{_z['id']}"):
-                _c1, _c2, _c3, _c4 = st.columns([2.2, 1.5, 1.5, 0.8])
+                _c1, _c2, _c3, _c4, _c5 = st.columns([2.0, 1.3, 1.4, 1.4, 0.8])
                 _nombre = _c1.text_input(
                     "Nombre de la zona",
                     value=_z["nombre"],
@@ -775,13 +776,22 @@ def _render_kds_zone_management(sb):
                     key=f"kds_zona_avisos_{_z['id']}",
                     help="Esta tablet recibe también las reservas y los mensajes generales.",
                 )
-                _monitoriza = _c3.checkbox(
+                _principal = _c3.checkbox(
+                    "Principal",
+                    value=bool(_z.get("es_kds_principal")),
+                    key=f"kds_zona_principal_{_z['id']}",
+                    help=(
+                        "Ve todos los pedidos, gestiona los cobros y conserva los "
+                        "finalizados del día. Solo puede haber un KDS principal."
+                    ),
+                )
+                _monitoriza = _c4.checkbox(
                     "Controlar",
                     value=bool(_z.get("monitorizar_kds", True)),
                     key=f"kds_zona_monitor_{_z['id']}",
                     help="Avisa si el KDS de esta zona deja de estar conectado o visible.",
                 )
-                _guardar = _c4.form_submit_button("Guardar", use_container_width=True)
+                _guardar = _c5.form_submit_button("Guardar", use_container_width=True)
 
                 if _guardar:
                     _nombre_nuevo = _nombre.strip().upper()
@@ -796,8 +806,15 @@ def _render_kds_zone_management(sb):
                     _cambios = {
                         "nombre": _nombre_nuevo,
                         "recibe_avisos": _recibe,
+                        "es_kds_principal": _principal,
                         "monitorizar_kds": _monitoriza,
                     }
+                    if _principal:
+                        # La vista global y el control de cobros deben tener un
+                        # único responsable para evitar dobles gestiones.
+                        sb.table("zonas").update(
+                            {"es_kds_principal": False}
+                        ).neq("id", _z["id"]).execute()
                     sb.table("zonas").update(_cambios).eq("id", _z["id"]).execute()
 
                     # Mantiene el último estado asociado al nuevo nombre mientras
@@ -824,7 +841,7 @@ def _render_kds_zone_management(sb):
         st.divider()
         st.markdown("**Crear una zona nueva**")
         with st.form("kds_zona_nueva_form"):
-            _nc1, _nc2, _nc3, _nc4 = st.columns([2.2, 1.5, 1.5, 0.8])
+            _nc1, _nc2, _nc3, _nc4, _nc5 = st.columns([2.0, 1.3, 1.4, 1.4, 0.8])
             _nuevo_nombre = _nc1.text_input(
                 "Nombre de la nueva zona",
                 placeholder="p. ej. POSTRES",
@@ -836,13 +853,19 @@ def _render_kds_zone_management(sb):
                 key="kds_zona_nueva_avisos",
                 help="La nueva zona recibirá reservas y mensajes generales.",
             )
-            _nuevo_monitoriza = _nc3.checkbox(
+            _nuevo_principal = _nc3.checkbox(
+                "Principal",
+                value=False,
+                key="kds_zona_nueva_principal",
+                help="La nueva zona tendrá la vista global y gestionará los cobros.",
+            )
+            _nuevo_monitoriza = _nc4.checkbox(
                 "Controlar",
                 value=True,
                 key="kds_zona_nueva_monitor",
                 help="La conexión de la nueva zona se monitorizará.",
             )
-            _crear = _nc4.form_submit_button("Crear", use_container_width=True)
+            _crear = _nc5.form_submit_button("Crear", use_container_width=True)
 
             if _crear:
                 _nombre_crear = _nuevo_nombre.strip().upper()
@@ -851,9 +874,14 @@ def _render_kds_zone_management(sb):
                 elif _nombre_crear in _nombres_existentes:
                     st.error(f"Ya existe una zona llamada {_nombre_crear}.")
                 else:
+                    if _nuevo_principal:
+                        sb.table("zonas").update(
+                            {"es_kds_principal": False}
+                        ).neq("id", 0).execute()
                     sb.table("zonas").insert({
                         "nombre": _nombre_crear,
                         "recibe_avisos": _nuevo_recibe,
+                        "es_kds_principal": _nuevo_principal,
                         "monitorizar_kds": _nuevo_monitoriza,
                         "orden": max([int(_z.get("orden") or 0) for _z in _zonas] or [0]) + 1,
                     }).execute()
