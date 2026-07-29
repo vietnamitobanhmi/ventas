@@ -744,8 +744,33 @@ def _kds_recibido_badge(row):
         return f"📡 Recibido en KDS {ts}"
     return "🔴 NO recibido en KDS todavía"
 def render_kds_online_status(sb):
-    """Indicador del estado del KDS: activo (visible) / oculto (corre pero no se ve) / sin señal."""
+    """Estado de cada tablet KDS por zona; si no hay filas de zona, usa la fila clásica id=1."""
     try:
+        _zrows = sb.table("kds_status").select("*").not_.is_("zona", "null").execute().data or []
+        if _zrows:
+            _ahora = pd.Timestamp.now(tz="UTC")
+            def _tsz(v):
+                if not v:
+                    return None
+                t = pd.Timestamp(v)
+                return t.tz_localize("UTC") if t.tzinfo is None else t
+            for _s in sorted(_zrows, key=lambda x: x.get("zona") or ""):
+                _zona = _s.get("zona")
+                _ls = _tsz(_s.get("last_seen")); _lv = _tsz(_s.get("last_visible"))
+                _sseen = (_ahora - _ls).total_seconds() if _ls is not None else 999999
+                _svis = (_ahora - _lv).total_seconds() if _lv is not None else 999999
+                if _sseen > 18*3600:
+                    _txt = _ls.tz_convert("Europe/Madrid").strftime("%d/%m %H:%M") if _ls is not None else "nunca"
+                    st.caption(f"⚪ **{_zona}** — sin actividad desde {_txt} (¿tablet retirada o cambiada de zona?)")
+                elif _svis < 120:
+                    st.success(f"🟢 **{_zona}** — activa y visible (latido hace {int(_sseen)}s)")
+                elif _sseen < 120:
+                    _m = int(_svis/60)
+                    st.warning(f"🟡 **{_zona}** — la app corre pero NO está en pantalla (última vez visible hace {_m} min)")
+                else:
+                    _m = int(_sseen/60)
+                    st.error(f"🔴 **{_zona}** — sin señal desde hace {_m} min (app cerrada, tablet apagada o sin WiFi)")
+            return
         status = sb.table("kds_status").select("*").eq("id", 1).execute().data
         if not status:
             st.warning("⚠️ Sin datos de estado del KDS (¿tabla kds_status creada?)")
