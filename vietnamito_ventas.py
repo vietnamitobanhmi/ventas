@@ -6,10 +6,9 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 TZ_MADRID = ZoneInfo("Europe/Madrid")
 
-def _zonas_kds_panel(sb9, cats_web, ksuf=""):
-    """Panel de gestión de zonas del KDS + asignación de categorías a zonas.
-    ksuf distingue las keys entre las dos rutas de la sección Web."""
-    with st.expander("🗺️ Zonas del KDS (tablets de COCINA / BANHMI / BARRA)"):
+def _categorias_zonas_panel(sb9, cats_web, ksuf=""):
+    """Asigna cada categoría a una zona KDS. La gestión de zonas vive en la sección KDS."""
+    with st.expander("📍 Zona KDS de cada categoría"):
         try:
             _zonas_kds = sb9.table("zonas").select("*").order("orden").execute().data or []
         except Exception:
@@ -17,27 +16,11 @@ def _zonas_kds_panel(sb9, cats_web, ksuf=""):
         if _zonas_kds is None:
             st.warning("La tabla `zonas` no existe todavía. Ejecuta el SQL de creación de zonas en Supabase.")
             return
-        st.markdown("**Zonas** — la marcada con 🔔 recibe las reservas y los mensajes:")
-        for _z in _zonas_kds:
-            _zc1, _zc2, _zc3 = st.columns([3, 2, 1])
-            _zc1.markdown(f"**{_z['nombre']}**" + (" 🔔" if _z.get("recibe_avisos") else ""))
-            _nuevo_avisos = _zc2.checkbox("Recibe reservas y mensajes", value=bool(_z.get("recibe_avisos")), key=f"zon_av{ksuf}_{_z['id']}")
-            if _nuevo_avisos != bool(_z.get("recibe_avisos")):
-                sb9.table("zonas").update({"recibe_avisos": _nuevo_avisos}).eq("id", _z["id"]).execute()
-                st.rerun()
-        _znc1, _znc2 = st.columns([3, 1])
-        _zn_nombre = _znc1.text_input("Nueva zona:", key=f"zona_nueva_nom{ksuf}", placeholder="p. ej. POSTRES")
-        if _znc2.button("➕ Crear", key=f"zona_nueva_btn{ksuf}"):
-            if _zn_nombre.strip():
-                sb9.table("zonas").insert({
-                    "nombre": _zn_nombre.strip().upper(),
-                    "recibe_avisos": False,
-                    "orden": len(_zonas_kds) + 1,
-                }).execute()
-                st.rerun()
-
-        st.divider()
-        st.markdown("**Zona de cada categoría** — sin zona = sus productos salen en TODAS las tablets:")
+        st.caption(
+            "Aquí solo se decide a qué KDS se envían los productos de cada categoría. "
+            "Las zonas se crean y editan en la sección KDS."
+        )
+        st.markdown("**Sin zona = sus productos salen en todas las tablets.**")
         _zop_nombres = ["— TODAS las zonas —"] + [z["nombre"] for z in _zonas_kds]
         _zop_ids = {z["nombre"]: z["id"] for z in _zonas_kds}
         _zid_a_nombre = {z["id"]: z["nombre"] for z in _zonas_kds}
@@ -744,17 +727,17 @@ def _kds_recibido_badge(row):
         return f"📡 Recibido en KDS {ts}"
     return "🔴 NO recibido en KDS todavía"
 
-def _render_kds_monitoring_controls(sb):
-    """Permite decidir qué zonas generan avisos cuando su KDS deja de estar conectado."""
-    with st.expander("⚙️ Zonas que se deben monitorizar", expanded=True):
+def _render_kds_zone_management(sb):
+    """Gestiona las zonas KDS y sus opciones operativas desde la sección KDS."""
+    with st.expander("⚙️ Configuración de zonas KDS", expanded=True):
         st.caption(
-            "Las zonas activadas se vigilan durante el horario configurado y pueden generar avisos de conexión. "
-            "Una zona desactivada seguirá funcionando y enviando latidos, pero no avisará si su tablet se apaga."
+            "Crea o renombra las zonas y decide cuáles reciben reservas y mensajes, "
+            "y cuáles deben generar avisos si su tablet pierde la conexión."
         )
         try:
             _zonas = (
                 sb.table("zonas")
-                .select("id,nombre,orden,monitorizar_kds")
+                .select("id,nombre,orden,recibe_avisos,monitorizar_kds")
                 .order("orden")
                 .execute()
                 .data
@@ -766,36 +749,115 @@ def _render_kds_monitoring_controls(sb):
             )
             return
 
-        if not _zonas:
-            st.info("No hay zonas configuradas.")
-            return
+        _nombres_existentes = {
+            str(_z.get("nombre") or "").strip().upper(): _z["id"] for _z in _zonas
+        }
 
-        _cols = st.columns(min(3, len(_zonas)))
-        for _i, _z in enumerate(_zonas):
-            with _cols[_i % len(_cols)]:
-                _actual = bool(_z.get("monitorizar_kds", True))
-                _nuevo = st.toggle(
-                    f"📡 {_z['nombre']}",
-                    value=_actual,
-                    key=f"kds_monitor_zona_{_z['id']}",
-                    help=(
-                        "Activado: avisará si esta tablet deja de estar visible o conectada. "
-                        "Desactivado: la zona queda excluida de la vigilancia."
-                    ),
+        if _zonas:
+            _hc1, _hc2, _hc3, _hc4 = st.columns([2.2, 1.5, 1.5, 0.8])
+            _hc1.caption("NOMBRE")
+            _hc2.caption("RESERVAS Y MENSAJES")
+            _hc3.caption("MONITORIZAR CONEXIÓN")
+            _hc4.caption("CAMBIOS")
+
+        for _z in _zonas:
+            with st.form(f"kds_zona_form_{_z['id']}"):
+                _c1, _c2, _c3, _c4 = st.columns([2.2, 1.5, 1.5, 0.8])
+                _nombre = _c1.text_input(
+                    "Nombre de la zona",
+                    value=_z["nombre"],
+                    key=f"kds_zona_nombre_{_z['id']}",
+                    label_visibility="collapsed",
                 )
-                st.caption("Monitorizada" if _nuevo else "Sin monitorizar")
-                if _nuevo != _actual:
-                    sb.table("zonas").update(
-                        {"monitorizar_kds": _nuevo}
-                    ).eq("id", _z["id"]).execute()
-                    # Evita que una alerta antigua provoque una recuperación tardía
-                    # al volver a activar la monitorización de la zona.
-                    try:
-                        sb.table("kds_status").update(
-                            {"alerta_enviada": False}
-                        ).eq("zona", _z["nombre"]).execute()
-                    except Exception:
-                        pass
+                _recibe = _c2.checkbox(
+                    "Recibir",
+                    value=bool(_z.get("recibe_avisos")),
+                    key=f"kds_zona_avisos_{_z['id']}",
+                    help="Esta tablet recibe también las reservas y los mensajes generales.",
+                )
+                _monitoriza = _c3.checkbox(
+                    "Controlar",
+                    value=bool(_z.get("monitorizar_kds", True)),
+                    key=f"kds_zona_monitor_{_z['id']}",
+                    help="Avisa si el KDS de esta zona deja de estar conectado o visible.",
+                )
+                _guardar = _c4.form_submit_button("Guardar", use_container_width=True)
+
+                if _guardar:
+                    _nombre_nuevo = _nombre.strip().upper()
+                    if not _nombre_nuevo:
+                        st.error("El nombre de la zona no puede estar vacío.")
+                        continue
+                    _id_duplicado = _nombres_existentes.get(_nombre_nuevo)
+                    if _id_duplicado is not None and _id_duplicado != _z["id"]:
+                        st.error(f"Ya existe una zona llamada {_nombre_nuevo}.")
+                        continue
+
+                    _cambios = {
+                        "nombre": _nombre_nuevo,
+                        "recibe_avisos": _recibe,
+                        "monitorizar_kds": _monitoriza,
+                    }
+                    sb.table("zonas").update(_cambios).eq("id", _z["id"]).execute()
+
+                    # Mantiene el último estado asociado al nuevo nombre mientras
+                    # la tablet actualiza su zona guardada en localStorage.
+                    if _nombre_nuevo != _z["nombre"]:
+                        try:
+                            sb.table("kds_status").update(
+                                {"zona": _nombre_nuevo}
+                            ).eq("zona", _z["nombre"]).execute()
+                        except Exception:
+                            pass
+
+                    # Evita recuperaciones tardías al cambiar la vigilancia.
+                    if _monitoriza != bool(_z.get("monitorizar_kds", True)):
+                        try:
+                            sb.table("kds_status").update(
+                                {"alerta_enviada": False}
+                            ).eq("zona", _nombre_nuevo).execute()
+                        except Exception:
+                            pass
+                    st.success(f"Zona {_nombre_nuevo} actualizada.")
+                    st.rerun()
+
+        st.divider()
+        st.markdown("**Crear una zona nueva**")
+        with st.form("kds_zona_nueva_form"):
+            _nc1, _nc2, _nc3, _nc4 = st.columns([2.2, 1.5, 1.5, 0.8])
+            _nuevo_nombre = _nc1.text_input(
+                "Nombre de la nueva zona",
+                placeholder="p. ej. POSTRES",
+                label_visibility="collapsed",
+            )
+            _nuevo_recibe = _nc2.checkbox(
+                "Recibir",
+                value=False,
+                key="kds_zona_nueva_avisos",
+                help="La nueva zona recibirá reservas y mensajes generales.",
+            )
+            _nuevo_monitoriza = _nc3.checkbox(
+                "Controlar",
+                value=True,
+                key="kds_zona_nueva_monitor",
+                help="La conexión de la nueva zona se monitorizará.",
+            )
+            _crear = _nc4.form_submit_button("Crear", use_container_width=True)
+
+            if _crear:
+                _nombre_crear = _nuevo_nombre.strip().upper()
+                if not _nombre_crear:
+                    st.error("Escribe un nombre para la nueva zona.")
+                elif _nombre_crear in _nombres_existentes:
+                    st.error(f"Ya existe una zona llamada {_nombre_crear}.")
+                else:
+                    sb.table("zonas").insert({
+                        "nombre": _nombre_crear,
+                        "recibe_avisos": _nuevo_recibe,
+                        "monitorizar_kds": _nuevo_monitoriza,
+                        "orden": max([int(_z.get("orden") or 0) for _z in _zonas] or [0]) + 1,
+                    }).execute()
+                    st.success(f"Zona {_nombre_crear} creada.")
                     st.rerun()
 
 def render_kds_online_status(sb):
@@ -937,7 +999,7 @@ def render_kds_msg_tab():
     """Pestaña para enviar mensajes al KDS con alarma sonora."""
     sb_kds = get_supabase()
     st.markdown("### Estado y vigilancia de los KDS")
-    _render_kds_monitoring_controls(sb_kds)
+    _render_kds_zone_management(sb_kds)
     render_kds_online_status(sb_kds)
     # Interruptor de alertas Telegram
     try:
@@ -3787,7 +3849,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 prods_web = sb9.table("productos").select("id,categoria_id").execute().data or []
 
                 # ═══ ZONAS DEL KDS (multi-tablet) ═══
-                _zonas_kds_panel(sb9, cats_web)
+                _categorias_zonas_panel(sb9, cats_web)
                 with st.expander("➕ Nueva categoría"):
                     nc1, nc2 = st.columns([3,1])
                     new_cat_nom = nc1.text_input("Nombre (ES):", key="new_cat_nom")
@@ -4097,7 +4159,7 @@ if df.empty:
             st.markdown("#### Categorías")
             cats_web_e = sb9.table("categorias").select("*").order("orden").execute().data or []
             # ═══ ZONAS DEL KDS (multi-tablet) ═══
-            _zonas_kds_panel(sb9, cats_web_e, ksuf="_sd")
+            _categorias_zonas_panel(sb9, cats_web_e, ksuf="_sd")
             for cat_e in cats_web_e:
                 with st.expander(f"{cat_e['orden']}. {cat_e['nombre']}"):
                     c_nom_e = st.text_input("🇪🇸 Nombre:", value=cat_e["nombre"], key=f"cnom_e_{cat_e['id']}")
