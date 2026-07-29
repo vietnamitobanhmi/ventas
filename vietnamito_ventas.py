@@ -743,34 +743,157 @@ def _kds_recibido_badge(row):
             ts = ""
         return f"📡 Recibido en KDS {ts}"
     return "🔴 NO recibido en KDS todavía"
+
+def _render_kds_monitoring_controls(sb):
+    """Permite decidir qué zonas generan avisos cuando su KDS deja de estar conectado."""
+    with st.expander("⚙️ Zonas que se deben monitorizar", expanded=True):
+        st.caption(
+            "Las zonas activadas se vigilan durante el horario configurado y pueden generar avisos de conexión. "
+            "Una zona desactivada seguirá funcionando y enviando latidos, pero no avisará si su tablet se apaga."
+        )
+        try:
+            _zonas = (
+                sb.table("zonas")
+                .select("id,nombre,orden,monitorizar_kds")
+                .order("orden")
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            st.warning(
+                "Falta aplicar la actualización de base de datos para configurar la monitorización por zona."
+            )
+            return
+
+        if not _zonas:
+            st.info("No hay zonas configuradas.")
+            return
+
+        _cols = st.columns(min(3, len(_zonas)))
+        for _i, _z in enumerate(_zonas):
+            with _cols[_i % len(_cols)]:
+                _actual = bool(_z.get("monitorizar_kds", True))
+                _nuevo = st.toggle(
+                    f"📡 {_z['nombre']}",
+                    value=_actual,
+                    key=f"kds_monitor_zona_{_z['id']}",
+                    help=(
+                        "Activado: avisará si esta tablet deja de estar visible o conectada. "
+                        "Desactivado: la zona queda excluida de la vigilancia."
+                    ),
+                )
+                st.caption("Monitorizada" if _nuevo else "Sin monitorizar")
+                if _nuevo != _actual:
+                    sb.table("zonas").update(
+                        {"monitorizar_kds": _nuevo}
+                    ).eq("id", _z["id"]).execute()
+                    # Evita que una alerta antigua provoque una recuperación tardía
+                    # al volver a activar la monitorización de la zona.
+                    try:
+                        sb.table("kds_status").update(
+                            {"alerta_enviada": False}
+                        ).eq("zona", _z["nombre"]).execute()
+                    except Exception:
+                        pass
+                    st.rerun()
+
 def render_kds_online_status(sb):
-    """Estado de cada tablet KDS por zona; si no hay filas de zona, usa la fila clásica id=1."""
+    """Estado de cada tablet KDS, incluyendo zonas monitorizadas sin ningún latido."""
     try:
         _zrows = sb.table("kds_status").select("*").not_.is_("zona", "null").execute().data or []
-        if _zrows:
-            _ahora = pd.Timestamp.now(tz="UTC")
-            def _tsz(v):
-                if not v:
-                    return None
-                t = pd.Timestamp(v)
-                return t.tz_localize("UTC") if t.tzinfo is None else t
-            for _s in sorted(_zrows, key=lambda x: x.get("zona") or ""):
-                _zona = _s.get("zona")
-                _ls = _tsz(_s.get("last_seen")); _lv = _tsz(_s.get("last_visible"))
-                _sseen = (_ahora - _ls).total_seconds() if _ls is not None else 999999
-                _svis = (_ahora - _lv).total_seconds() if _lv is not None else 999999
-                if _sseen > 18*3600:
-                    _txt = _ls.tz_convert("Europe/Madrid").strftime("%d/%m %H:%M") if _ls is not None else "nunca"
-                    st.caption(f"⚪ **{_zona}** — sin actividad desde {_txt} (¿tablet retirada o cambiada de zona?)")
-                elif _svis < 120:
-                    st.success(f"🟢 **{_zona}** — activa y visible (latido hace {int(_sseen)}s)")
-                elif _sseen < 120:
-                    _m = int(_svis/60)
-                    st.warning(f"🟡 **{_zona}** — la app corre pero NO está en pantalla (última vez visible hace {_m} min)")
+        try:
+            _zonas = (
+                sb.table("zonas")
+                .select("id,nombre,orden,monitorizar_kds")
+                .order("orden")
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            # Compatibilidad mientras todavía no se haya aplicado la migración.
+            _zonas = (
+                sb.table("zonas")
+                .select("id,nombre,orden")
+                .order("orden")
+                .execute()
+                .data
+                or []
+            )
+            for _z in _zonas:
+                _z["monitorizar_kds"] = True
+
+        _ahora = pd.Timestamp.now(tz="UTC")
+
+        def _tsz(v):
+            if not v:
+                return None
+            t = pd.Timestamp(v)
+            return t.tz_localize("UTC") if t.tzinfo is None else t
+
+        def _mostrar_estado(_zona, _s, _monitorizada=True):
+            if not _monitorizada:
+                st.info(f"⚪ **{_zona}** — monitorización desactivada")
+                return
+            if not _s:
+                st.error(f"🔴 **{_zona}** — monitorizada, pero todavía no ha enviado ningún latido")
+                return
+            _ls = _tsz(_s.get("last_seen"))
+            _lv = _tsz(_s.get("last_visible"))
+            _sseen = (_ahora - _ls).total_seconds() if _ls is not None else 999999
+            _svis = (_ahora - _lv).total_seconds() if _lv is not None else 999999
+            if _svis < 120:
+                st.success(f"🟢 **{_zona}** — activa y visible (latido hace {int(_sseen)}s)")
+            elif _sseen < 120:
+                _m = int(_svis / 60)
+                st.warning(
+                    f"🟡 **{_zona}** — conectada, pero el KDS no está en pantalla "
+                    f"(última vez visible hace {_m} min)"
+                )
+            else:
+                if _ls is not None and _sseen < 3600:
+                    _cuando = f"hace {int(_sseen / 60)} min"
+                elif _ls is not None:
+                    _cuando = _ls.tz_convert("Europe/Madrid").strftime("%d/%m %H:%M")
                 else:
-                    _m = int(_sseen/60)
-                    st.error(f"🔴 **{_zona}** — sin señal desde hace {_m} min (app cerrada, tablet apagada o sin WiFi)")
+                    _cuando = "nunca"
+                st.error(
+                    f"🔴 **{_zona}** — sin señal (último latido: {_cuando}). "
+                    "App cerrada, tablet apagada o sin WiFi."
+                )
+
+        if _zonas:
+            _status_por_zona = {
+                str(_s.get("zona") or "").strip().upper(): _s for _s in _zrows
+            }
+            _nombres_configurados = set()
+            for _z in _zonas:
+                _nombre = str(_z.get("nombre") or "").strip()
+                _clave = _nombre.upper()
+                _nombres_configurados.add(_clave)
+                _mostrar_estado(
+                    _nombre,
+                    _status_por_zona.get(_clave),
+                    bool(_z.get("monitorizar_kds", True)),
+                )
+
+            # Muestra también tablets en modo TODAS o vinculadas a una zona antigua,
+            # pero sin asumir que deban generar alertas.
+            for _s in sorted(_zrows, key=lambda x: x.get("zona") or ""):
+                _nombre = str(_s.get("zona") or "").strip()
+                if _nombre.upper() not in _nombres_configurados:
+                    st.caption(
+                        f"⚪ **{_nombre}** — KDS detectado, pero no está asociado "
+                        "a una zona configurable"
+                    )
             return
+
+        if _zrows:
+            for _s in sorted(_zrows, key=lambda x: x.get("zona") or ""):
+                _mostrar_estado(_s.get("zona") or "SIN ZONA", _s, True)
+            return
+
         st.caption("ℹ️ Aún no hay latidos POR ZONA en kds_status — se muestra el estado clásico de una sola fila. "
                    "Para que existan: (1) la tabla necesita la restricción única sobre `zona` (sin ella el upsert de las "
                    "tablets da 400), y (2) las tablets deben llevar el kds v20260729. En cuanto llegue el primer latido, "
@@ -813,14 +936,22 @@ def render_kds_online_status(sb):
 def render_kds_msg_tab():
     """Pestaña para enviar mensajes al KDS con alarma sonora."""
     sb_kds = get_supabase()
-    st.markdown("### Enviar mensaje al KDS")
+    st.markdown("### Estado y vigilancia de los KDS")
+    _render_kds_monitoring_controls(sb_kds)
     render_kds_online_status(sb_kds)
     # Interruptor de alertas Telegram
     try:
         _ks = sb_kds.table("kds_status").select("alertas_activas").eq("id", 1).execute().data
         _alertas_on = bool(_ks[0].get("alertas_activas", True)) if _ks else True
-        _nuevo = st.toggle("🔔 Avisos de Telegram si el KDS deja de estar activo", value=_alertas_on, key="kds_alertas_toggle",
-                           help="Si lo desactivas, no llegarán avisos de KDS oculto/sin señal al grupo de Telegram. Las notificaciones de pedidos y reservas no se ven afectadas.")
+        _nuevo = st.toggle(
+            "🔔 Avisos de conexión por Telegram",
+            value=_alertas_on,
+            key="kds_alertas_toggle",
+            help=(
+                "Interruptor general para los avisos de conexión de las zonas monitorizadas. "
+                "Los avisos de pedidos desatendidos no se desactivan."
+            ),
+        )
         if _nuevo != _alertas_on:
             update_data = {"alertas_activas": _nuevo}
             if _nuevo:
@@ -862,6 +993,8 @@ def render_kds_msg_tab():
                 pass
     except Exception:
         pass
+    st.divider()
+    st.markdown("### Enviar mensaje al KDS")
     st.caption("El mensaje aparecerá en la tablet del KDS con un sonido persistente hasta que alguien pulse 'OK, entendido'.")
     # Mensajes rápidos
     st.markdown("**Mensajes rápidos:**")
