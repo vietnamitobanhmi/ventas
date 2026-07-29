@@ -771,6 +771,10 @@ def render_kds_online_status(sb):
                     _m = int(_sseen/60)
                     st.error(f"🔴 **{_zona}** — sin señal desde hace {_m} min (app cerrada, tablet apagada o sin WiFi)")
             return
+        st.caption("ℹ️ Aún no hay latidos POR ZONA en kds_status — se muestra el estado clásico de una sola fila. "
+                   "Para que existan: (1) la tabla necesita la restricción única sobre `zona` (sin ella el upsert de las "
+                   "tablets da 400), y (2) las tablets deben llevar el kds v20260729. En cuanto llegue el primer latido, "
+                   "este panel pasa solo a la vista por zonas.")
         status = sb.table("kds_status").select("*").eq("id", 1).execute().data
         if not status:
             st.warning("⚠️ Sin datos de estado del KDS (¿tabla kds_status creada?)")
