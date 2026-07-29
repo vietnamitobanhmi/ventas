@@ -915,8 +915,8 @@ def render_dashboard(df):
     @st.cache_data(ttl=10, show_spinner=False)
     def _contar_pendientes():
         _sb = get_supabase()
-        p = len((_sb.table("pedidos").select("id").eq("estado", "solicitado").execute().data or []))
-        r = len((_sb.table("reservas").select("id").eq("estado", "pendiente").execute().data or []))
+        p = len((_sb.table("pedidos").select("id").eq("estado", "solicitado").eq("oculto", False).execute().data or []))
+        r = len((_sb.table("reservas").select("id").eq("estado", "pendiente").eq("oculto", False).execute().data or []))
         return p, r
     ped_pend, res_pend = _contar_pendientes()
     # Aviso de pendientes en un slot SIEMPRE presente (st.empty) para que
@@ -3016,8 +3016,16 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     for ped in solicitados:
                         items_res = items_bulk_s.get(ped["id"], [])
                         productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
-                        with st.expander(f"🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {'💳' if (ped.get('pagado') and ped.get('pago_id') != 'caja') else '💰'} · recoger {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'], '%H:%M')}", expanded=True):
+                        _oculto_pfx = "🙈 " if ped.get("oculto") else ""
+                        with st.expander(f"{_oculto_pfx}🆕 #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {'💳' if (ped.get('pagado') and ped.get('pago_id') != 'caja') else '💰'} · recoger {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'], '%H:%M')}", expanded=True):
                             st.caption(_kds_recibido_badge(ped))
+                            if ped.get("oculto"):
+                                st.warning("🙈 Este pedido está OCULTO en el KDS: alguien pulsó la papelera 🗑️ en una tablet. "
+                                           "El personal NO lo ve. Si lo aceptas sin restaurarlo, no aparecerá en cocina.")
+                                if st.button("👁️ Restaurar en el KDS", key=f"restaurar_kds_{ped['id']}"):
+                                    sb7.table("pedidos").update({"oculto": False}).eq("id", ped["id"]).execute()
+                                    st.success("✅ Visible de nuevo en las tablets")
+                                    st.rerun()
                             _render_pedido_completo(ped, items_res)
                             st.markdown("")
                             ac1, ac2 = st.columns(2)
@@ -3112,7 +3120,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         productos_str = ", ".join([f"{i['nombre_producto']} ×{i['cantidad']}" for i in items_res])
                         estado = ped["estado"]
                         color_map = {"esperando_pago":"💳⏳","solicitado":"🆕","pendiente":"🔴","preparando":"🟡","listo":"🟢","entregado":"✅","cancelado":"🚫","rechazado":"❌"}
-                        icono = color_map.get(estado, "⚪")
+                        icono = ("🙈 " if ped.get("oculto") else "") + color_map.get(estado, "⚪")
                         with st.expander(f"{icono} #{ped['id']} · {ped['nombre']} · €{float(ped['total']):.2f} · {'💳' if (ped.get('pagado') and ped.get('pago_id') != 'caja') else ('🏧' if ped.get('pagado') else '💰')} · {ped['hora_recogida']} · {fmt_madrid(ped['creado_at'])}"):
                             st.caption(_kds_recibido_badge(ped))
                             _render_pedido_completo(ped, items_res)
