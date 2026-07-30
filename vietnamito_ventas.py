@@ -3659,6 +3659,19 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 act1, act2 = st.columns(2)
                 new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
                 new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
+                _permitir_fuera_horario = st.checkbox(
+                    "🧪 Permitir pedidos fuera de horario (modo pruebas)",
+                    value=str(cfg.get("permitir_pedidos_fuera_horario", "false")).lower() in ("true", "1"),
+                    key="cfg_ped_fuera_horario",
+                    help="Desactiva únicamente el bloqueo por horario. No cambia los horarios publicados ni el reposo nocturno de los KDS."
+                )
+                new_cfg["permitir_pedidos_fuera_horario"] = "true" if _permitir_fuera_horario else "false"
+                if _permitir_fuera_horario:
+                    st.warning(
+                        "⚠️ Modo de pruebas activo: cualquier cliente podrá hacer pedidos, "
+                        "también desde los QR de mesa, aunque el local esté cerrado. "
+                        "Desactívalo al terminar las pruebas."
+                    )
                 st.markdown("##### 📅 Días bloqueados para reservas")
                 st.caption("Selecciona fechas en las que no se pueden hacer reservas (festivos, cierre, etc.)")
                 import json as _json
@@ -4159,6 +4172,19 @@ if df.empty:
             act1, act2 = st.columns(2)
             new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act_e") else "false"
             new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act_e") else "false"
+            _permitir_fuera_horario_e = st.checkbox(
+                "🧪 Permitir pedidos fuera de horario (modo pruebas)",
+                value=str(cfg.get("permitir_pedidos_fuera_horario", "false")).lower() in ("true", "1"),
+                key="cfg_ped_fuera_horario_e",
+                help="Desactiva únicamente el bloqueo por horario. No cambia los horarios publicados ni el reposo nocturno de los KDS."
+            )
+            new_cfg["permitir_pedidos_fuera_horario"] = "true" if _permitir_fuera_horario_e else "false"
+            if _permitir_fuera_horario_e:
+                st.warning(
+                    "⚠️ Modo de pruebas activo: cualquier cliente podrá hacer pedidos, "
+                    "también desde los QR de mesa, aunque el local esté cerrado. "
+                    "Desactívalo al terminar las pruebas."
+                )
             if st.button("💾 Guardar configuración", key="save_cfg_e", type="primary"):
                 for clave, valor in new_cfg.items():
                     sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
