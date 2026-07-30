@@ -557,10 +557,14 @@ def sincronizar_ventas_stripe(_sb):
     """Vuelca los pedidos pagados por Stripe (pagado=true, pago_id != 'caja') a la tabla
     ventas, con id_ticket='stripe_<id>' y forma_pago='stripe'. Idempotente: el upsert por
     (fecha, id_ticket) evita duplicados, así que puede ejecutarse las veces que haga falta.
+    La fecha y la hora se calculan con el momento real del pago en Europe/Madrid;
+    creado_at queda únicamente como respaldo para pedidos antiguos sin pagado_at.
     Devuelve (n_insertadas_o_actualizadas, total_bruto)."""
     import pandas as _pd_sy
     try:
-        _peds = _sb.table("pedidos").select("id,total,pago_id,pagado,creado_at").eq("pagado", True).execute().data or []
+        _peds = _sb.table("pedidos").select(
+            "id,total,pago_id,pagado,pagado_at,creado_at"
+        ).eq("pagado", True).execute().data or []
     except Exception:
         return 0, 0
     _rows = []
@@ -569,7 +573,13 @@ def sincronizar_ventas_stripe(_sb):
         if _p.get("pago_id") == "caja":
             continue  # los de caja ya pasan por Glop → ya están en el CSV
         try:
-            _dt = _pd_sy.to_datetime(_p["creado_at"])
+            _ts_venta = _p.get("pagado_at") or _p.get("creado_at")
+            _dt = _pd_sy.Timestamp(_ts_venta)
+            # Supabase guarda timestamptz en UTC. Un Timestamp sin zona también
+            # se interpreta como UTC: nunca como la zona del servidor Streamlit.
+            if _dt.tzinfo is None:
+                _dt = _dt.tz_localize("UTC")
+            _dt = _dt.tz_convert(TZ_MADRID)
             _fecha = _dt.date().isoformat()
             _hora = int(_dt.hour)
             _dow = int(_dt.weekday())
@@ -590,6 +600,25 @@ def sincronizar_ventas_stripe(_sb):
         _total += _valor
     if not _rows:
         return 0, 0
+    # La clave histórica es (fecha,id_ticket). Si una venta cercana a medianoche
+    # cambió de día al corregir UTC → Madrid, primero se elimina la fila antigua;
+    # de lo contrario el upsert insertaría una segunda copia con otra fecha.
+    try:
+        _existentes = _sb.table("ventas").select("id_ticket,fecha").eq(
+            "forma_pago", "stripe"
+        ).execute().data or []
+        _fecha_anterior = {
+            str(_r.get("id_ticket")): str(_r.get("fecha"))
+            for _r in _existentes if _r.get("id_ticket")
+        }
+        for _r in _rows:
+            _ticket = _r["id_ticket"]
+            if _fecha_anterior.get(_ticket) and _fecha_anterior[_ticket] != _r["fecha"]:
+                _sb.table("ventas").delete().eq("id_ticket", _ticket).execute()
+    except Exception:
+        # Si esta comprobación auxiliar falla, el upsert normal sigue corrigiendo
+        # todas las ventas cuyo día local y UTC coinciden.
+        pass
     # Upsert por (fecha, id_ticket): idempotente, nunca duplica
     for _i in range(0, len(_rows), 500):
         _sb.table("ventas").upsert(_rows[_i:_i+500], on_conflict="fecha,id_ticket").execute()
@@ -3975,12 +4004,12 @@ uploaded = st.file_uploader(
 # Botón para volcar las ventas pagadas por Stripe (pedidos online) a la tabla de ventas
 _col_stripe, _ = st.columns([1, 2])
 with _col_stripe:
-    if st.button("💳 Sincronizar ventas Stripe", help="Añade a las ventas los pedidos online pagados por Stripe (no pasan por Glop). Es seguro pulsarlo varias veces: no duplica."):
+    if st.button("💳 Sincronizar ventas Stripe", help="Añade o corrige las ventas online pagadas por Stripe (no pasan por Glop), usando la fecha y hora de pago en Madrid. Es seguro pulsarlo varias veces: no duplica."):
         with st.spinner("Sincronizando pagos de Stripe..."):
             _n_stripe, _tot_stripe = sincronizar_ventas_stripe(get_supabase())
             load_from_supabase.clear()
         if _n_stripe > 0:
-            st.success(f"✅ {_n_stripe} venta(s) de Stripe sincronizada(s) · Total bruto €{_tot_stripe:,.2f}. Recarga para ver los datos actualizados.")
+            st.success(f"✅ {_n_stripe} venta(s) de Stripe sincronizada(s) o corregida(s) · Total bruto €{_tot_stripe:,.2f}. Recarga para ver los datos actualizados.")
         else:
             st.info("No hay ventas nuevas de Stripe para sincronizar.")
 if uploaded:
