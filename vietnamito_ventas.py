@@ -553,6 +553,7 @@ def calcular_promedios_dia(df):
     dias_unicos = df.groupby("dow")["fecha"].nunique()
     totales = df.groupby("dow")["valor"].sum()
     return (totales / dias_unicos).reindex(DIAS_ORDER, fill_value=0)
+STRIPE_SYNC_BUILD = "MADRID-v3"
 def sincronizar_ventas_stripe(_sb):
     """Vuelca los pedidos pagados por Stripe (pagado=true, pago_id != 'caja') a la tabla
     ventas, con id_ticket='stripe_<id>' y forma_pago='stripe'. Idempotente: el upsert por
@@ -622,6 +623,36 @@ def sincronizar_ventas_stripe(_sb):
     # Upsert por (fecha, id_ticket): idempotente, nunca duplica
     for _i in range(0, len(_rows), 500):
         _sb.table("ventas").upsert(_rows[_i:_i+500], on_conflict="fecha,id_ticket").execute()
+
+    # Verificación posterior: no confiar ciegamente en el upsert. Si una fila
+    # conservó la hora UTC por cualquier motivo, se fuerza la corrección usando
+    # id_ticket, que identifica de forma estable cada pedido Stripe.
+    try:
+        _guardadas = _sb.table("ventas").select(
+            "id_ticket,fecha,hora,dow"
+        ).eq("forma_pago", "stripe").execute().data or []
+        _por_ticket = {
+            str(_r.get("id_ticket")): _r
+            for _r in _guardadas if _r.get("id_ticket")
+        }
+        for _r in _rows:
+            _actual = _por_ticket.get(_r["id_ticket"]) or {}
+            _coincide = (
+                str(_actual.get("fecha")) == _r["fecha"]
+                and int(_actual.get("hora", -1)) == _r["hora"]
+                and int(_actual.get("dow", -1)) == _r["dow"]
+            )
+            if not _coincide:
+                _sb.table("ventas").update({
+                    "fecha": _r["fecha"],
+                    "hora": _r["hora"],
+                    "dow": _r["dow"],
+                    "valor": _r["valor"],
+                    "forma_pago": "stripe",
+                    "pedido_id": _r["pedido_id"],
+                }).eq("id_ticket", _r["id_ticket"]).execute()
+    except Exception:
+        pass
     return len(_rows), _total
 def cargar_delivery_neto(_sb, fecha_ini=None, fecha_fin=None):
     """Devuelve {fecha(date): margen_neto_delivery} (Glovo ×0,30 · Uber ×0,40).
@@ -4004,6 +4035,7 @@ uploaded = st.file_uploader(
 # Botón para volcar las ventas pagadas por Stripe (pedidos online) a la tabla de ventas
 _col_stripe, _ = st.columns([1, 2])
 with _col_stripe:
+    st.caption(f"Hora Stripe: pago en Europe/Madrid · corrección UTC activa · {STRIPE_SYNC_BUILD}")
     if st.button("💳 Sincronizar ventas Stripe", help="Añade o corrige las ventas online pagadas por Stripe (no pasan por Glop), usando la fecha y hora de pago en Madrid. Es seguro pulsarlo varias veces: no duplica."):
         with st.spinner("Sincronizando pagos de Stripe..."):
             _n_stripe, _tot_stripe = sincronizar_ventas_stripe(get_supabase())
