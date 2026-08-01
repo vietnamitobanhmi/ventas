@@ -405,6 +405,29 @@ def upload_foto(sb, file, prefix):
         file.seek(0)
         sb.storage.from_("assets").update(fname, file.read(), {"content-type": f"image/{ext}"})
     return f"{SUPABASE_URL}/storage/v1/object/public/assets/{fname_encoded}"
+
+
+# Un solo distintivo por producto mantiene la tarjeta legible y evita mensajes
+# comerciales contradictorios. Los textos públicos se traducen en la web.
+PRODUCTO_DISTINTIVOS = {
+    None: "— Sin distintivo —",
+    "mas_vendido": "🔥 Más vendido",
+    "nuevo": "✨ Nuevo",
+    "recomendacion_chef": "👨‍🍳 Recomendación del chef",
+}
+
+
+def selector_distintivo_producto(label, valor_actual=None, *, key):
+    opciones = list(PRODUCTO_DISTINTIVOS.keys())
+    actual = valor_actual if valor_actual in opciones else None
+    return st.selectbox(
+        label,
+        opciones,
+        index=opciones.index(actual),
+        format_func=lambda valor: PRODUCTO_DISTINTIVOS[valor],
+        key=key,
+        help="Se muestra como una insignia sobre la foto del producto en el menú.",
+    )
 def detect_format(lines):
     """Detecta si el CSV es de Epos Now o del nuevo POS."""
     header = lines[0].lower()
@@ -3819,6 +3842,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         pa1, pa2 = st.columns([3,1])
                         new_prod_nom = pa1.text_input("🇪🇸 Nombre:", key=f"pn_{pc}")
                         new_prod_precio = pa2.number_input("Precio €:", value=6.50, min_value=0.0, step=0.5, format="%.2f", key=f"pp_{pc}")
+                        st.markdown("#### 🏷️ Resaltado en la carta")
+                        new_prod_distintivo = selector_distintivo_producto(
+                            "Distintivo visible sobre la foto:",
+                            key=f"pdist_{pc}",
+                        )
                         pt1, pt2, pt3 = st.columns(3)
                         new_prod_nom_en = pt1.text_input("🇬🇧 Name (EN):", key=f"pn_en_{pc}")
                         new_prod_nom_ca = pt2.text_input("🏴 Nom (CA):", key=f"pn_ca_{pc}")
@@ -3857,7 +3885,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     "precio": float(new_prod_precio),
                                     "foto_url": foto_url,
                                     "orden": int(new_prod_orden),
-                                    "disponible": True
+                                    "disponible": True,
+                                    "distintivo": new_prod_distintivo,
                                 }).execute()
                                 st.session_state.prod_counter += 1
                                 st.success("✅ Producto añadido")
@@ -3867,10 +3896,17 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     # Editar productos existentes
                     st.markdown(f"**{len(prods_cat_web)} productos en {cat_sel_web}:**")
                     for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
-                        with st.expander(f"{'✅' if prod['disponible'] else '❌'} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
+                        _dist_icon = {"mas_vendido":"🔥", "nuevo":"✨", "recomendacion_chef":"👨‍🍳"}.get(prod.get("distintivo"), "")
+                        with st.expander(f"{'✅' if prod['disponible'] else '❌'} {_dist_icon} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
                             ep1, ep2 = st.columns([3,1])
                             e_nom = ep1.text_input("🇪🇸 Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
                             e_precio = ep2.number_input("€:", value=float(prod["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_{prod['id']}")
+                            st.markdown("#### 🏷️ Resaltado en la carta")
+                            e_distintivo = selector_distintivo_producto(
+                                "Distintivo visible sobre la foto:",
+                                prod.get("distintivo"),
+                                key=f"edist_{prod['id']}",
+                            )
                             e_nom_en = st.text_input("🇬🇧 Name (EN):", value=prod.get("nombre_en") or "", key=f"en_en_{prod['id']}")
                             e_nom_ca = st.text_input("🏴 Nom (CA):", value=prod.get("nombre_ca") or "", key=f"en_ca_{prod['id']}")
                             e_nom_vi = st.text_input("🇻🇳 Tên (VI):", value=prod.get("nombre_vi") or "", key=f"en_vi_{prod['id']}")
@@ -3917,7 +3953,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     "nombre_ca": e_nom_ca or None, "descripcion_ca": e_desc_ca or None,
                                     "nombre_vi": e_nom_vi or None, "descripcion_vi": e_desc_vi or None,
                                     "precio": float(e_precio), "foto_url": e_foto or None,
-                                    "orden": int(e_orden), "disponible": e_disp
+                                    "orden": int(e_orden), "disponible": e_disp,
+                                    "distintivo": e_distintivo,
                                 }).eq("id", prod["id"]).execute()
                                 st.success("✅ Guardado")
                                 st.rerun()
@@ -4261,14 +4298,27 @@ if df.empty:
                 prods_cat_e = [p for p in prods_web_e if p["categoria_id"] == cat_obj_e["id"]]
                 st.markdown(f"**{len(prods_cat_e)} productos**")
                 for prod_e in sorted(prods_cat_e, key=lambda p: p.get("orden",0)):
-                    with st.expander(f"{'✅' if prod_e['disponible'] else '❌'} {prod_e['orden']}. {prod_e['nombre']} — €{prod_e['precio']:.2f}"):
+                    _dist_icon_e = {"mas_vendido":"🔥", "nuevo":"✨", "recomendacion_chef":"👨‍🍳"}.get(prod_e.get("distintivo"), "")
+                    with st.expander(f"{'✅' if prod_e['disponible'] else '❌'} {_dist_icon_e} {prod_e['orden']}. {prod_e['nombre']} — €{prod_e['precio']:.2f}"):
                         ep1_e, ep2_e = st.columns([3,1])
                         e_nom_e = ep1_e.text_input("Nombre:", value=prod_e["nombre"], key=f"en_e_{prod_e['id']}")
                         e_precio_e = ep2_e.number_input("€:", value=float(prod_e["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_e_{prod_e['id']}")
+                        st.markdown("#### 🏷️ Resaltado en la carta")
+                        e_distintivo_e = selector_distintivo_producto(
+                            "Distintivo visible sobre la foto:",
+                            prod_e.get("distintivo"),
+                            key=f"edist_e_{prod_e['id']}",
+                        )
                         e_desc_e = st.text_area("Descripción:", value=prod_e.get("descripcion") or "", key=f"ed_e_{prod_e['id']}", height=70)
                         e_disp_e = st.checkbox("Disponible", value=prod_e.get("disponible",True), key=f"edis_e_{prod_e['id']}")
                         if st.button("💾 Guardar", key=f"save_prod_e_{prod_e['id']}"):
-                            sb9.table("productos").update({"nombre": e_nom_e, "descripcion": e_desc_e or None, "precio": float(e_precio_e), "disponible": e_disp_e}).eq("id", prod_e["id"]).execute()
+                            sb9.table("productos").update({
+                                "nombre": e_nom_e,
+                                "descripcion": e_desc_e or None,
+                                "precio": float(e_precio_e),
+                                "disponible": e_disp_e,
+                                "distintivo": e_distintivo_e,
+                            }).eq("id", prod_e["id"]).execute()
                             st.success("✅ Guardado"); st.rerun()
         if nav_web == "📸 Categorías":
             st.markdown("#### Categorías")
