@@ -407,27 +407,247 @@ def upload_foto(sb, file, prefix):
     return f"{SUPABASE_URL}/storage/v1/object/public/assets/{fname_encoded}"
 
 
-# Un solo distintivo por producto mantiene la tarjeta legible y evita mensajes
-# comerciales contradictorios. Los textos públicos se traducen en la web.
-PRODUCTO_DISTINTIVOS = {
-    None: "— Sin distintivo —",
-    "mas_vendido": "🔥 Más vendido",
-    "nuevo": "✨ Nuevo",
-    "recomendacion_chef": "👨‍🍳 Recomendación del chef",
-}
+# ─── Etiquetas (distintivos) de producto ─────────────────────────────
+# Ahora son configurables desde la subsección "🏷️ Etiquetas" (tabla
+# `distintivos` en Supabase) y un producto puede tener varias a la vez
+# (p. ej. "Más vendido" + "Vegano"). Los textos públicos se traducen
+# en la propia tabla (nombre_en / nombre_ca / nombre_vi).
+
+# Fallback por si la tabla `distintivos` aún no existe.
+FALLBACK_DISTINTIVOS = [
+    {"slug": "mas_vendido", "nombre": "Más vendido", "icono": "🔥", "color": "#D84A24"},
+    {"slug": "nuevo", "nombre": "Nuevo", "icono": "✨", "color": "#0F766E"},
+    {"slug": "recomendacion_chef", "nombre": "Recomendación del chef", "icono": "👨‍🍳", "color": "#5C4033"},
+]
 
 
-def selector_distintivo_producto(label, valor_actual=None, *, key):
-    opciones = list(PRODUCTO_DISTINTIVOS.keys())
-    actual = valor_actual if valor_actual in opciones else None
-    return st.selectbox(
+@st.cache_data(ttl=30)
+def cargar_distintivos(_sb):
+    """Catálogo completo de etiquetas, ordenado. Cacheado 30 s."""
+    try:
+        return _sb.table("distintivos").select("*").order("orden").execute().data or []
+    except Exception:
+        return [dict(d) for d in FALLBACK_DISTINTIVOS]
+
+
+def distintivo_etiqueta(d):
+    icono = (d.get("icono") or "").strip()
+    return f"{icono} {d['nombre']}".strip()
+
+
+def producto_distintivos_actuales(prod):
+    """Slugs de etiquetas de un producto, con compatibilidad con la columna antigua."""
+    slugs = prod.get("distintivos") or []
+    if not slugs and prod.get("distintivo"):
+        slugs = [prod["distintivo"]]
+    return slugs
+
+
+def iconos_distintivos_producto(prod, dists):
+    """Iconos (emoji) de las etiquetas de un producto, para los expanders."""
+    por_slug = {d["slug"]: d for d in dists}
+    iconos = []
+    for s in producto_distintivos_actuales(prod):
+        d = por_slug.get(s)
+        if d and d.get("icono"):
+            iconos.append(d["icono"])
+    return "".join(iconos)
+
+
+def selector_distintivos_producto(label, sb, valor_actual=None, *, key):
+    """Multiselect: un producto puede llevar varias etiquetas a la vez."""
+    dists = [d for d in cargar_distintivos(sb) if d.get("activo", True)]
+    slugs = [d["slug"] for d in dists]
+    nombres = {d["slug"]: distintivo_etiqueta(d) for d in dists}
+    actual = [s for s in (valor_actual or []) if s in slugs]
+    return st.multiselect(
         label,
-        opciones,
-        index=opciones.index(actual),
-        format_func=lambda valor: PRODUCTO_DISTINTIVOS[valor],
+        slugs,
+        default=actual,
+        format_func=lambda s: nombres.get(s, s),
         key=key,
-        help="Se muestra como una insignia sobre la foto del producto en el menú.",
+        help="Se muestran como insignias sobre la foto del producto en el menú. "
+             "Crea o edita etiquetas en la subsección 🏷️ Etiquetas.",
     )
+
+
+def _slugify_distintivo(nombre):
+    import unicodedata, re
+    s = unicodedata.normalize("NFKD", nombre).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+    return s or "etiqueta"
+
+
+def subir_icono_distintivo(sb, file, slug):
+    """Sube el icono de una etiqueta al bucket assets y devuelve su URL pública."""
+    import urllib.parse
+    ext = file.name.split(".")[-1].lower()
+    ctype = {"svg": "image/svg+xml", "jpg": "image/jpeg"}.get(ext, f"image/{ext}")
+    fname = f"distintivos/{slug}.{ext}"
+    data = file.read()
+    try:
+        sb.storage.from_("assets").upload(fname, data, {"content-type": ctype, "upsert": "true"})
+    except Exception:
+        sb.storage.from_("assets").update(fname, data, {"content-type": ctype})
+    return f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+
+
+def panel_etiquetas_distintivos(sb, ksuf=""):
+    """CRUD de etiquetas de producto (tabla `distintivos`)."""
+    st.markdown("#### 🏷️ Etiquetas de producto")
+    st.caption(
+        "Insignias que se muestran sobre la foto del producto en la web "
+        "(Más vendido, Nuevo, Vegano...). Un producto puede tener varias."
+    )
+    try:
+        dists = sb.table("distintivos").select("*").order("orden").execute().data or []
+    except Exception:
+        st.error(
+            "La tabla `distintivos` no existe todavía. "
+            "Ejecuta `migracion_distintivos.sql` en Supabase → SQL Editor."
+        )
+        return
+
+    # ── Añadir etiqueta ──
+    with st.expander("➕ Nueva etiqueta"):
+        ck = f"dist_counter{ksuf}"
+        if ck not in st.session_state:
+            st.session_state[ck] = 0
+        dc = st.session_state[ck]
+        nd1, nd2 = st.columns([3, 1])
+        nd_nom = nd1.text_input("🇪🇸 Nombre:", key=f"nd_nom{ksuf}_{dc}", placeholder="Vegano")
+        nd_icono = nd2.text_input("Emoji:", key=f"nd_ico{ksuf}_{dc}", placeholder="🌱", max_chars=8)
+        nt1, nt2, nt3 = st.columns(3)
+        nd_nom_en = nt1.text_input("🇬🇧 Name (EN):", key=f"nd_en{ksuf}_{dc}")
+        nd_nom_ca = nt2.text_input("🏴 Nom (CA):", key=f"nd_ca{ksuf}_{dc}")
+        nd_nom_vi = nt3.text_input("🇻🇳 Tên (VI):", key=f"nd_vi{ksuf}_{dc}")
+        nc1, nc2 = st.columns([1, 3])
+        nd_color = nc1.color_picker("Color del badge:", "#3F7D2C", key=f"nd_col{ksuf}_{dc}")
+        nd_icono_file = nc2.file_uploader(
+            "Icono en imagen (opcional, sustituye al emoji):",
+            type=["png", "svg", "webp", "jpg", "jpeg"], key=f"nd_icof{ksuf}_{dc}",
+        )
+        nd_orden = st.number_input("Orden:", value=len(dists) + 1, min_value=1, key=f"nd_ord{ksuf}_{dc}")
+        if st.button("➕ Crear etiqueta", key=f"nd_add{ksuf}_{dc}"):
+            if not nd_nom.strip():
+                st.warning("Escribe un nombre.")
+            else:
+                slug = _slugify_distintivo(nd_nom)
+                if any(d["slug"] == slug for d in dists):
+                    st.warning(f"Ya existe una etiqueta con el identificador `{slug}`.")
+                else:
+                    icono_url = None
+                    if nd_icono_file:
+                        try:
+                            icono_url = subir_icono_distintivo(sb, nd_icono_file, slug)
+                        except Exception as e:
+                            st.warning(f"No se pudo subir el icono: {e}")
+                    sb.table("distintivos").insert({
+                        "slug": slug,
+                        "nombre": nd_nom.strip(),
+                        "nombre_en": nd_nom_en.strip() or None,
+                        "nombre_ca": nd_nom_ca.strip() or None,
+                        "nombre_vi": nd_nom_vi.strip() or None,
+                        "icono": nd_icono.strip() or None,
+                        "icono_url": icono_url,
+                        "color": nd_color,
+                        "orden": int(nd_orden),
+                        "activo": True,
+                    }).execute()
+                    cargar_distintivos.clear()
+                    st.session_state[ck] += 1
+                    st.success("✅ Etiqueta creada")
+                    st.rerun()
+
+    # ── Editar etiquetas existentes ──
+    if not dists:
+        st.info("No hay etiquetas todavía. Crea la primera con «➕ Nueva etiqueta».")
+        return
+    for d in dists:
+        did = d["id"]
+        titulo = f"{'✅' if d.get('activo', True) else '❌'} {d.get('orden', 0)}. {distintivo_etiqueta(d)}"
+        with st.expander(titulo):
+            ed1, ed2 = st.columns([3, 1])
+            e_nom = ed1.text_input("🇪🇸 Nombre:", value=d["nombre"], key=f"ed_nom{ksuf}_{did}")
+            e_icono = ed2.text_input("Emoji:", value=d.get("icono") or "", key=f"ed_ico{ksuf}_{did}", max_chars=8)
+            et1, et2, et3 = st.columns(3)
+            e_nom_en = et1.text_input("🇬🇧 Name (EN):", value=d.get("nombre_en") or "", key=f"ed_en{ksuf}_{did}")
+            e_nom_ca = et2.text_input("🏴 Nom (CA):", value=d.get("nombre_ca") or "", key=f"ed_ca{ksuf}_{did}")
+            e_nom_vi = et3.text_input("🇻🇳 Tên (VI):", value=d.get("nombre_vi") or "", key=f"ed_vi{ksuf}_{did}")
+            ec1, ec2 = st.columns([1, 3])
+            e_color = ec1.color_picker("Color:", d.get("color") or "#D84A24", key=f"ed_col{ksuf}_{did}")
+            e_icono_url = d.get("icono_url")
+            e_icono_file = ec2.file_uploader(
+                "Cambiar icono en imagen:", type=["png", "svg", "webp", "jpg", "jpeg"],
+                key=f"ed_icof{ksuf}_{did}",
+            )
+            if e_icono_file:
+                try:
+                    e_icono_url = subir_icono_distintivo(sb, e_icono_file, d["slug"])
+                    st.success("✅ Icono listo — pulsa Guardar")
+                except Exception as e:
+                    st.warning(f"Error subiendo icono: {e}")
+            if e_icono_url:
+                ic1, ic2 = st.columns([1, 4])
+                ic1.image(e_icono_url, width=40)
+                if ic2.button("🗑️ Quitar imagen (usar emoji)", key=f"ed_icodel{ksuf}_{did}"):
+                    sb.table("distintivos").update({"icono_url": None}).eq("id", did).execute()
+                    cargar_distintivos.clear()
+                    st.rerun()
+            e_orden = st.number_input("Orden:", value=int(d.get("orden") or 0) or 1, min_value=1, key=f"ed_ord{ksuf}_{did}")
+            e_activo = st.checkbox(
+                "Activa (visible en la web y seleccionable en productos)",
+                value=d.get("activo", True), key=f"ed_act{ksuf}_{did}",
+            )
+            # Cuántos productos la usan
+            try:
+                usados = sb.table("productos").select("id", count="exact") \
+                    .contains("distintivos", [d["slug"]]).execute().count or 0
+            except Exception:
+                usados = None
+            if usados:
+                st.caption(f"📌 Usada por {usados} producto{'s' if usados != 1 else ''}.")
+            bc1, bc2 = st.columns(2)
+            if bc1.button("💾 Guardar", key=f"ed_save{ksuf}_{did}"):
+                sb.table("distintivos").update({
+                    "nombre": e_nom.strip() or d["nombre"],
+                    "nombre_en": e_nom_en.strip() or None,
+                    "nombre_ca": e_nom_ca.strip() or None,
+                    "nombre_vi": e_nom_vi.strip() or None,
+                    "icono": e_icono.strip() or None,
+                    "icono_url": e_icono_url,
+                    "color": e_color,
+                    "orden": int(e_orden),
+                    "activo": e_activo,
+                }).eq("id", did).execute()
+                cargar_distintivos.clear()
+                st.success("✅ Guardado")
+                st.rerun()
+            if bc2.button("🗑️ Eliminar", key=f"ed_del{ksuf}_{did}"):
+                st.session_state[f"confirm_del_dist{ksuf}_{did}"] = True
+            if st.session_state.get(f"confirm_del_dist{ksuf}_{did}"):
+                st.warning(
+                    f"¿Eliminar la etiqueta «{d['nombre']}»? "
+                    "Se quitará también de todos los productos que la usen."
+                )
+                dd1, dd2 = st.columns(2)
+                if dd1.button("✅ Sí, eliminar", key=f"yes_dist{ksuf}_{did}"):
+                    try:
+                        prods_con = sb.table("productos").select("id,distintivos") \
+                            .contains("distintivos", [d["slug"]]).execute().data or []
+                        for p in prods_con:
+                            nuevos = [s for s in (p.get("distintivos") or []) if s != d["slug"]]
+                            sb.table("productos").update({"distintivos": nuevos}).eq("id", p["id"]).execute()
+                        sb.table("distintivos").delete().eq("id", did).execute()
+                        cargar_distintivos.clear()
+                        st.session_state.pop(f"confirm_del_dist{ksuf}_{did}", None)
+                        st.success("✅ Etiqueta eliminada")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo eliminar: {e}")
+                if dd2.button("❌ Cancelar", key=f"no_dist{ksuf}_{did}"):
+                    st.session_state.pop(f"confirm_del_dist{ksuf}_{did}", None)
+                    st.rerun()
 def detect_format(lines):
     """Detecta si el CSV es de Epos Now o del nuevo POS."""
     header = lines[0].lower()
@@ -3682,8 +3902,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         def _frag_seccion_5():
             sb9 = get_supabase()
             st.markdown("### Gestión de la web")
-            nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías"],
+            nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías", "🏷️ Etiquetas"],
                                    horizontal=True, key="nav_web", label_visibility="collapsed")
+            # ── ETIQUETAS ──
+            if nav_web == "🏷️ Etiquetas":
+                panel_etiquetas_distintivos(sb9)
             # ── CONFIG ──
             if nav_web == "⚙️ Configuración":
                 st.markdown("#### Datos del local y horarios")
@@ -3843,8 +4066,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         new_prod_nom = pa1.text_input("🇪🇸 Nombre:", key=f"pn_{pc}")
                         new_prod_precio = pa2.number_input("Precio €:", value=6.50, min_value=0.0, step=0.5, format="%.2f", key=f"pp_{pc}")
                         st.markdown("#### 🏷️ Resaltado en la carta")
-                        new_prod_distintivo = selector_distintivo_producto(
-                            "Distintivo visible sobre la foto:",
+                        new_prod_distintivos = selector_distintivos_producto(
+                            "Etiquetas visibles sobre la foto (puedes elegir varias):",
+                            sb9,
                             key=f"pdist_{pc}",
                         )
                         pt1, pt2, pt3 = st.columns(3)
@@ -3886,7 +4110,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     "foto_url": foto_url,
                                     "orden": int(new_prod_orden),
                                     "disponible": True,
-                                    "distintivo": new_prod_distintivo,
+                                    "distintivos": new_prod_distintivos,
                                 }).execute()
                                 st.session_state.prod_counter += 1
                                 st.success("✅ Producto añadido")
@@ -3896,15 +4120,16 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     # Editar productos existentes
                     st.markdown(f"**{len(prods_cat_web)} productos en {cat_sel_web}:**")
                     for prod in sorted(prods_cat_web, key=lambda p: p.get("orden",0)):
-                        _dist_icon = {"mas_vendido":"🔥", "nuevo":"✨", "recomendacion_chef":"👨‍🍳"}.get(prod.get("distintivo"), "")
+                        _dist_icon = iconos_distintivos_producto(prod, cargar_distintivos(sb9))
                         with st.expander(f"{'✅' if prod['disponible'] else '❌'} {_dist_icon} {prod['orden']}. {prod['nombre']} — €{prod['precio']:.2f}"):
                             ep1, ep2 = st.columns([3,1])
                             e_nom = ep1.text_input("🇪🇸 Nombre:", value=prod["nombre"], key=f"en_{prod['id']}")
                             e_precio = ep2.number_input("€:", value=float(prod["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_{prod['id']}")
                             st.markdown("#### 🏷️ Resaltado en la carta")
-                            e_distintivo = selector_distintivo_producto(
-                                "Distintivo visible sobre la foto:",
-                                prod.get("distintivo"),
+                            e_distintivos = selector_distintivos_producto(
+                                "Etiquetas visibles sobre la foto (puedes elegir varias):",
+                                sb9,
+                                producto_distintivos_actuales(prod),
                                 key=f"edist_{prod['id']}",
                             )
                             e_nom_en = st.text_input("🇬🇧 Name (EN):", value=prod.get("nombre_en") or "", key=f"en_en_{prod['id']}")
@@ -3954,7 +4179,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     "nombre_vi": e_nom_vi or None, "descripcion_vi": e_desc_vi or None,
                                     "precio": float(e_precio), "foto_url": e_foto or None,
                                     "orden": int(e_orden), "disponible": e_disp,
-                                    "distintivo": e_distintivo,
+                                    "distintivos": e_distintivos,
                                 }).eq("id", prod["id"]).execute()
                                 st.success("✅ Guardado")
                                 st.rerun()
@@ -4244,8 +4469,10 @@ if df.empty:
         # Reutilizar exactamente el mismo código del tab9
         sb9 = _sb0
         st.markdown("### Gestión de la web")
-        nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías"],
+        nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías", "🏷️ Etiquetas"],
                            horizontal=True, key="nav_web_sd", label_visibility="collapsed")
+        if nav_web == "🏷️ Etiquetas":
+            panel_etiquetas_distintivos(sb9, ksuf="_sd")
         cfg_res = sb9.table("config").select("*").execute()
         cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
         if nav_web == "⚙️ Configuración":
@@ -4298,15 +4525,16 @@ if df.empty:
                 prods_cat_e = [p for p in prods_web_e if p["categoria_id"] == cat_obj_e["id"]]
                 st.markdown(f"**{len(prods_cat_e)} productos**")
                 for prod_e in sorted(prods_cat_e, key=lambda p: p.get("orden",0)):
-                    _dist_icon_e = {"mas_vendido":"🔥", "nuevo":"✨", "recomendacion_chef":"👨‍🍳"}.get(prod_e.get("distintivo"), "")
+                    _dist_icon_e = iconos_distintivos_producto(prod_e, cargar_distintivos(sb9))
                     with st.expander(f"{'✅' if prod_e['disponible'] else '❌'} {_dist_icon_e} {prod_e['orden']}. {prod_e['nombre']} — €{prod_e['precio']:.2f}"):
                         ep1_e, ep2_e = st.columns([3,1])
                         e_nom_e = ep1_e.text_input("Nombre:", value=prod_e["nombre"], key=f"en_e_{prod_e['id']}")
                         e_precio_e = ep2_e.number_input("€:", value=float(prod_e["precio"]), min_value=0.0, step=0.5, format="%.2f", key=f"epr_e_{prod_e['id']}")
                         st.markdown("#### 🏷️ Resaltado en la carta")
-                        e_distintivo_e = selector_distintivo_producto(
-                            "Distintivo visible sobre la foto:",
-                            prod_e.get("distintivo"),
+                        e_distintivos_e = selector_distintivos_producto(
+                            "Etiquetas visibles sobre la foto (puedes elegir varias):",
+                            sb9,
+                            producto_distintivos_actuales(prod_e),
                             key=f"edist_e_{prod_e['id']}",
                         )
                         e_desc_e = st.text_area("Descripción:", value=prod_e.get("descripcion") or "", key=f"ed_e_{prod_e['id']}", height=70)
@@ -4317,7 +4545,7 @@ if df.empty:
                                 "descripcion": e_desc_e or None,
                                 "precio": float(e_precio_e),
                                 "disponible": e_disp_e,
-                                "distintivo": e_distintivo_e,
+                                "distintivos": e_distintivos_e,
                             }).eq("id", prod_e["id"]).execute()
                             st.success("✅ Guardado"); st.rerun()
         if nav_web == "📸 Categorías":
