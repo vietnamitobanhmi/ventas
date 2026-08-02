@@ -471,6 +471,197 @@ def selector_distintivos_producto(label, sb, valor_actual=None, *, key):
     )
 
 
+# ─── Extras / upselling ──────────────────────────────────────────────
+# Grupos de extras (tabla `extras_grupos`) con sus extras (tabla `extras`).
+# Cada producto puede ofrecer uno o varios grupos: al añadirlo al carrito
+# en la web, el cliente ve un panel para marcar extras (upselling).
+
+@st.cache_data(ttl=30)
+def cargar_extras_grupos(_sb):
+    try:
+        return _sb.table("extras_grupos").select("*").order("orden").execute().data or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def cargar_extras(_sb):
+    try:
+        return _sb.table("extras").select("*").order("orden").execute().data or []
+    except Exception:
+        return []
+
+
+def selector_extras_grupos_producto(label, sb, valor_actual=None, *, key):
+    """Multiselect de grupos de extras que ofrece un producto."""
+    grupos = [g for g in cargar_extras_grupos(sb) if g.get("activo", True)]
+    ids = [g["id"] for g in grupos]
+    nombres = {g["id"]: g["nombre"] for g in grupos}
+    actual = [i for i in (valor_actual or []) if i in ids]
+    return st.multiselect(
+        label,
+        ids,
+        default=actual,
+        format_func=lambda i: nombres.get(i, str(i)),
+        key=key,
+        help="Al añadir este producto al carrito, el cliente podrá marcar los extras "
+             "de estos grupos. Crea los grupos en la subsección ➕ Extras.",
+    )
+
+
+def panel_extras(sb, ksuf=""):
+    """CRUD de grupos de extras y sus extras (upselling)."""
+    st.markdown("#### ➕ Extras (upselling)")
+    st.caption(
+        "Crea grupos de extras (p. ej. «Extras Banh Mi») y asígnalos a productos "
+        "en la pestaña Menú. Al pedir ese producto, el cliente podrá añadirlos."
+    )
+    try:
+        grupos = sb.table("extras_grupos").select("*").order("orden").execute().data or []
+        extras = sb.table("extras").select("*").order("orden").execute().data or []
+    except Exception:
+        st.error(
+            "Las tablas de extras no existen todavía. "
+            "Ejecuta `migracion_extras.sql` en Supabase → SQL Editor."
+        )
+        return
+
+    # ── Nuevo grupo ──
+    with st.expander("➕ Nuevo grupo de extras"):
+        ck = f"exg_counter{ksuf}"
+        if ck not in st.session_state:
+            st.session_state[ck] = 0
+        gc = st.session_state[ck]
+        g1, g2 = st.columns([3, 1])
+        ng_nom = g1.text_input("🇪🇸 Nombre del grupo:", key=f"ng_nom{ksuf}_{gc}", placeholder="Extras Banh Mi")
+        ng_orden = g2.number_input("Orden:", value=len(grupos) + 1, min_value=1, key=f"ng_ord{ksuf}_{gc}")
+        gt1, gt2, gt3 = st.columns(3)
+        ng_en = gt1.text_input("🇬🇧 Name (EN):", key=f"ng_en{ksuf}_{gc}")
+        ng_ca = gt2.text_input("🏴 Nom (CA):", key=f"ng_ca{ksuf}_{gc}")
+        ng_vi = gt3.text_input("🇻🇳 Tên (VI):", key=f"ng_vi{ksuf}_{gc}")
+        if st.button("➕ Crear grupo", key=f"ng_add{ksuf}_{gc}"):
+            if not ng_nom.strip():
+                st.warning("Escribe un nombre.")
+            else:
+                sb.table("extras_grupos").insert({
+                    "nombre": ng_nom.strip(),
+                    "nombre_en": ng_en.strip() or None,
+                    "nombre_ca": ng_ca.strip() or None,
+                    "nombre_vi": ng_vi.strip() or None,
+                    "orden": int(ng_orden),
+                    "activo": True,
+                }).execute()
+                cargar_extras_grupos.clear()
+                st.session_state[ck] += 1
+                st.success("✅ Grupo creado")
+                st.rerun()
+
+    if not grupos:
+        st.info("No hay grupos todavía. Crea el primero con «➕ Nuevo grupo de extras».")
+        return
+
+    for g in grupos:
+        gid = g["id"]
+        ext_g = [e for e in extras if e["grupo_id"] == gid]
+        titulo = f"{'✅' if g.get('activo', True) else '❌'} {g.get('orden', 0)}. {g['nombre']} ({len(ext_g)} extras)"
+        with st.expander(titulo):
+            eg1, eg2 = st.columns([3, 1])
+            g_nom = eg1.text_input("🇪🇸 Nombre:", value=g["nombre"], key=f"eg_nom{ksuf}_{gid}")
+            g_orden = eg2.number_input("Orden:", value=int(g.get("orden") or 0) or 1, min_value=1, key=f"eg_ord{ksuf}_{gid}")
+            egt1, egt2, egt3 = st.columns(3)
+            g_en = egt1.text_input("🇬🇧 Name (EN):", value=g.get("nombre_en") or "", key=f"eg_en{ksuf}_{gid}")
+            g_ca = egt2.text_input("🏴 Nom (CA):", value=g.get("nombre_ca") or "", key=f"eg_ca{ksuf}_{gid}")
+            g_vi = egt3.text_input("🇻🇳 Tên (VI):", value=g.get("nombre_vi") or "", key=f"eg_vi{ksuf}_{gid}")
+            g_act = st.checkbox("Grupo activo", value=g.get("activo", True), key=f"eg_act{ksuf}_{gid}")
+
+            st.markdown("**Extras de este grupo:**")
+            for e in ext_g:
+                eid = e["id"]
+                x1, x2, x3, x4 = st.columns([3, 1, 1, 1])
+                x_nom = x1.text_input("Nombre:", value=e["nombre"], key=f"ex_nom{ksuf}_{eid}", label_visibility="collapsed")
+                x_pre = x2.number_input("€", value=float(e.get("precio") or 0), min_value=0.0, step=0.25, format="%.2f", key=f"ex_pre{ksuf}_{eid}", label_visibility="collapsed")
+                x_act = x3.checkbox("Activo", value=e.get("activo", True), key=f"ex_act{ksuf}_{eid}")
+                if x4.button("🗑️", key=f"ex_del{ksuf}_{eid}"):
+                    sb.table("extras").delete().eq("id", eid).execute()
+                    cargar_extras.clear()
+                    st.rerun()
+                _tr_cont = st.popover("🌍 Traducciones") if hasattr(st, "popover") else st.container()
+                with _tr_cont:
+                    st.text_input("🇬🇧 EN:", value=e.get("nombre_en") or "", key=f"ex_en{ksuf}_{eid}")
+                    st.text_input("🏴 CA:", value=e.get("nombre_ca") or "", key=f"ex_ca{ksuf}_{eid}")
+                    st.text_input("🇻🇳 VI:", value=e.get("nombre_vi") or "", key=f"ex_vi{ksuf}_{eid}")
+
+            # Añadir extra al grupo
+            na1, na2, na3 = st.columns([3, 1, 1])
+            nx_nom = na1.text_input("Nuevo extra:", key=f"nx_nom{ksuf}_{gid}", placeholder="Extra de carne")
+            nx_pre = na2.number_input("Precio €:", value=1.0, min_value=0.0, step=0.25, format="%.2f", key=f"nx_pre{ksuf}_{gid}")
+            if na3.button("➕ Añadir", key=f"nx_add{ksuf}_{gid}"):
+                if nx_nom.strip():
+                    sb.table("extras").insert({
+                        "grupo_id": gid,
+                        "nombre": nx_nom.strip(),
+                        "precio": float(nx_pre),
+                        "orden": len(ext_g) + 1,
+                        "activo": True,
+                    }).execute()
+                    cargar_extras.clear()
+                    st.success("✅ Extra añadido")
+                    st.rerun()
+                else:
+                    st.warning("Escribe un nombre para el extra.")
+
+            sg1, sg2 = st.columns(2)
+            if sg1.button("💾 Guardar grupo y extras", key=f"eg_save{ksuf}_{gid}"):
+                sb.table("extras_grupos").update({
+                    "nombre": g_nom.strip() or g["nombre"],
+                    "nombre_en": g_en.strip() or None,
+                    "nombre_ca": g_ca.strip() or None,
+                    "nombre_vi": g_vi.strip() or None,
+                    "orden": int(g_orden),
+                    "activo": g_act,
+                }).eq("id", gid).execute()
+                for e in ext_g:
+                    eid = e["id"]
+                    sb.table("extras").update({
+                        "nombre": st.session_state.get(f"ex_nom{ksuf}_{eid}", e["nombre"]).strip() or e["nombre"],
+                        "precio": float(st.session_state.get(f"ex_pre{ksuf}_{eid}", e.get("precio") or 0)),
+                        "activo": bool(st.session_state.get(f"ex_act{ksuf}_{eid}", e.get("activo", True))),
+                        "nombre_en": (st.session_state.get(f"ex_en{ksuf}_{eid}") or "").strip() or None,
+                        "nombre_ca": (st.session_state.get(f"ex_ca{ksuf}_{eid}") or "").strip() or None,
+                        "nombre_vi": (st.session_state.get(f"ex_vi{ksuf}_{eid}") or "").strip() or None,
+                    }).eq("id", eid).execute()
+                cargar_extras_grupos.clear()
+                cargar_extras.clear()
+                st.success("✅ Guardado")
+                st.rerun()
+            if sg2.button("🗑️ Eliminar grupo", key=f"eg_del{ksuf}_{gid}"):
+                st.session_state[f"confirm_del_exg{ksuf}_{gid}"] = True
+            if st.session_state.get(f"confirm_del_exg{ksuf}_{gid}"):
+                st.warning(
+                    f"¿Eliminar el grupo «{g['nombre']}» y sus {len(ext_g)} extras? "
+                    "Se quitará también de los productos que lo ofrezcan."
+                )
+                gd1, gd2 = st.columns(2)
+                if gd1.button("✅ Sí, eliminar", key=f"yes_exg{ksuf}_{gid}"):
+                    try:
+                        prods_con = sb.table("productos").select("id,extras_grupos") \
+                            .contains("extras_grupos", [gid]).execute().data or []
+                        for p in prods_con:
+                            nuevos = [i for i in (p.get("extras_grupos") or []) if i != gid]
+                            sb.table("productos").update({"extras_grupos": nuevos}).eq("id", p["id"]).execute()
+                        sb.table("extras_grupos").delete().eq("id", gid).execute()
+                        cargar_extras_grupos.clear()
+                        cargar_extras.clear()
+                        st.session_state.pop(f"confirm_del_exg{ksuf}_{gid}", None)
+                        st.success("✅ Grupo eliminado")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo eliminar: {e}")
+                if gd2.button("❌ Cancelar", key=f"no_exg{ksuf}_{gid}"):
+                    st.session_state.pop(f"confirm_del_exg{ksuf}_{gid}", None)
+                    st.rerun()
+
+
 def _slugify_distintivo(nombre):
     import unicodedata, re
     s = unicodedata.normalize("NFKD", nombre).encode("ascii", "ignore").decode("ascii")
@@ -3902,11 +4093,14 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         def _frag_seccion_5():
             sb9 = get_supabase()
             st.markdown("### Gestión de la web")
-            nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías", "🏷️ Etiquetas"],
+            nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías", "🏷️ Etiquetas", "➕ Extras"],
                                    horizontal=True, key="nav_web", label_visibility="collapsed")
             # ── ETIQUETAS ──
             if nav_web == "🏷️ Etiquetas":
                 panel_etiquetas_distintivos(sb9)
+            # ── EXTRAS (upselling) ──
+            if nav_web == "➕ Extras":
+                panel_extras(sb9)
             # ── CONFIG ──
             if nav_web == "⚙️ Configuración":
                 st.markdown("#### Datos del local y horarios")
@@ -4071,6 +4265,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             sb9,
                             key=f"pdist_{pc}",
                         )
+                        new_prod_extras_grupos = selector_extras_grupos_producto(
+                            "Grupos de extras que ofrece este producto:",
+                            sb9,
+                            key=f"pexg_{pc}",
+                        )
                         pt1, pt2, pt3 = st.columns(3)
                         new_prod_nom_en = pt1.text_input("🇬🇧 Name (EN):", key=f"pn_en_{pc}")
                         new_prod_nom_ca = pt2.text_input("🏴 Nom (CA):", key=f"pn_ca_{pc}")
@@ -4111,6 +4310,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     "orden": int(new_prod_orden),
                                     "disponible": True,
                                     "distintivos": new_prod_distintivos,
+                                    "extras_grupos": new_prod_extras_grupos,
                                 }).execute()
                                 st.session_state.prod_counter += 1
                                 st.success("✅ Producto añadido")
@@ -4131,6 +4331,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 sb9,
                                 producto_distintivos_actuales(prod),
                                 key=f"edist_{prod['id']}",
+                            )
+                            e_extras_grupos = selector_extras_grupos_producto(
+                                "Grupos de extras que ofrece este producto:",
+                                sb9,
+                                prod.get("extras_grupos") or [],
+                                key=f"eexg_{prod['id']}",
                             )
                             e_nom_en = st.text_input("🇬🇧 Name (EN):", value=prod.get("nombre_en") or "", key=f"en_en_{prod['id']}")
                             e_nom_ca = st.text_input("🏴 Nom (CA):", value=prod.get("nombre_ca") or "", key=f"en_ca_{prod['id']}")
@@ -4180,6 +4386,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     "precio": float(e_precio), "foto_url": e_foto or None,
                                     "orden": int(e_orden), "disponible": e_disp,
                                     "distintivos": e_distintivos,
+                                    "extras_grupos": e_extras_grupos,
                                 }).eq("id", prod["id"]).execute()
                                 st.success("✅ Guardado")
                                 st.rerun()
@@ -4469,10 +4676,12 @@ if df.empty:
         # Reutilizar exactamente el mismo código del tab9
         sb9 = _sb0
         st.markdown("### Gestión de la web")
-        nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías", "🏷️ Etiquetas"],
+        nav_web = st.radio("Subsección", ["⚙️ Configuración", "🍜 Menú", "📸 Categorías", "🏷️ Etiquetas", "➕ Extras"],
                            horizontal=True, key="nav_web_sd", label_visibility="collapsed")
         if nav_web == "🏷️ Etiquetas":
             panel_etiquetas_distintivos(sb9, ksuf="_sd")
+        if nav_web == "➕ Extras":
+            panel_extras(sb9, ksuf="_sd")
         cfg_res = sb9.table("config").select("*").execute()
         cfg = {r["clave"]: r["valor"] for r in (cfg_res.data or [])}
         if nav_web == "⚙️ Configuración":
@@ -4537,6 +4746,12 @@ if df.empty:
                             producto_distintivos_actuales(prod_e),
                             key=f"edist_e_{prod_e['id']}",
                         )
+                        e_extras_grupos_e = selector_extras_grupos_producto(
+                            "Grupos de extras que ofrece este producto:",
+                            sb9,
+                            prod_e.get("extras_grupos") or [],
+                            key=f"eexg_e_{prod_e['id']}",
+                        )
                         e_desc_e = st.text_area("Descripción:", value=prod_e.get("descripcion") or "", key=f"ed_e_{prod_e['id']}", height=70)
                         e_disp_e = st.checkbox("Disponible", value=prod_e.get("disponible",True), key=f"edis_e_{prod_e['id']}")
                         if st.button("💾 Guardar", key=f"save_prod_e_{prod_e['id']}"):
@@ -4546,6 +4761,7 @@ if df.empty:
                                 "precio": float(e_precio_e),
                                 "disponible": e_disp_e,
                                 "distintivos": e_distintivos_e,
+                                "extras_grupos": e_extras_grupos_e,
                             }).eq("id", prod_e["id"]).execute()
                             st.success("✅ Guardado"); st.rerun()
         if nav_web == "📸 Categorías":
