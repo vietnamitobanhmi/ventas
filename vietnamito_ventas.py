@@ -528,20 +528,18 @@ def panel_extras(sb, ksuf=""):
 
     # ── Nuevo grupo ──
     with st.expander("➕ Nuevo grupo de extras"):
-        ck = f"exg_counter{ksuf}"
-        if ck not in st.session_state:
-            st.session_state[ck] = 0
-        gc = st.session_state[ck]
-        g1, g2 = st.columns([3, 1])
-        ng_nom = g1.text_input("🇪🇸 Nombre del grupo:", key=f"ng_nom{ksuf}_{gc}", placeholder="Extras Banh Mi")
-        ng_orden = g2.number_input("Orden:", value=len(grupos) + 1, min_value=1, key=f"ng_ord{ksuf}_{gc}")
-        gt1, gt2, gt3 = st.columns(3)
-        ng_en = gt1.text_input("🇬🇧 Name (EN):", key=f"ng_en{ksuf}_{gc}")
-        ng_ca = gt2.text_input("🏴 Nom (CA):", key=f"ng_ca{ksuf}_{gc}")
-        ng_vi = gt3.text_input("🇻🇳 Tên (VI):", key=f"ng_vi{ksuf}_{gc}")
-        if st.button("➕ Crear grupo", key=f"ng_add{ksuf}_{gc}"):
+        with st.form(key=f"form_ng{ksuf}", clear_on_submit=True):
+            g1, g2 = st.columns([3, 1])
+            ng_nom = g1.text_input("🇪🇸 Nombre del grupo:", placeholder="Extras Banh Mi")
+            ng_orden = g2.number_input("Orden:", value=len(grupos) + 1, min_value=1)
+            gt1, gt2, gt3 = st.columns(3)
+            ng_en = gt1.text_input("🇬🇧 Name (EN):")
+            ng_ca = gt2.text_input("🏴 Nom (CA):")
+            ng_vi = gt3.text_input("🇻🇳 Tên (VI):")
+            ng_submit = st.form_submit_button("➕ Crear grupo")
+        if ng_submit:
             if not ng_nom.strip():
-                st.warning("Escribe un nombre.")
+                st.warning("⚠️ Escribe un nombre.")
             else:
                 sb.table("extras_grupos").insert({
                     "nombre": ng_nom.strip(),
@@ -552,7 +550,6 @@ def panel_extras(sb, ksuf=""):
                     "activo": True,
                 }).execute()
                 cargar_extras_grupos.clear()
-                st.session_state[ck] += 1
                 st.success("✅ Grupo creado")
                 st.rerun()
 
@@ -591,15 +588,27 @@ def panel_extras(sb, ksuf=""):
                     st.text_input("🏴 CA:", value=e.get("nombre_ca") or "", key=f"ex_ca{ksuf}_{eid}")
                     st.text_input("🇻🇳 VI:", value=e.get("nombre_vi") or "", key=f"ex_vi{ksuf}_{eid}")
 
-            # Añadir extra al grupo
-            na1, na2, na3 = st.columns([3, 1, 1])
-            nx_nom = na1.text_input("Nuevo extra:", key=f"nx_nom{ksuf}_{gid}", placeholder="Extra de carne")
-            nx_pre = na2.number_input("Precio €:", value=1.0, min_value=0.0, step=0.25, format="%.2f", key=f"nx_pre{ksuf}_{gid}")
-            if na3.button("➕ Añadir", key=f"nx_add{ksuf}_{gid}"):
+            # Añadir extra al grupo (con traducciones). Va dentro de un st.form
+            # para que el clic y los campos lleguen JUNTOS (si no, un clic rápido
+            # puede llegar antes de aplicarse el texto y el nombre viaja vacío).
+            st.markdown("**Nuevo extra:**")
+            with st.form(key=f"form_nx{ksuf}_{gid}", clear_on_submit=True):
+                na1, na2 = st.columns([3, 1])
+                nx_nom = na1.text_input("🇪🇸 Nombre:", placeholder="Extra de carne")
+                nx_pre = na2.number_input("Precio €:", value=1.0, min_value=0.0, step=0.25, format="%.2f")
+                nxt1, nxt2, nxt3 = st.columns(3)
+                nx_en = nxt1.text_input("🇬🇧 Name (EN):")
+                nx_ca = nxt2.text_input("🏴 Nom (CA):")
+                nx_vi = nxt3.text_input("🇻🇳 Tên (VI):")
+                nx_submit = st.form_submit_button("➕ Añadir extra")
+            if nx_submit:
                 if nx_nom.strip():
                     sb.table("extras").insert({
                         "grupo_id": gid,
                         "nombre": nx_nom.strip(),
+                        "nombre_en": nx_en.strip() or None,
+                        "nombre_ca": nx_ca.strip() or None,
+                        "nombre_vi": nx_vi.strip() or None,
                         "precio": float(nx_pre),
                         "orden": len(ext_g) + 1,
                         "activo": True,
@@ -608,7 +617,40 @@ def panel_extras(sb, ksuf=""):
                     st.success("✅ Extra añadido")
                     st.rerun()
                 else:
-                    st.warning("Escribe un nombre para el extra.")
+                    st.warning("⚠️ Escribe un nombre para el extra.")
+
+            # Asignar / quitar este grupo a TODA una categoría de productos
+            st.markdown("**📂 Aplicar este grupo a una categoría entera:**")
+            try:
+                _cats_ex = sb.table("categorias").select("*").order("orden").execute().data or []
+            except Exception:
+                _cats_ex = []
+            if _cats_ex:
+                ca1, ca2, ca3 = st.columns([2, 1, 1])
+                cat_ex_nom = ca1.selectbox("Categoría:", [c["nombre"] for c in _cats_ex],
+                                           key=f"catex{ksuf}_{gid}", label_visibility="collapsed")
+                cat_ex = next(c for c in _cats_ex if c["nombre"] == cat_ex_nom)
+                if ca2.button("➕ Añadir a todos", key=f"catex_add{ksuf}_{gid}"):
+                    prods_cat = sb.table("productos").select("id,extras_grupos") \
+                        .eq("categoria_id", cat_ex["id"]).execute().data or []
+                    n = 0
+                    for p in prods_cat:
+                        actuales = p.get("extras_grupos") or []
+                        if gid not in actuales:
+                            sb.table("productos").update({"extras_grupos": actuales + [gid]}).eq("id", p["id"]).execute()
+                            n += 1
+                    st.success(f"✅ Grupo añadido a {n} producto{'s' if n != 1 else ''} de {cat_ex_nom}")
+                if ca3.button("➖ Quitar de todos", key=f"catex_del{ksuf}_{gid}"):
+                    prods_cat = sb.table("productos").select("id,extras_grupos") \
+                        .eq("categoria_id", cat_ex["id"]).execute().data or []
+                    n = 0
+                    for p in prods_cat:
+                        actuales = p.get("extras_grupos") or []
+                        if gid in actuales:
+                            sb.table("productos").update({"extras_grupos": [i for i in actuales if i != gid]}).eq("id", p["id"]).execute()
+                            n += 1
+                    st.success(f"✅ Grupo quitado de {n} producto{'s' if n != 1 else ''} de {cat_ex_nom}")
+                st.caption("También puedes asignarlo producto a producto en la pestaña 🍜 Menú.")
 
             sg1, sg2 = st.columns(2)
             if sg1.button("💾 Guardar grupo y extras", key=f"eg_save{ksuf}_{gid}"):
@@ -701,27 +743,25 @@ def panel_etiquetas_distintivos(sb, ksuf=""):
 
     # ── Añadir etiqueta ──
     with st.expander("➕ Nueva etiqueta"):
-        ck = f"dist_counter{ksuf}"
-        if ck not in st.session_state:
-            st.session_state[ck] = 0
-        dc = st.session_state[ck]
-        nd1, nd2 = st.columns([3, 1])
-        nd_nom = nd1.text_input("🇪🇸 Nombre:", key=f"nd_nom{ksuf}_{dc}", placeholder="Vegano")
-        nd_icono = nd2.text_input("Emoji:", key=f"nd_ico{ksuf}_{dc}", placeholder="🌱", max_chars=8)
-        nt1, nt2, nt3 = st.columns(3)
-        nd_nom_en = nt1.text_input("🇬🇧 Name (EN):", key=f"nd_en{ksuf}_{dc}")
-        nd_nom_ca = nt2.text_input("🏴 Nom (CA):", key=f"nd_ca{ksuf}_{dc}")
-        nd_nom_vi = nt3.text_input("🇻🇳 Tên (VI):", key=f"nd_vi{ksuf}_{dc}")
-        nc1, nc2 = st.columns([1, 3])
-        nd_color = nc1.color_picker("Color del badge:", "#3F7D2C", key=f"nd_col{ksuf}_{dc}")
-        nd_icono_file = nc2.file_uploader(
-            "Icono en imagen (opcional, sustituye al emoji):",
-            type=["png", "svg", "webp", "jpg", "jpeg"], key=f"nd_icof{ksuf}_{dc}",
-        )
-        nd_orden = st.number_input("Orden:", value=len(dists) + 1, min_value=1, key=f"nd_ord{ksuf}_{dc}")
-        if st.button("➕ Crear etiqueta", key=f"nd_add{ksuf}_{dc}"):
+        with st.form(key=f"form_nd{ksuf}", clear_on_submit=True):
+            nd1, nd2 = st.columns([3, 1])
+            nd_nom = nd1.text_input("🇪🇸 Nombre:", placeholder="Vegano")
+            nd_icono = nd2.text_input("Emoji:", placeholder="🌱", max_chars=8)
+            nt1, nt2, nt3 = st.columns(3)
+            nd_nom_en = nt1.text_input("🇬🇧 Name (EN):")
+            nd_nom_ca = nt2.text_input("🏴 Nom (CA):")
+            nd_nom_vi = nt3.text_input("🇻🇳 Tên (VI):")
+            nc1, nc2 = st.columns([1, 3])
+            nd_color = nc1.color_picker("Color del badge:", "#3F7D2C")
+            nd_icono_file = nc2.file_uploader(
+                "Icono en imagen (opcional, sustituye al emoji):",
+                type=["png", "svg", "webp", "jpg", "jpeg"],
+            )
+            nd_orden = st.number_input("Orden:", value=len(dists) + 1, min_value=1)
+            nd_submit = st.form_submit_button("➕ Crear etiqueta")
+        if nd_submit:
             if not nd_nom.strip():
-                st.warning("Escribe un nombre.")
+                st.warning("⚠️ Escribe un nombre.")
             else:
                 slug = _slugify_distintivo(nd_nom)
                 if any(d["slug"] == slug for d in dists):
@@ -746,7 +786,6 @@ def panel_etiquetas_distintivos(sb, ksuf=""):
                         "activo": True,
                     }).execute()
                     cargar_distintivos.clear()
-                    st.session_state[ck] += 1
                     st.success("✅ Etiqueta creada")
                     st.rerun()
 
