@@ -3171,6 +3171,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                         else:
                                             sb0.table("ventas_delivery").insert({"fecha": _f_iso, "glovo_bruto": _g_val, "uber_bruto": 0}).execute()
                                             _n_new += 1
+                                    # Renovar el editor de la tabla: si mantiene su estado viejo,
+                                    # no muestra las fechas recién subidas y un Guardar posterior LAS BORRARÍA.
+                                    st.session_state["dlv_editor_ver"] = st.session_state.get("dlv_editor_ver", 0) + 1
                                     st.success(f"✅ Aplicado: {_n_upd} fecha(s) actualizada(s), {_n_new} nueva(s).")
                                     st.rerun()
                 except Exception as _e_csv:
@@ -3187,6 +3190,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     _df_dlv[_c] = 0.0
             _df_dlv = _df_dlv[["fecha", "glovo_bruto", "uber_bruto"]].copy()
             _df_dlv["fecha"] = _pd_dlv.to_datetime(_df_dlv["fecha"]).dt.date
+            # Todas las fechas, ordenadas (recientes arriba), con índice limpio
+            _df_dlv = _df_dlv.sort_values("fecha", ascending=False).reset_index(drop=True)
         else:
             _df_dlv = _pd_dlv.DataFrame(columns=["fecha", "glovo_bruto", "uber_bruto"])
         # Resumen de márgenes netos totales
@@ -3201,8 +3206,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             _dm3.metric("Margen neto delivery total", f"€{_tot_glovo_neto + _tot_uber_neto:,.2f}")
         st.markdown("##### Tabla por fecha")
         st.caption("Edita las celdas, añade filas nuevas con el **+** de abajo, y pulsa 💾 Guardar.")
+        # El key incluye una versión que se incrementa tras cada escritura (CSV o Guardar):
+        # así el editor se reconstruye SIEMPRE con los datos frescos de la BBDD y nunca
+        # arrastra un estado viejo (que ocultaba fechas nuevas y provocaba borrados al guardar).
+        _dlv_ver = st.session_state.get("dlv_editor_ver", 0)
         _df_dlv_edit = st.data_editor(
-            _df_dlv, num_rows="dynamic", use_container_width=True, key="editor_delivery",
+            _df_dlv, num_rows="dynamic", use_container_width=True, height=560,
+            key=f"editor_delivery_v{_dlv_ver}",
             column_config={
                 "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", required=True),
                 "glovo_bruto": st.column_config.NumberColumn("Glovo bruto €", min_value=0.0, step=5.0, format="%.2f"),
@@ -3229,6 +3239,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 _fechas_previas = {str(d["fecha"])[:10] for d in _dlv_data}
                 for _f_borrar in (_fechas_previas - _fechas_vistas):
                     sb0.table("ventas_delivery").delete().eq("fecha", _f_borrar).execute()
+                st.session_state["dlv_editor_ver"] = st.session_state.get("dlv_editor_ver", 0) + 1
                 st.success(f"✅ Guardado: {_rows_ok} fecha(s) de delivery.")
                 st.rerun()
             except Exception as _e_dlv:
