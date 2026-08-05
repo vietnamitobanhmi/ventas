@@ -3190,8 +3190,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     _df_dlv[_c] = 0.0
             _df_dlv = _df_dlv[["fecha", "glovo_bruto", "uber_bruto"]].copy()
             _df_dlv["fecha"] = _pd_dlv.to_datetime(_df_dlv["fecha"]).dt.date
-            # Todas las fechas, ordenadas (recientes arriba), con índice limpio
-            _df_dlv = _df_dlv.sort_values("fecha", ascending=False).reset_index(drop=True)
+            # Todas las fechas, ordenadas (recientes arriba), sin duplicados y con índice limpio
+            _df_dlv = _df_dlv.drop_duplicates(subset="fecha", keep="first") \
+                             .sort_values("fecha", ascending=False).reset_index(drop=True)
         else:
             _df_dlv = _pd_dlv.DataFrame(columns=["fecha", "glovo_bruto", "uber_bruto"])
         # Resumen de márgenes netos totales
@@ -3215,18 +3216,23 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             key=f"editor_delivery_v{_dlv_ver}",
             column_config={
                 "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", required=True),
-                "glovo_bruto": st.column_config.NumberColumn("Glovo bruto €", min_value=0.0, step=5.0, format="%.2f"),
-                "uber_bruto": st.column_config.NumberColumn("Uber Eats bruto €", min_value=0.0, step=5.0, format="%.2f"),
+                # step=0.01: permite céntimos (con step=5 el editor rechazaba los decimales)
+                "glovo_bruto": st.column_config.NumberColumn("Glovo bruto €", min_value=0.0, step=0.01, format="%.2f"),
+                "uber_bruto": st.column_config.NumberColumn("Uber Eats bruto €", min_value=0.0, step=0.01, format="%.2f"),
             },
         )
         if st.button("💾 Guardar cambios de delivery", type="primary"):
             try:
                 _rows_ok = 0
                 _fechas_vistas = set()
+                _fechas_repetidas = set()
                 for _, _row in _df_dlv_edit.iterrows():
                     if _pd_dlv.isna(_row.get("fecha")):
                         continue
                     _f_iso = str(_row["fecha"])[:10]
+                    if _f_iso in _fechas_vistas:
+                        # Fecha tecleada dos veces en el editor: la última fila gana
+                        _fechas_repetidas.add(_f_iso)
                     _fechas_vistas.add(_f_iso)
                     _g = float(_row["glovo_bruto"]) if not _pd_dlv.isna(_row.get("glovo_bruto")) else 0.0
                     _u = float(_row["uber_bruto"]) if not _pd_dlv.isna(_row.get("uber_bruto")) else 0.0
@@ -3240,6 +3246,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 for _f_borrar in (_fechas_previas - _fechas_vistas):
                     sb0.table("ventas_delivery").delete().eq("fecha", _f_borrar).execute()
                 st.session_state["dlv_editor_ver"] = st.session_state.get("dlv_editor_ver", 0) + 1
+                if _fechas_repetidas:
+                    st.warning("⚠️ Había fechas repetidas en la tabla (" + ", ".join(sorted(_fechas_repetidas))
+                               + "): cada fecha es única, se ha guardado la última fila de cada una.")
                 st.success(f"✅ Guardado: {_rows_ok} fecha(s) de delivery.")
                 st.rerun()
             except Exception as _e_dlv:
