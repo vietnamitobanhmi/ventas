@@ -394,17 +394,88 @@ WEEK_COLORS = [
 @st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
-def upload_foto(sb, file, prefix):
-    import urllib.parse
-    ext = file.name.split(".")[-1].lower()
-    fname = f"pasos/{prefix}_{file.name}"
-    fname_encoded = urllib.parse.quote(fname, safe="/")
+# ─── Subida de imágenes: hosting (dondominio) primero, Supabase de respaldo ───
+# Convención del proyecto: las imágenes viven en https://vietnamito.es/assets/...
+# (subidas por FTP al hosting). Supabase Storage queda solo como respaldo si el
+# FTP no está configurado en st.secrets o falla en ese momento.
+
+WEB_BASE_URL = "https://vietnamito.es"
+
+
+def _ftp_conectar():
+    """Conexión FTP(S) al hosting usando st.secrets['ftp']. None si no hay credenciales o falla."""
+    import ftplib
+    cfg = None
     try:
-        sb.storage.from_("assets").upload(fname, file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
+        cfg = st.secrets["ftp"]
     except Exception:
-        file.seek(0)
-        sb.storage.from_("assets").update(fname, file.read(), {"content-type": f"image/{ext}"})
-    return f"{SUPABASE_URL}/storage/v1/object/public/assets/{fname_encoded}"
+        return None
+    try:
+        try:
+            f = ftplib.FTP_TLS(cfg["host"], timeout=20)
+            f.login(cfg["user"], cfg["password"])
+            f.prot_p()
+        except Exception:
+            f = ftplib.FTP(cfg["host"], timeout=20)
+            f.login(cfg["user"], cfg["password"])
+        return f
+    except Exception:
+        return None
+
+
+def subir_imagen_dondominio(data, rel_path):
+    """Sube bytes a <base_dir>/assets/<rel_path> del hosting. Devuelve la URL pública o None."""
+    import ftplib, io
+    f = _ftp_conectar()
+    if f is None:
+        return None
+    try:
+        base = ""
+        try:
+            base = (st.secrets["ftp"].get("base_dir") or "").strip("/")
+        except Exception:
+            pass
+        ruta = (base + "/assets/" + rel_path).strip("/")
+        partes = ruta.split("/")
+        for d in partes[:-1]:
+            try:
+                f.cwd(d)
+            except ftplib.error_perm:
+                f.mkd(d)
+                f.cwd(d)
+        f.storbinary(f"STOR {partes[-1]}", io.BytesIO(data))
+        try:
+            f.quit()
+        except Exception:
+            pass
+        return f"{WEB_BASE_URL}/assets/{rel_path}"
+    except Exception:
+        try:
+            f.quit()
+        except Exception:
+            pass
+        return None
+
+
+def subir_imagen_bo(sb, data, rel_path, ext):
+    """Sube una imagen del BO: primero al hosting (FTP); si no se puede, a Supabase Storage.
+    `rel_path` es la ruta relativa dentro de assets/, p. ej. 'productos/9.jpg'."""
+    import urllib.parse
+    url = subir_imagen_dondominio(data, rel_path)
+    if url:
+        return url
+    ctype = {"svg": "image/svg+xml", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, f"image/{ext}")
+    try:
+        sb.storage.from_("assets").upload(rel_path, data, {"content-type": ctype, "upsert": "true"})
+    except Exception:
+        sb.storage.from_("assets").update(rel_path, data, {"content-type": ctype})
+    st.warning("⚠️ No se pudo subir al hosting (¿credenciales FTP en secrets?): guardada en Supabase como respaldo.")
+    return f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(rel_path, safe='/')}"
+
+
+def upload_foto(sb, file, prefix):
+    ext = file.name.split(".")[-1].lower()
+    return subir_imagen_bo(sb, file.read(), f"pasos/{prefix}_{file.name}", ext)
 
 
 # ─── Etiquetas (distintivos) de producto ─────────────────────────────
@@ -712,17 +783,9 @@ def _slugify_distintivo(nombre):
 
 
 def subir_icono_distintivo(sb, file, slug):
-    """Sube el icono de una etiqueta al bucket assets y devuelve su URL pública."""
-    import urllib.parse
+    """Sube el icono de una etiqueta (hosting primero, Supabase de respaldo)."""
     ext = file.name.split(".")[-1].lower()
-    ctype = {"svg": "image/svg+xml", "jpg": "image/jpeg"}.get(ext, f"image/{ext}")
-    fname = f"distintivos/{slug}.{ext}"
-    data = file.read()
-    try:
-        sb.storage.from_("assets").upload(fname, data, {"content-type": ctype, "upsert": "true"})
-    except Exception:
-        sb.storage.from_("assets").update(fname, data, {"content-type": ctype})
-    return f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+    return subir_imagen_bo(sb, file.read(), f"distintivos/{slug}.{ext}", ext)
 
 
 def panel_etiquetas_distintivos(sb, ksuf=""):
@@ -3183,6 +3246,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         _dlv_res = sb0.table("ventas_delivery").select("*").order("fecha", desc=True).execute()
         _dlv_data = _dlv_res.data or []
         import pandas as _pd_dlv
+        import datetime as _dt_dlv
         if _dlv_data:
             _df_dlv = _pd_dlv.DataFrame(_dlv_data)
             for _c in ["glovo_bruto", "uber_bruto"]:
@@ -3215,7 +3279,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             _df_dlv, num_rows="dynamic", use_container_width=True, height=560,
             key=f"editor_delivery_v{_dlv_ver}",
             column_config={
-                "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY", required=True),
+                # min/max: evita dedazos de año (p. ej. 2016) — solo fechas desde 2025 hasta mañana
+                "fecha": st.column_config.DateColumn(
+                    "Fecha", format="DD/MM/YYYY", required=True,
+                    min_value=_dt_dlv.date(2025, 1, 1),
+                    max_value=_dt_dlv.date.today() + _dt_dlv.timedelta(days=1),
+                ),
                 # step=0.01: permite céntimos (con step=5 el editor rechazaba los decimales)
                 "glovo_bruto": st.column_config.NumberColumn("Glovo bruto €", min_value=0.0, step=0.01, format="%.2f"),
                 "uber_bruto": st.column_config.NumberColumn("Uber Eats bruto €", min_value=0.0, step=0.01, format="%.2f"),
@@ -4289,15 +4358,66 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if foto_upload:
                             try:
                                 ext = foto_upload.name.split(".")[-1].lower()
-                                fname = f"web/{clave_foto}.{ext}"
-                                sb9.storage.from_("assets").upload(fname, foto_upload.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                                new_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{_ul.quote(fname, safe='/')}"
+                                new_url = subir_imagen_bo(sb9, foto_upload.read(), f"web/{clave_foto}.{ext}", ext)
                                 sb9.table("config").upsert({"clave": clave_foto, "valor": new_url}).execute()
                                 st.success(f"✅ Foto guardada")
                                 st.rerun()
                             except Exception as e:
                                 st.warning(f"Error: {e}")
                         st.markdown("")
+                # ── Migración puntual: fotos que quedaron en Supabase → hosting ──
+                st.divider()
+                with st.expander("🖼️ Migrar imágenes de Supabase al hosting (dondominio)"):
+                    st.caption(
+                        "Busca fotos de productos y etiquetas que aún apunten a Supabase Storage, "
+                        "las copia al hosting por FTP (assets/...) y actualiza su URL. "
+                        "Necesita las credenciales FTP en los secrets de la app."
+                    )
+                    if st.button("🚚 Migrar ahora", key="migrar_fotos_dd"):
+                        import requests as _rq_mig
+                        _mov, _fal = 0, 0
+                        with st.spinner("Migrando imágenes..."):
+                            _prods_mig = sb9.table("productos").select("id,foto_url") \
+                                .like("foto_url", f"{SUPABASE_URL}%").execute().data or []
+                            for _pm in _prods_mig:
+                                try:
+                                    _data = _rq_mig.get(_pm["foto_url"], timeout=30).content
+                                    _ext = _pm["foto_url"].split(".")[-1].split("?")[0].lower()
+                                    if not _ext or len(_ext) > 5:
+                                        _ext = "jpg"
+                                    _url = subir_imagen_dondominio(_data, f"productos/{_pm['id']}.{_ext}")
+                                    if _url:
+                                        sb9.table("productos").update({"foto_url": _url}).eq("id", _pm["id"]).execute()
+                                        _mov += 1
+                                    else:
+                                        _fal += 1
+                                except Exception:
+                                    _fal += 1
+                            try:
+                                _dists_mig = sb9.table("distintivos").select("id,slug,icono_url") \
+                                    .like("icono_url", f"{SUPABASE_URL}%").execute().data or []
+                            except Exception:
+                                _dists_mig = []
+                            for _dm in _dists_mig:
+                                try:
+                                    _data = _rq_mig.get(_dm["icono_url"], timeout=30).content
+                                    _ext = _dm["icono_url"].split(".")[-1].split("?")[0].lower()
+                                    if not _ext or len(_ext) > 5:
+                                        _ext = "png"
+                                    _url = subir_imagen_dondominio(_data, f"distintivos/{_dm['slug']}.{_ext}")
+                                    if _url:
+                                        sb9.table("distintivos").update({"icono_url": _url}).eq("id", _dm["id"]).execute()
+                                        _mov += 1
+                                    else:
+                                        _fal += 1
+                                except Exception:
+                                    _fal += 1
+                        if _mov and not _fal:
+                            st.success(f"✅ {_mov} imagen(es) migrada(s) al hosting.")
+                        elif _mov or _fal:
+                            st.warning(f"Migradas {_mov}, fallidas {_fal}. Revisa las credenciales FTP en secrets.")
+                        else:
+                            st.info("No hay imágenes en Supabase que migrar: todo apunta ya al hosting.")
             # ── MENÚ ──
             if nav_web == "🍜 Menú":
                 cats_res = sb9.table("categorias").select("*").order("orden").execute()
@@ -4347,11 +4467,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 foto_url = new_prod_foto_url.strip() or None
                                 if new_prod_foto_file:
                                     try:
-                                        import urllib.parse
                                         ext = new_prod_foto_file.name.split(".")[-1].lower()
-                                        fname = f"productos/{cat_obj['id']}_{new_prod_nom.strip().replace(' ','_')}.{ext}"
-                                        sb9.storage.from_("assets").upload(fname, new_prod_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                                        foto_url = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+                                        rel = f"productos/{cat_obj['id']}_{new_prod_nom.strip().replace(' ','_')}.{ext}"
+                                        foto_url = subir_imagen_bo(sb9, new_prod_foto_file.read(), rel, ext)
                                     except Exception as e:
                                         st.warning(f"No se pudo subir foto: {e}")
                                 sb9.table("productos").insert({
@@ -4425,11 +4543,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             if e_foto_file:
                                 st.image(e_foto_file, width=150)
                                 try:
-                                    import urllib.parse
                                     ext = e_foto_file.name.split(".")[-1].lower()
-                                    fname = f"productos/{prod['id']}.{ext}"
-                                    sb9.storage.from_("assets").upload(fname, e_foto_file.read(), {"content-type": f"image/{ext}", "upsert": "true"})
-                                    e_foto = f"{SUPABASE_URL}/storage/v1/object/public/assets/{urllib.parse.quote(fname, safe='/')}"
+                                    e_foto = subir_imagen_bo(sb9, e_foto_file.read(), f"productos/{prod['id']}.{ext}", ext)
                                     st.success("✅ Foto lista — pulsa Guardar")
                                 except Exception as ex:
                                     st.warning(f"Error foto: {ex}")
