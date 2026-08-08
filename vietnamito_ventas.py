@@ -457,6 +457,16 @@ def subir_imagen_dondominio(data, rel_path):
         return None
 
 
+def _slug_archivo(nombre):
+    """Convierte un texto en nombre de archivo seguro: solo ASCII [A-Za-z0-9._-].
+    Evita imágenes rotas y errores 550 del FTP con caracteres como –, ñ, á…"""
+    import unicodedata, re
+    s = unicodedata.normalize("NFKD", str(nombre))
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s).strip("_.")
+    return s or "archivo"
+
+
 def subir_imagen_bo(sb, data, rel_path, ext):
     """Sube una imagen del BO: primero al hosting (FTP); si no se puede, a Supabase Storage.
     `rel_path` es la ruta relativa dentro de assets/, p. ej. 'productos/9.jpg'."""
@@ -475,7 +485,7 @@ def subir_imagen_bo(sb, data, rel_path, ext):
 
 def upload_foto(sb, file, prefix):
     ext = file.name.split(".")[-1].lower()
-    return subir_imagen_bo(sb, file.read(), f"pasos/{prefix}_{file.name}", ext)
+    return subir_imagen_bo(sb, file.read(), f"pasos/{_slug_archivo(prefix)}_{_slug_archivo(file.name)}", ext)
 
 
 # ─── Etiquetas (distintivos) de producto ─────────────────────────────
@@ -4468,7 +4478,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 if new_prod_foto_file:
                                     try:
                                         ext = new_prod_foto_file.name.split(".")[-1].lower()
-                                        rel = f"productos/{cat_obj['id']}_{new_prod_nom.strip().replace(' ','_')}.{ext}"
+                                        rel = f"productos/{cat_obj['id']}_{_slug_archivo(new_prod_nom)}.{ext}"
                                         foto_url = subir_imagen_bo(sb9, new_prod_foto_file.read(), rel, ext)
                                     except Exception as e:
                                         st.warning(f"No se pudo subir foto: {e}")
