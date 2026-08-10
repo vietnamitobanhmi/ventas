@@ -3139,6 +3139,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         _F_GLOVO = 0.30
         _F_UBER = 0.40
 
+        # Mensajes pendientes del último guardado/aplicado (sobreviven al st.rerun,
+        # que de otro modo los borra antes de que den tiempo a leerse)
+        for _tipo_msg, _txt_msg in st.session_state.pop("dlv_msgs", []):
+            getattr(st, _tipo_msg)(_txt_msg)
+
         # ── Subir CSV de Glovo (columnas "Date" DD/MM/YYYY y "Sales") ──
         with st.expander("📤 Subir CSV de Glovo"):
             st.caption("El CSV debe tener una columna **Date** y una columna **Sales**. "
@@ -3247,7 +3252,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     # Renovar el editor de la tabla: si mantiene su estado viejo,
                                     # no muestra las fechas recién subidas y un Guardar posterior LAS BORRARÍA.
                                     st.session_state["dlv_editor_ver"] = st.session_state.get("dlv_editor_ver", 0) + 1
-                                    st.success(f"✅ Aplicado: {_n_upd} fecha(s) actualizada(s), {_n_new} nueva(s).")
+                                    st.session_state["dlv_msgs"] = [("success", f"✅ CSV aplicado: {_n_upd} fecha(s) actualizada(s), {_n_new} nueva(s).")]
                                     st.rerun()
                 except Exception as _e_csv:
                     st.error(f"Error procesando el CSV: {_e_csv}")
@@ -3285,6 +3290,13 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
         # así el editor se reconstruye SIEMPRE con los datos frescos de la BBDD y nunca
         # arrastra un estado viejo (que ocultaba fechas nuevas y provocaba borrados al guardar).
         _dlv_ver = st.session_state.get("dlv_editor_ver", 0)
+        # Fechas con las que se SEMBRÓ este editor: al guardar, solo se podrán
+        # borrar fechas que este editor llegó a mostrar. Así un editor viejo
+        # (otra pestaña, el móvil, estado anterior al CSV…) nunca borra fechas
+        # añadidas después por el CSV o por otra pestaña.
+        _seed_key = f"dlv_seed_v{_dlv_ver}"
+        if _seed_key not in st.session_state:
+            st.session_state[_seed_key] = {str(_f)[:10] for _f in _df_dlv["fecha"].tolist()}
         _df_dlv_edit = st.data_editor(
             _df_dlv, num_rows="dynamic", use_container_width=True, height=560,
             key=f"editor_delivery_v{_dlv_ver}",
@@ -3320,15 +3332,27 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         {"fecha": _f_iso, "glovo_bruto": _g, "uber_bruto": _u},
                         on_conflict="fecha").execute()
                     _rows_ok += 1
-                # Borrar filas que estaban y el usuario eliminó de la tabla
+                # Borrar SOLO filas que este editor mostró y el usuario eliminó.
+                # Las fechas añadidas a la BBDD después de construirse el editor
+                # (CSV aplicado, otra pestaña…) NO se tocan aunque aquí no salgan.
                 _fechas_previas = {str(d["fecha"])[:10] for d in _dlv_data}
-                for _f_borrar in (_fechas_previas - _fechas_vistas):
+                _seed_fechas = st.session_state.get(_seed_key, _fechas_previas)
+                _borradas = sorted((_fechas_previas & _seed_fechas) - _fechas_vistas)
+                for _f_borrar in _borradas:
                     sb0.table("ventas_delivery").delete().eq("fecha", _f_borrar).execute()
+                _protegidas = sorted(_fechas_previas - _seed_fechas - _fechas_vistas)
                 st.session_state["dlv_editor_ver"] = st.session_state.get("dlv_editor_ver", 0) + 1
+                _msgs = []
                 if _fechas_repetidas:
-                    st.warning("⚠️ Había fechas repetidas en la tabla (" + ", ".join(sorted(_fechas_repetidas))
-                               + "): cada fecha es única, se ha guardado la última fila de cada una.")
-                st.success(f"✅ Guardado: {_rows_ok} fecha(s) de delivery.")
+                    _msgs.append(("warning", "⚠️ Había fechas repetidas en la tabla (" + ", ".join(sorted(_fechas_repetidas))
+                                  + "): cada fecha es única, se ha guardado la última fila de cada una."))
+                if _borradas:
+                    _msgs.append(("warning", "🗑️ Fechas eliminadas: " + ", ".join(_borradas)))
+                if _protegidas:
+                    _msgs.append(("info", "ℹ️ Fechas conservadas aunque no salían en este editor (añadidas por el CSV u otra pestaña): "
+                                  + ", ".join(_protegidas)))
+                _msgs.append(("success", f"✅ Guardado: {_rows_ok} fecha(s) de delivery."))
+                st.session_state["dlv_msgs"] = _msgs
                 st.rerun()
             except Exception as _e_dlv:
                 st.error(f"Error al guardar: {_e_dlv}")
