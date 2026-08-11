@@ -653,9 +653,11 @@ def panel_extras(sb, ksuf=""):
             g_act = st.checkbox("Grupo activo", value=g.get("activo", True), key=f"eg_act{ksuf}_{gid}")
 
             st.markdown("**Extras de este grupo:**")
+            st.caption("El número de la izquierda es el **orden** en que se muestran en la web (menor = primero). Cambia los números y pulsa 💾 Guardar grupo.")
             for e in ext_g:
                 eid = e["id"]
-                x1, x2, x3, x4 = st.columns([3, 1, 1, 1])
+                x0, x1, x2, x3, x4 = st.columns([0.8, 3, 1, 1, 1])
+                x_ord = x0.number_input("Orden", value=int(e.get("orden") or 0) or 1, min_value=1, step=1, key=f"ex_ord{ksuf}_{eid}", label_visibility="collapsed")
                 x_nom = x1.text_input("Nombre:", value=e["nombre"], key=f"ex_nom{ksuf}_{eid}", label_visibility="collapsed")
                 x_pre = x2.number_input("€", value=float(e.get("precio") or 0), min_value=0.0, step=0.25, format="%.2f", key=f"ex_pre{ksuf}_{eid}", label_visibility="collapsed")
                 x_act = x3.checkbox("Activo", value=e.get("activo", True), key=f"ex_act{ksuf}_{eid}")
@@ -748,6 +750,7 @@ def panel_extras(sb, ksuf=""):
                     sb.table("extras").update({
                         "nombre": st.session_state.get(f"ex_nom{ksuf}_{eid}", e["nombre"]).strip() or e["nombre"],
                         "precio": float(st.session_state.get(f"ex_pre{ksuf}_{eid}", e.get("precio") or 0)),
+                        "orden": int(st.session_state.get(f"ex_ord{ksuf}_{eid}", e.get("orden") or 0) or 1),
                         "activo": bool(st.session_state.get(f"ex_act{ksuf}_{eid}", e.get("activo", True))),
                         "nombre_en": (st.session_state.get(f"ex_en{ksuf}_{eid}") or "").strip() or None,
                         "nombre_ca": (st.session_state.get(f"ex_ca{ksuf}_{eid}") or "").strip() or None,
