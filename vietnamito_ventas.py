@@ -394,6 +394,21 @@ WEEK_COLORS = [
 @st.cache_resource
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def _fuera_horario_estado(cfg):
+    """(activo, hasta_iso) del modo 'pedidos fuera de horario'.
+    Solo cuenta como activo si el flag es true Y su caducidad no ha pasado —
+    el modo se apaga solo 1 hora después de activarse."""
+    import datetime as _dt
+    hasta = (cfg.get("permitir_pedidos_fuera_horario_hasta") or "").strip()
+    ok = False
+    if str(cfg.get("permitir_pedidos_fuera_horario", "false")).lower() in ("true", "1") and hasta:
+        try:
+            ok = _dt.datetime.fromisoformat(hasta) > _dt.datetime.now(_dt.timezone.utc)
+        except Exception:
+            ok = False
+    return ok, hasta
 # ─── Subida de imágenes: hosting (dondominio) primero, Supabase de respaldo ───
 # Convención del proyecto: las imágenes viven en https://vietnamito.es/assets/...
 # (subidas por FTP al hosting). Supabase Storage queda solo como respaldo si el
@@ -4324,19 +4339,30 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 act1, act2 = st.columns(2)
                 new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act") else "false"
                 new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act") else "false"
+                _fh_activo, _fh_hasta = _fuera_horario_estado(cfg)
                 _permitir_fuera_horario = st.checkbox(
-                    "🧪 Permitir pedidos fuera de horario (modo pruebas)",
-                    value=str(cfg.get("permitir_pedidos_fuera_horario", "false")).lower() in ("true", "1"),
+                    "🧪 Permitir pedidos fuera de horario (se apaga solo en 1 h)",
+                    value=_fh_activo,
                     key="cfg_ped_fuera_horario",
-                    help="Desactiva únicamente el bloqueo por horario. No cambia los horarios publicados ni el reposo nocturno de los KDS."
+                    help="Desactiva únicamente el bloqueo por horario durante 1 hora; después se desactiva SOLO. No cambia los horarios publicados ni el reposo nocturno de los KDS."
                 )
                 new_cfg["permitir_pedidos_fuera_horario"] = "true" if _permitir_fuera_horario else "false"
                 if _permitir_fuera_horario:
+                    import datetime as _dt_fh
+                    _fh_nueva = _fh_hasta if (_fh_activo and _fh_hasta) else (_dt_fh.datetime.now(_dt_fh.timezone.utc) + _dt_fh.timedelta(hours=1)).isoformat()
+                    new_cfg["permitir_pedidos_fuera_horario_hasta"] = _fh_nueva
+                    try:
+                        from zoneinfo import ZoneInfo as _ZI_fh
+                        _fh_txt = _dt_fh.datetime.fromisoformat(_fh_nueva).astimezone(_ZI_fh("Europe/Madrid")).strftime("%H:%M")
+                    except Exception:
+                        _fh_txt = "+1 h"
                     st.warning(
                         "⚠️ Modo de pruebas activo: cualquier cliente podrá hacer pedidos, "
                         "también desde los QR de mesa, aunque el local esté cerrado. "
-                        "Desactívalo al terminar las pruebas."
+                        f"Se desactivará SOLO a las {_fh_txt}. Recuerda pulsar 💾 Guardar para que empiece a contar."
                     )
+                else:
+                    new_cfg["permitir_pedidos_fuera_horario_hasta"] = ""
                 st.markdown("##### 📅 Días bloqueados para reservas")
                 st.caption("Selecciona fechas en las que no se pueden hacer reservas (festivos, cierre, etc.)")
                 import json as _json
@@ -4917,19 +4943,30 @@ if df.empty:
             act1, act2 = st.columns(2)
             new_cfg["pedidos_activos"] = "true" if act1.checkbox("Pedidos activos", value=cfg.get("pedidos_activos","true")=="true", key="cfg_ped_act_e") else "false"
             new_cfg["reservas_activas"] = "true" if act2.checkbox("Reservas activas", value=cfg.get("reservas_activas","true")=="true", key="cfg_res_act_e") else "false"
+            _fh_activo, _fh_hasta = _fuera_horario_estado(cfg)
             _permitir_fuera_horario_e = st.checkbox(
-                "🧪 Permitir pedidos fuera de horario (modo pruebas)",
-                value=str(cfg.get("permitir_pedidos_fuera_horario", "false")).lower() in ("true", "1"),
+                "🧪 Permitir pedidos fuera de horario (se apaga solo en 1 h)",
+                value=_fh_activo,
                 key="cfg_ped_fuera_horario_e",
-                help="Desactiva únicamente el bloqueo por horario. No cambia los horarios publicados ni el reposo nocturno de los KDS."
+                help="Desactiva únicamente el bloqueo por horario durante 1 hora; después se desactiva SOLO. No cambia los horarios publicados ni el reposo nocturno de los KDS."
             )
             new_cfg["permitir_pedidos_fuera_horario"] = "true" if _permitir_fuera_horario_e else "false"
             if _permitir_fuera_horario_e:
+                import datetime as _dt_fh
+                _fh_nueva = _fh_hasta if (_fh_activo and _fh_hasta) else (_dt_fh.datetime.now(_dt_fh.timezone.utc) + _dt_fh.timedelta(hours=1)).isoformat()
+                new_cfg["permitir_pedidos_fuera_horario_hasta"] = _fh_nueva
+                try:
+                    from zoneinfo import ZoneInfo as _ZI_fh
+                    _fh_txt = _dt_fh.datetime.fromisoformat(_fh_nueva).astimezone(_ZI_fh("Europe/Madrid")).strftime("%H:%M")
+                except Exception:
+                    _fh_txt = "+1 h"
                 st.warning(
                     "⚠️ Modo de pruebas activo: cualquier cliente podrá hacer pedidos, "
                     "también desde los QR de mesa, aunque el local esté cerrado. "
-                    "Desactívalo al terminar las pruebas."
+                    f"Se desactivará SOLO a las {_fh_txt}. Recuerda pulsar 💾 Guardar para que empiece a contar."
                 )
+            else:
+                new_cfg["permitir_pedidos_fuera_horario_hasta"] = ""
             if st.button("💾 Guardar configuración", key="save_cfg_e", type="primary"):
                 for clave, valor in new_cfg.items():
                     sb9.table("config").upsert({"clave": clave, "valor": valor}).execute()
