@@ -3275,6 +3275,92 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 except Exception as _e_csv:
                     st.error(f"Error procesando el CSV: {_e_csv}")
 
+        # ── Subir CSV de Uber Eats (informe "Sales over time" por día) ──
+        with st.expander("📤 Subir CSV de Uber Eats"):
+            st.caption("Informe **Sales over time** de Uber Eats Manager, con incremento por **día**. "
+                       "Se usa **Start date** como fecha y **Sales** como venta bruta del día. "
+                       "Cada fecha del CSV **machaca el Uber** de esa fecha (el Glovo no se toca); "
+                       "las fechas nuevas se crean. Después puedes seguir editando a mano.")
+            _csv_uber = st.file_uploader("Archivo CSV de Uber Eats", type=["csv"], key="csv_uber_upload")
+            if _csv_uber is not None:
+                import pandas as _pd_ucsv
+                import re as _re_ucsv
+                import datetime as _dt_ucsv
+                try:
+                    _uraw = None
+                    for _sep in [",", ";", "\t"]:
+                        try:
+                            _csv_uber.seek(0)
+                            _utmp = _pd_ucsv.read_csv(_csv_uber, sep=_sep)
+                            if _utmp.shape[1] >= 2:
+                                _uraw = _utmp
+                                break
+                        except Exception:
+                            continue
+                    if _uraw is None:
+                        st.error("No se pudo leer el CSV. Comprueba el formato.")
+                    else:
+                        _ucols = {str(c).strip().lower(): c for c in _uraw.columns}
+                        _ucol_fecha = _ucols.get("start date") or _ucols.get("date") or _ucols.get("fecha")
+                        _ucol_sales = _ucols.get("sales") or _ucols.get("ventas")
+                        if _ucol_fecha is None or _ucol_sales is None:
+                            st.error(f"El CSV debe tener columnas 'Start date' y 'Sales'. Columnas encontradas: {list(_uraw.columns)}")
+                        else:
+                            _uber_por_fecha = {}
+                            _uerrores = 0
+                            _hoy_u = _dt_ucsv.date.today().isoformat()
+                            for _, _ufila in _uraw.iterrows():
+                                _urf = str(_ufila[_ucol_fecha]).strip()
+                                _urs = str(_ufila[_ucol_sales]).strip()
+                                if _urf in ("", "nan", "NaN", "None") or _urs in ("", "nan", "NaN", "None"):
+                                    continue
+                                _um = _re_ucsv.search(r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})", _urf)
+                                _uf_iso = None
+                                if _um:
+                                    try:
+                                        _uf_iso = _pd_ucsv.Timestamp(year=int(_um.group(1)), month=int(_um.group(2)), day=int(_um.group(3))).date().isoformat()
+                                    except Exception:
+                                        _uf_iso = None
+                                _usl = _re_ucsv.sub(r"[^\d,.\-]", "", _urs)
+                                if "," in _usl and "." in _usl:
+                                    _usl = _usl.replace(",", "")
+                                elif "," in _usl:
+                                    _usl = _usl.replace(",", ".")
+                                try:
+                                    _uval = float(_usl)
+                                except Exception:
+                                    _uval = None
+                                if _uf_iso is not None and _uval is not None:
+                                    # El informe puede incluir días futuros del periodo: fuera.
+                                    # (El día de HOY sí entra: si está a medias, mañana lo machacas de nuevo.)
+                                    if _uf_iso > _hoy_u:
+                                        continue
+                                    _uber_por_fecha[_uf_iso] = _uval  # última fila con esa fecha gana
+                                else:
+                                    _uerrores += 1
+                            if not _uber_por_fecha:
+                                st.error("No se pudo interpretar ninguna fila del CSV de Uber Eats. Primeras filas:")
+                                st.dataframe(_uraw.head(5), use_container_width=True)
+                            else:
+                                st.success(f"✅ Leídas {len(_uber_por_fecha)} fecha(s) del CSV" + (f" ({_uerrores} fila(s) ignoradas)" if _uerrores else "") + ".")
+                                st.dataframe(_pd_ucsv.DataFrame([{"Fecha": _f, "Uber Eats €": _v} for _f, _v in sorted(_uber_por_fecha.items(), reverse=True)]), use_container_width=True, hide_index=True)
+                                if st.button("💾 Aplicar CSV a la tabla de Uber Eats", type="primary", key="aplicar_csv_uber"):
+                                    _uexistentes = {str(d["fecha"])[:10]: d for d in (sb0.table("ventas_delivery").select("*").execute().data or [])}
+                                    _un_upd = _un_new = 0
+                                    for _uf_iso, _u_val in _uber_por_fecha.items():
+                                        if _uf_iso in _uexistentes:
+                                            # Machacar solo uber_bruto; respetar glovo_bruto
+                                            sb0.table("ventas_delivery").update({"uber_bruto": _u_val}).eq("fecha", _uf_iso).execute()
+                                            _un_upd += 1
+                                        else:
+                                            sb0.table("ventas_delivery").insert({"fecha": _uf_iso, "glovo_bruto": 0, "uber_bruto": _u_val}).execute()
+                                            _un_new += 1
+                                    st.session_state["dlv_editor_ver"] = st.session_state.get("dlv_editor_ver", 0) + 1
+                                    st.session_state["dlv_msgs"] = [("success", f"✅ CSV de Uber Eats aplicado: {_un_upd} fecha(s) actualizada(s), {_un_new} nueva(s).")]
+                                    st.rerun()
+                except Exception as _e_ucsv:
+                    st.error(f"Error procesando el CSV de Uber Eats: {_e_ucsv}")
+
         # Cargar datos existentes
         _dlv_res = sb0.table("ventas_delivery").select("*").order("fecha", desc=True).execute()
         _dlv_data = _dlv_res.data or []
