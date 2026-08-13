@@ -3509,8 +3509,25 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                            help="Correlativo dentro de la serie. Se guarda el último usado y se propone el siguiente.")
                 _f_fecha = vc3.text_input("Fecha expedición (DD-MM-AAAA)", value=_ahora_mad.strftime("%d-%m-%Y"), key=f"vf_fecha_{_vf_sel}",
                                           help="Verifacti exige que sea la fecha actual.")
-                _f_tipo = vc4.selectbox("Tipo de factura", ["F2 — simplificada (ticket, sin NIF)", "F1 — completa (con NIF del cliente)"], key=f"vf_tipo_{_vf_sel}")
-                _es_f1 = _f_tipo.startswith("F1")
+                _f_tipo = vc4.selectbox("Tipo de factura", [
+                    "F2 — simplificada (ticket, sin NIF)",
+                    "F1 — completa (con NIF del cliente)",
+                    "R5 — rectificativa de simplificada (descuento/corrección de un ticket)",
+                    "R1 — rectificativa de completa (error fundado en derecho)",
+                ], key=f"vf_tipo_{_vf_sel}")
+                _cod_tipo = _f_tipo.split(" ")[0]
+                _es_f1 = _cod_tipo in ("F1", "R1")
+                _es_rect = _cod_tipo.startswith("R")
+                _rect_tipo = None
+                _rect_serie = _rect_num = ""
+                if _es_rect:
+                    st.info("Una rectificativa corrige una factura YA enviada: por **diferencias (I)** las líneas llevan solo "
+                            "la corrección (p. ej. un descuento de 3€ → base −2.73, cuota −0.27, total −3.00, en negativo); "
+                            "por **sustitución (S)** se emite la factura entera corregida indicando los importes sustituidos.")
+                    vr1, vr2, vr3 = st.columns([2, 1, 1])
+                    _rect_tipo = vr1.selectbox("Modo", ["I — por diferencias (lo normal para un descuento)", "S — por sustitución"], key=f"vf_rt_{_vf_sel}").split(" ")[0]
+                    _rect_serie = vr2.text_input("Serie de la factura original", value="TEST", key=f"vf_rs_{_vf_sel}")
+                    _rect_num = vr3.text_input("Nº de la original", value="", key=f"vf_rn_{_vf_sel}")
                 _f_desc = st.text_input("Descripción", value=f"Pedido web #{_vf_sel} — Vietnamito", key=f"vf_desc_{_vf_sel}")
                 _f_nif = _f_nombre = ""
                 if _es_f1:
@@ -3532,7 +3549,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     "serie": _f_serie.strip(),
                     "numero": _f_numero.strip(),
                     "fecha_expedicion": _f_fecha.strip(),
-                    "tipo_factura": "F1" if _es_f1 else "F2",
+                    "tipo_factura": _cod_tipo,
                     "descripcion": _f_desc.strip(),
                     "lineas": [
                         {"base_imponible": str(r["base_imponible"]).strip(),
@@ -3546,6 +3563,11 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 if _es_f1:
                     _payload["nif"] = _f_nif.strip()
                     _payload["nombre"] = _f_nombre.strip()
+                if _es_rect and _rect_tipo:
+                    _payload["tipo_rectificativa"] = _rect_tipo
+                    if _rect_num.strip():
+                        _payload["facturas_rectificadas"] = [{"serie": _rect_serie.strip(), "numero": _rect_num.strip(),
+                                                              "fecha_expedicion": _f_fecha.strip()}]
                 with st.expander("Ver JSON que se enviará"):
                     st.json(_payload)
 
@@ -3585,6 +3607,28 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     except Exception as _e_vf:
                         st.error(f"Error llamando a Verifacti: {_e_vf}")
         else:
+            # ── Anular una factura ya enviada (registro de anulación) ──
+            with st.expander("🗑️ Anular una factura enviada"):
+                st.caption("La anulación VeriFactu no borra nada: genera un registro de anulación encadenado. "
+                           "Indica la serie y número exactos de la factura que enviaste.")
+                va1, va2, va3 = st.columns([1, 1, 2])
+                _an_serie = va1.text_input("Serie", value="TEST", key="vf_an_serie")
+                _an_num = va2.text_input("Número", value="", key="vf_an_num")
+                _an_fecha = va3.text_input("Fecha de expedición de aquella factura (DD-MM-AAAA)", value=_ahora_mad.strftime("%d-%m-%Y"), key="vf_an_fecha")
+                if st.button("🗑️ Anular en Verifacti (TEST)", key="vf_an_btn", disabled=not _vf_key):
+                    try:
+                        _ra = _rq.post("https://api.verifacti.com/verifactu/cancel",
+                                       headers={"Authorization": f"Bearer {_vf_key}", "Content-Type": "application/json"},
+                                       json={"serie": _an_serie.strip(), "numero": _an_num.strip(), "fecha_expedicion": _an_fecha.strip()},
+                                       timeout=30)
+                        (st.success if _ra.status_code == 200 else st.error)(f"Verifacti respondió {_ra.status_code}")
+                        try:
+                            st.json(_ra.json())
+                        except Exception:
+                            st.code(_ra.text[:2000])
+                    except Exception as _e_an:
+                        st.error(f"Error llamando a Verifacti: {_e_an}")
+
             # ── Lista de pedidos de hoy pagados con Stripe ──
             _peds_vf = (sb_vf.table("pedidos").select("id,nombre,total,mesa,pagado,pago_id,pagado_at,estado")
                         .eq("pagado", True).gte("pagado_at", _hoy0_utc.isoformat())
