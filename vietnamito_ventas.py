@@ -2159,10 +2159,11 @@ Asumimos un **25% de coste de producto** (materia prima, ingredientes, envases) 
 Es lo que queda después de pagar a Hacienda, el producto, el personal y los gastos fijos. Si es positivo (verde), el negocio es rentable. Si es negativo (rojo), pierde dinero.
 > 💡 Las barras "Ventas netas" en las gráficas ya tienen descontado el IVA y el coste de producto.
             """)
-        _VISTAS_RENT_OLD = ["📊 Análisis", "📆 Por día", "📅 Por semana", "🏛️ Costes fijos mensuales"]
-        if st.session_state.get("nav_rent") not in _VISTAS_RENT_OLD:
-            st.session_state["nav_rent"] = _VISTAS_RENT_OLD[0]
-        nav_rent = st.radio("Vista", _VISTAS_RENT_OLD,
+        _VISTAS_RENT = ["📆 Por día de la semana", "🕐 Por franja horaria", "📅 Por semana", "🗓️ Por mes", "🏛️ Costes fijos mensuales"]
+        # Si la sesión guarda una vista antigua (📊 Análisis / 📆 Por día), resetear a la primera
+        if st.session_state.get("nav_rent") not in _VISTAS_RENT:
+            st.session_state["nav_rent"] = _VISTAS_RENT[0]
+        nav_rent = st.radio("Vista", _VISTAS_RENT,
                             horizontal=True, key="nav_rent", label_visibility="collapsed")
         # ─── COSTES FIJOS ───
         if nav_rent == "🏛️ Costes fijos mensuales":
@@ -2218,7 +2219,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     else:
                         st.error("Concepto y importe son obligatorios.")
         # ─── POR DÍA ───
-        if nav_rent == "📆 Por día":
+        if nav_rent == "🕐 Por franja horaria":
             st.markdown("#### Rentabilidad por hora")
             st.caption("Selecciona un día concreto o un periodo para ver la rentabilidad agregada por franja horaria.")
             costes_fijos_d = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
@@ -2732,8 +2733,82 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 fig_sem.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                 fig_sem.update_layout(title="Ventas netas vs costes por semana — línea morada: break-even semanal", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
                 st.plotly_chart(fig_sem, use_container_width=True)
-        # ─── ANÁLISIS ───
-        if nav_rent == "📊 Análisis":
+        # ─── POR MES ───
+        if nav_rent == "🗓️ Por mes":
+            st.markdown("#### Evolución mensual del margen")
+            st.caption("Meses naturales. Ventas netas = brutas ÷ 1,10 (IVA) × 75% (coste producto). "
+                       "Personal: turnos configurados de los días con venta. Fijo: importe mensual completo "
+                       "(el mes en curso, prorrateado hasta hoy).")
+            _cf_mes_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
+            _total_cf_mes_m = sum(float(c["importe_sin_iva"]) for c in _cf_mes_data)
+            _turnos_m = sb0.table("turnos").select("*").execute().data or []
+            _emps_m = sb0.table("empleados").select("*").execute().data or []
+            _emp_coste_m = {e["id"]: e["coste_hora"] for e in _emps_m}
+            _coste_dow_m = {}
+            for _tr in _turnos_m:
+                _d = int(_tr["dia_semana"])
+                _coste_dow_m[_d] = _coste_dow_m.get(_d, 0) + _emp_coste_m.get(_tr["empleado_id"], 10) * 0.5
+            _hoy_m = hoy_madrid()
+            _n_meses = st.selectbox("Meses a mostrar:", [3, 6, 12, 24], index=1, key="rent_mes_n")
+            _inicio_m = (pd.Timestamp(_hoy_m).replace(day=1) - pd.DateOffset(months=_n_meses - 1)).date()
+            df_mes = df[(df["fecha"] >= _inicio_m) & (df["fecha"] <= _hoy_m)].copy()
+            if df_mes.empty:
+                st.warning("No hay datos de ventas en ese rango de meses.")
+            else:
+                df_mes["mes"] = pd.to_datetime(df_mes["fecha"]).dt.strftime("%Y-%m")
+                mes_df = df_mes.groupby("mes")["valor"].sum().reset_index()
+                mes_df.columns = ["mes", "ventas_brutas"]
+                mes_df["ventas_netas"] = (mes_df["ventas_brutas"] / 1.10 * 0.75).round(2)
+                _dv = df_mes.groupby("fecha")["valor"].sum()
+                _dias_venta_m = set(_dv[_dv > 0].index)
+                def _coste_personal_mes(mes_str):
+                    return round(sum(_coste_dow_m.get(pd.Timestamp(_f).weekday(), 0)
+                                     for _f in _dias_venta_m if pd.Timestamp(_f).strftime("%Y-%m") == mes_str), 2)
+                mes_df["coste_personal"] = mes_df["mes"].apply(_coste_personal_mes)
+                def _coste_fijo_mes(mes_str):
+                    if _total_cf_mes_m == 0:
+                        return 0
+                    _pm = pd.Timestamp(mes_str + "-01")
+                    if _pm.strftime("%Y-%m") == pd.Timestamp(_hoy_m).strftime("%Y-%m"):
+                        return round(_total_cf_mes_m / _pm.days_in_month * _hoy_m.day, 2)
+                    return round(_total_cf_mes_m, 2)
+                mes_df["coste_fijo"] = mes_df["mes"].apply(_coste_fijo_mes)
+                _dlv_mes_map = cargar_delivery_neto(sb0, df_mes["fecha"].min(), df_mes["fecha"].max())
+                def _delivery_mes(mes_str):
+                    return round(sum(_neto for _f, _neto in _dlv_mes_map.items()
+                                     if pd.Timestamp(_f).strftime("%Y-%m") == mes_str), 2)
+                mes_df["delivery"] = mes_df["mes"].apply(_delivery_mes)
+                mes_df["coste"] = mes_df["coste_personal"] + mes_df["coste_fijo"]
+                mes_df["margen"] = (mes_df["ventas_netas"] + mes_df["delivery"] - mes_df["coste"]).round(2)
+                _MESES_ES = {1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
+                             7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"}
+                def _label_mes(mes_str):
+                    _pm = pd.Timestamp(mes_str + "-01")
+                    _lbl = f"{_MESES_ES[_pm.month]} {_pm.year}"
+                    if _pm.strftime("%Y-%m") == pd.Timestamp(_hoy_m).strftime("%Y-%m"):
+                        _lbl += " ⏳en curso"
+                    return _lbl
+                mes_df["label"] = mes_df["mes"].apply(_label_mes)
+                mes_df = mes_df.sort_values("mes")
+                _mm1, _mm2, _mm3, _mm4 = st.columns(4)
+                _mm1.metric("Ventas brutas", f"€{mes_df['ventas_brutas'].sum():,.2f}")
+                _mm2.metric("Ventas netas", f"€{mes_df['ventas_netas'].sum():,.2f}")
+                _mm3.metric("Costes (personal + fijo)", f"€{mes_df['coste'].sum():,.2f}")
+                _mm4.metric("Margen", f"€{mes_df['margen'].sum():,.2f}")
+                fig_mes = go.Figure()
+                fig_mes.add_trace(go.Bar(x=mes_df["label"], y=mes_df["ventas_netas"], offsetgroup="ventas", name="Ventas netas local", marker_color="rgba(93,202,165,0.6)", marker_line_width=0))
+                if mes_df["delivery"].sum() > 0:
+                    fig_mes.add_trace(go.Bar(x=mes_df["label"], y=mes_df["delivery"], base=mes_df["ventas_netas"], offsetgroup="ventas", name="Delivery (margen neto)", marker_color="rgba(56,138,221,0.75)", marker_line_width=0, hovertemplate="Delivery: €%{y:.2f}<extra></extra>"))
+                fig_mes.add_trace(go.Bar(x=mes_df["label"], y=mes_df["coste_personal"], offsetgroup="personal", name="Coste personal", marker_color="rgba(230,57,70,0.6)", marker_line_width=0))
+                if _total_cf_mes_m > 0:
+                    fig_mes.add_trace(go.Bar(x=mes_df["label"], y=mes_df["coste_fijo"], offsetgroup="fijo", name="Coste fijo", marker_color="rgba(168,162,158,0.6)", marker_line_width=0))
+                fig_mes.add_trace(go.Scatter(x=mes_df["label"], y=mes_df["coste"], name="Break-even mensual (personal + fijo)", mode="lines", line=dict(color="#8B5CF6", width=2, dash="dash"), hovertemplate="Break-even: €%{y:.2f}<extra></extra>"))
+                fig_mes.add_trace(go.Scatter(x=mes_df["label"], y=mes_df["margen"], name="Margen", mode="lines+markers+text", line=dict(color="#F4A261", width=2), marker=dict(size=9, color=["#5DCAA5" if v >= 0 else "#E63946" for v in mes_df["margen"]]), text=[f"€{v:+,.0f}" for v in mes_df["margen"]], textposition="top center", textfont=dict(size=11)))
+                fig_mes.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
+                fig_mes.update_layout(title="Ventas netas vs costes por mes — línea morada: break-even mensual", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
+                st.plotly_chart(fig_mes, use_container_width=True)
+        # ─── POR DÍA DE LA SEMANA (antes "Análisis") ───
+        if nav_rent == "📆 Por día de la semana":
             # Cargar costes fijos para usar en los cálculos
             costes_fijos_data = sb0.table("costes_fijos").select("*").eq("activo", True).execute().data or []
             total_costes_fijos_mes = sum(float(c["importe_sin_iva"]) for c in costes_fijos_data)
