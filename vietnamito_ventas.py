@@ -1786,7 +1786,7 @@ def render_dashboard(df):
     _SECCIONES = [
         "🐱 Chinita-meter",
         "💰 Rentabilidad", "📅 Por día de semana", "🕐 Por franja horaria",
-        "🌡️ Mapa de calor", "📈 Por semana", "🛵 Delivery", "👥 Turnos", "📋 Checklists",
+        "🌡️ Mapa de calor", "📈 Por semana", "🛵 Delivery", "🧾 Pruebas VeriFactu", "👥 Turnos", "📋 Checklists",
         "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
     ]
     nav = st.radio("Sección", _SECCIONES, horizontal=True, key="nav_principal", label_visibility="collapsed")
@@ -3460,6 +3460,150 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 st.rerun()
             except Exception as _e_dlv:
                 st.error(f"Error al guardar: {_e_dlv}")
+
+    if nav == "🧾 Pruebas VeriFactu":
+        sb_vf = get_supabase()
+        st.markdown("#### 🧾 Pruebas VeriFactu — Verifacti · entorno TEST")
+        st.caption("Pedidos de **hoy** pagados con **Stripe**. «Generar factura» prepara el registro de Verifacti "
+                   "con los datos del pedido, lo puedes editar y enviarlo al entorno de PRUEBAS. Nada de esto toca producción.")
+
+        # API key desde secrets: [verifacti] api_key = "vf_test_…"
+        _vf_key = ""
+        try:
+            _vf_key = st.secrets["verifacti"]["api_key"]
+        except Exception:
+            pass
+        if not _vf_key:
+            st.error('Falta la API key de Verifacti. En Streamlit Cloud → Settings → Secrets añade:\n\n```\n[verifacti]\napi_key = "vf_test_…"\n```')
+
+        import datetime as _dt_vf
+        from zoneinfo import ZoneInfo as _ZI_vf
+        _tz_mad = _ZI_vf("Europe/Madrid")
+        _ahora_mad = _dt_vf.datetime.now(_tz_mad)
+        _hoy0_utc = _ahora_mad.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(_dt_vf.timezone.utc)
+
+        # ── Pantalla de factura (si hay un pedido seleccionado) ──
+        _vf_sel = st.session_state.get("vf_sel")
+        if _vf_sel:
+            _pvf = (sb_vf.table("pedidos").select("*").eq("id", _vf_sel).execute().data or [None])[0]
+            if not _pvf:
+                st.error(f"Pedido #{_vf_sel} no encontrado.")
+                st.session_state.pop("vf_sel", None)
+            else:
+                if st.button("← Volver a la lista", key="vf_volver"):
+                    st.session_state.pop("vf_sel", None)
+                    st.rerun()
+                _items_vf = sb_vf.table("pedido_items").select("*").eq("pedido_id", _vf_sel).execute().data or []
+                _total_vf = float(_pvf.get("total") or 0)
+                st.markdown(f"##### Factura de prueba para el pedido **#{_vf_sel}** · {_pvf.get('nombre','')} · €{_total_vf:.2f}")
+                st.caption("Artículos: " + " · ".join(f"{i['cantidad']}× {i['nombre_producto']}" for i in _items_vf))
+
+                # Serie+número identifican la factura de forma ÚNICA (por eso Verifacti
+                # rechaza repetirlos). El número se autoincrementa desde config.
+                _cfg_num = (sb_vf.table("config").select("valor").eq("clave", "vf_test_ultimo_numero").execute().data or [])
+                _ultimo_num = int(_cfg_num[0]["valor"]) if _cfg_num and str(_cfg_num[0].get("valor") or "").isdigit() else 0
+
+                vc1, vc2, vc3, vc4 = st.columns([1, 1, 2, 2])
+                _f_serie = vc1.text_input("Serie", value="TEST", key=f"vf_serie_{_vf_sel}")
+                _f_numero = vc2.text_input("Número", value=str(_ultimo_num + 1), key=f"vf_num_{_vf_sel}",
+                                           help="Correlativo dentro de la serie. Se guarda el último usado y se propone el siguiente.")
+                _f_fecha = vc3.text_input("Fecha expedición (DD-MM-AAAA)", value=_ahora_mad.strftime("%d-%m-%Y"), key=f"vf_fecha_{_vf_sel}",
+                                          help="Verifacti exige que sea la fecha actual.")
+                _f_tipo = vc4.selectbox("Tipo de factura", ["F2 — simplificada (ticket, sin NIF)", "F1 — completa (con NIF del cliente)"], key=f"vf_tipo_{_vf_sel}")
+                _es_f1 = _f_tipo.startswith("F1")
+                _f_desc = st.text_input("Descripción", value=f"Pedido web #{_vf_sel} — Vietnamito", key=f"vf_desc_{_vf_sel}")
+                _f_nif = _f_nombre = ""
+                if _es_f1:
+                    vn1, vn2 = st.columns(2)
+                    _f_nif = vn1.text_input("NIF del cliente", value="", key=f"vf_nif_{_vf_sel}")
+                    _f_nombre = vn2.text_input("Nombre / razón social del cliente", value=str(_pvf.get("nombre") or ""), key=f"vf_nom_{_vf_sel}")
+
+                # Líneas: por defecto una sola con IVA 10% incluido en el total
+                _base_def = round(_total_vf / 1.10, 2)
+                _cuota_def = round(_total_vf - _base_def, 2)
+                st.markdown("**Líneas** (base + cuota deben sumar el importe total):")
+                _df_lineas = st.data_editor(
+                    pd.DataFrame([{"base_imponible": f"{_base_def:.2f}", "tipo_impositivo": "10", "cuota_repercutida": f"{_cuota_def:.2f}"}]),
+                    num_rows="dynamic", use_container_width=True, key=f"vf_lineas_{_vf_sel}",
+                )
+                _f_total = st.text_input("Importe total", value=f"{_total_vf:.2f}", key=f"vf_total_{_vf_sel}")
+
+                _payload = {
+                    "serie": _f_serie.strip(),
+                    "numero": _f_numero.strip(),
+                    "fecha_expedicion": _f_fecha.strip(),
+                    "tipo_factura": "F1" if _es_f1 else "F2",
+                    "descripcion": _f_desc.strip(),
+                    "lineas": [
+                        {"base_imponible": str(r["base_imponible"]).strip(),
+                         "tipo_impositivo": str(r["tipo_impositivo"]).strip(),
+                         "cuota_repercutida": str(r["cuota_repercutida"]).strip()}
+                        for _, r in _df_lineas.iterrows()
+                        if str(r.get("base_imponible") or "").strip() not in ("", "nan")
+                    ],
+                    "importe_total": _f_total.strip(),
+                }
+                if _es_f1:
+                    _payload["nif"] = _f_nif.strip()
+                    _payload["nombre"] = _f_nombre.strip()
+                with st.expander("Ver JSON que se enviará"):
+                    st.json(_payload)
+
+                # Aviso de descuadre antes de enviar (Verifacti lo validará igualmente)
+                try:
+                    _suma = sum(float(l["base_imponible"]) + float(l.get("cuota_repercutida") or 0) for l in _payload["lineas"])
+                    if abs(_suma - float(_f_total)) > 0.01:
+                        st.warning(f"⚠️ Las líneas suman €{_suma:.2f} pero el total dice €{float(_f_total):.2f} — Verifacti lo rechazará.")
+                except Exception:
+                    pass
+
+                if st.button("🚀 ENVIAR a Verifacti (TEST)", type="primary", key=f"vf_enviar_{_vf_sel}", disabled=not _vf_key):
+                    try:
+                        _resp = _rq.post(
+                            "https://api.verifacti.com/verifactu/create",
+                            headers={"Authorization": f"Bearer {_vf_key}", "Content-Type": "application/json"},
+                            json=_payload, timeout=30,
+                        )
+                        _rj = None
+                        try:
+                            _rj = _resp.json()
+                        except Exception:
+                            pass
+                        if _resp.status_code == 200:
+                            st.success(f"✅ Aceptada por Verifacti (encolada). Serie {_payload['serie']} · nº {_payload['numero']}")
+                            # Guardar el último número usado para proponer el siguiente
+                            if _payload["numero"].isdigit():
+                                sb_vf.table("config").upsert({"clave": "vf_test_ultimo_numero", "valor": _payload["numero"]}).execute()
+                            if isinstance(_rj, dict) and _rj.get("url"):
+                                st.markdown(f"🔗 [URL de verificación (QR)]({_rj['url']})")
+                        else:
+                            st.error(f"❌ Verifacti respondió {_resp.status_code}")
+                        if _rj is not None:
+                            st.json(_rj)
+                        else:
+                            st.code(_resp.text[:2000])
+                    except Exception as _e_vf:
+                        st.error(f"Error llamando a Verifacti: {_e_vf}")
+        else:
+            # ── Lista de pedidos de hoy pagados con Stripe ──
+            _peds_vf = (sb_vf.table("pedidos").select("id,nombre,total,mesa,pagado,pago_id,pagado_at,estado")
+                        .eq("pagado", True).gte("pagado_at", _hoy0_utc.isoformat())
+                        .order("pagado_at", desc=True).execute().data or [])
+            _peds_vf = [p for p in _peds_vf if str(p.get("pago_id") or "") not in ("", "caja")]
+            if not _peds_vf:
+                st.info("Hoy no hay pedidos pagados con Stripe todavía.")
+            for _p in _peds_vf:
+                _hora_p = ""
+                try:
+                    _hora_p = _dt_vf.datetime.fromisoformat(str(_p["pagado_at"]).replace("Z", "+00:00")).astimezone(_tz_mad).strftime("%H:%M")
+                except Exception:
+                    pass
+                c1, c2 = st.columns([5, 1])
+                _donde = f"🪑 Mesa {_p['mesa']}" if _p.get("mesa") else "🥡 Recogida"
+                c1.markdown(f"**#{_p['id']}** · {_hora_p} · {_p.get('nombre','—')} · {_donde} · **€{float(_p.get('total') or 0):.2f}** · 💳 Stripe")
+                if c2.button("🧾 Generar factura", key=f"vf_gen_{_p['id']}"):
+                    st.session_state["vf_sel"] = _p["id"]
+                    st.rerun()
 
     if nav == "👥 Turnos":
         @st.fragment
