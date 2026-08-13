@@ -1780,6 +1780,20 @@ def render_dashboard(df):
         if res_pend > 0:
             avisos.append(f"🍽️ {res_pend} reserva{'s' if res_pend != 1 else ''} pendiente{'s' if res_pend != 1 else ''}")
         aviso_slot.error("🔴 " + " · ".join(avisos))
+    # ── Auto-sincronización de ventas Stripe al abrir el dashboard ──
+    # El webhook las vuelca en tiempo real (mejor esfuerzo); esto garantiza el
+    # cuadre al abrir el BO: rellena huecos y corrige filas mal escritas.
+    # Es idempotente (upsert por fecha+id_ticket) y corre UNA vez por sesión.
+    # Nunca debe bloquear el dashboard: si falla, el botón manual sigue ahí.
+    if not st.session_state.get("_stripe_sync_auto"):
+        st.session_state["_stripe_sync_auto"] = True
+        try:
+            _n_auto, _tot_auto = sincronizar_ventas_stripe(get_supabase())
+            if _n_auto:
+                load_from_supabase.clear()
+                st.toast(f"💳 Ventas Stripe sincronizadas al abrir: {_n_auto} (€{_tot_auto:,.2f} bruto)")
+        except Exception:
+            pass
     # Navegación principal con estado REAL (st.radio + key en session_state):
     # a diferencia de st.tabs, la sección activa NUNCA se resetea por re-runs
     # ni cambios estructurales. Además solo se renderiza la sección activa (más rápido).
