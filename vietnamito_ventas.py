@@ -397,16 +397,24 @@ def get_supabase():
 
 
 def _turnos_de_dow_en(turnos_all, dow, f_iso):
-    """Turnos de un día de la semana vigentes en una fecha ISO: la versión con
-    vigente_desde más reciente que no supere esa fecha. Filas sin columna
-    (anteriores a la migración) cuentan como 'desde siempre'."""
+    """Turnos de un día de la semana vigentes en una fecha ISO concreta.
+    Cada versión tiene vigente_desde y opcionalmente vigente_hasta (inclusive,
+    NULL = indefinido). Rige la versión con vigente_desde MÁS RECIENTE entre
+    las que CUBREN la fecha — así una versión acotada hace sombra a la
+    anterior solo dentro de su periodo, y al terminar reaparece la de antes.
+    Filas sin columnas (pre-migración) cuentan como 'desde siempre, sin fin'."""
+    def _d(t): return str(t.get("vigente_desde") or "2000-01-01")[:10]
+    def _h(t):
+        h = t.get("vigente_hasta")
+        return str(h)[:10] if h else None
     filas = [t for t in turnos_all
              if int(t["dia_semana"]) == int(dow)
-             and str(t.get("vigente_desde") or "2000-01-01")[:10] <= f_iso]
+             and _d(t) <= f_iso
+             and (_h(t) is None or f_iso <= _h(t))]
     if not filas:
         return []
-    vmax = max(str(t.get("vigente_desde") or "2000-01-01")[:10] for t in filas)
-    return [t for t in filas if str(t.get("vigente_desde") or "2000-01-01")[:10] == vmax]
+    vmax = max(_d(t) for t in filas)
+    return [t for t in filas if _d(t) == vmax]
 
 
 def turnos_vigentes_fecha(turnos_all, fecha):
@@ -3545,8 +3553,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             st.markdown("#### Guardar cambios en turnos")
             st.caption("Cambia los turnos en cualquier día y pulsa el botón. Solo se versionan los días que CAMBIAN: "
                        "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad.")
-            _cv1, _cv2 = st.columns([1, 2])
+            _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
             fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
+            fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
+                                           help="Déjalo vacío para que rija hasta que guardes una versión posterior. "
+                                                "Con fecha de fin (incluida), al terminar VUELVEN SOLOS los turnos de antes — "
+                                                "ideal para vacaciones o semanas especiales.")
             corregir_pasado = _cv2.checkbox(
                 "✏️ Corregir la versión actual (reescribe también el pasado que usaba esta versión)",
                 value=False, key="turnos_corregir",
@@ -3555,6 +3567,9 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             )
             col_save_t, _ = st.columns([2, 4])
             if col_save_t.button("💾 Guardar TODOS los turnos", key="save_all_turnos", type="primary", use_container_width=True):
+                if fecha_fin_v and fecha_fin_v < fecha_vigor:
+                    st.error("La fecha de fin no puede ser anterior a la de inicio.")
+                    st.stop()
                 total_insertados = 0
                 dias_versionados = []
                 for dow, edited in ediciones_por_dow.items():
@@ -3575,21 +3590,46 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         continue
                     if corregir_pasado and actual:
                         _vig_ins = str(actual[0].get("vigente_desde") or "2000-01-01")[:10]
+                        _fin_raw = actual[0].get("vigente_hasta")
+                        _fin_ins = str(_fin_raw)[:10] if _fin_raw else None
                     else:
                         _vig_ins = fecha_vigor.isoformat()
+                        _fin_ins = fecha_fin_v.isoformat() if fecha_fin_v else None
                     sb.table("turnos").delete().eq("dia_semana", dow).eq("vigente_desde", _vig_ins).execute()
-                    to_insert = [{"empleado_id": eid, "dia_semana": dow, "slot": slot, "vigente_desde": _vig_ins}
+                    to_insert = [{"empleado_id": eid, "dia_semana": dow, "slot": slot,
+                                  "vigente_desde": _vig_ins, "vigente_hasta": _fin_ins}
                                  for eid, slot in sorted(nuevo_set, key=lambda x: (str(x[1]), x[0]))]
                     if to_insert:
                         sb.table("turnos").insert(to_insert).execute()
                         total_insertados += len(to_insert)
                     dias_versionados.append(DIAS[dow])
                 if dias_versionados:
-                    _sufijo = " (versión actual corregida)" if corregir_pasado else f" — en vigor desde {fecha_vigor.strftime('%d/%m/%Y')}"
+                    if corregir_pasado:
+                        _sufijo = " (versión actual corregida)"
+                    elif fecha_fin_v:
+                        _sufijo = f" — en vigor del {fecha_vigor.strftime('%d/%m/%Y')} al {fecha_fin_v.strftime('%d/%m/%Y')} (después vuelven los turnos anteriores)"
+                    else:
+                        _sufijo = f" — en vigor desde {fecha_vigor.strftime('%d/%m/%Y')}, sin fecha de fin"
                     st.success(f"✅ Guardado: {', '.join(dias_versionados)} · {total_insertados} slots{_sufijo}")
                     st.rerun()
                 else:
                     st.info("No había cambios que guardar.")
+            with st.expander("📜 Versiones de turnos guardadas (histórico)"):
+                st.caption("Para cada fecha rige la versión con inicio más reciente que la cubra. "
+                           "Una versión acotada tapa a la anterior solo durante su periodo.")
+                _vers_map = {}
+                for _t in _turnos_todos:
+                    _kd = (int(_t["dia_semana"]),
+                           str(_t.get("vigente_desde") or "2000-01-01")[:10],
+                           (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
+                    _vers_map[_kd] = _vers_map.get(_kd, 0) + 1
+                _vers_rows = [{"Día": DIAS[_dw], "Desde": ("(siempre)" if _vd == "2000-01-01" else _vd),
+                               "Hasta": (_vh or "indefinido"), "Slots": _ns}
+                              for (_dw, _vd, _vh), _ns in sorted(_vers_map.items())]
+                if _vers_rows:
+                    st.dataframe(pd.DataFrame(_vers_rows), hide_index=True, use_container_width=True)
+                else:
+                    st.info("Sin turnos guardados todavía.")
             st.divider()
             st.markdown("### Resumen semanal")
             _turnos_all_raw = sb.table("turnos").select("*").execute().data or []
