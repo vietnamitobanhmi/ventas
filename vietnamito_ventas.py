@@ -396,6 +396,32 @@ def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
+def _turnos_de_dow_en(turnos_all, dow, f_iso):
+    """Turnos de un día de la semana vigentes en una fecha ISO: la versión con
+    vigente_desde más reciente que no supere esa fecha. Filas sin columna
+    (anteriores a la migración) cuentan como 'desde siempre'."""
+    filas = [t for t in turnos_all
+             if int(t["dia_semana"]) == int(dow)
+             and str(t.get("vigente_desde") or "2000-01-01")[:10] <= f_iso]
+    if not filas:
+        return []
+    vmax = max(str(t.get("vigente_desde") or "2000-01-01")[:10] for t in filas)
+    return [t for t in filas if str(t.get("vigente_desde") or "2000-01-01")[:10] == vmax]
+
+
+def turnos_vigentes_fecha(turnos_all, fecha):
+    """Turnos aplicables a una fecha concreta (date, Timestamp o 'YYYY-MM-DD')."""
+    import datetime as _dtv
+    f_iso = str(fecha)[:10]
+    dow = _dtv.date.fromisoformat(f_iso).weekday()
+    return _turnos_de_dow_en(turnos_all, dow, f_iso)
+
+
+def coste_personal_fecha(turnos_all, emp_coste, fecha):
+    """Coste de personal de una fecha según la versión de turnos vigente ESE día."""
+    return sum(emp_coste.get(t["empleado_id"], 10) * 0.5 for t in turnos_vigentes_fecha(turnos_all, fecha))
+
+
 def _fuera_horario_estado(cfg):
     """(activo, hasta_iso) del modo 'pedidos fuera de horario'.
     Solo cuenta como activo si el flag es true Y su caducidad no ha pasado —
@@ -1799,10 +1825,12 @@ def render_dashboard(df):
     # ni cambios estructurales. Además solo se renderiza la sección activa (más rápido).
     _SECCIONES = [
         "🐱 Chinita-meter",
-        "💰 Rentabilidad", "📅 Por día de semana", "🕐 Por franja horaria",
-        "🌡️ Mapa de calor", "📈 Por semana", "🛵 Delivery", "🧾 Pruebas VeriFactu", "👥 Turnos", "📋 Checklists",
-        "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
+        "💰 Rentabilidad", "📅 Por día de semana", "🛵 Delivery", "🧾 Pruebas VeriFactu",
+        "👥 Personal", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
     ]
+    # Secciones retiradas o agrupadas: si la sesión guarda una vieja, volver a la primera
+    if st.session_state.get("nav_principal") not in _SECCIONES:
+        st.session_state["nav_principal"] = _SECCIONES[0]
     nav = st.radio("Sección", _SECCIONES, horizontal=True, key="nav_principal", label_visibility="collapsed")
     st.markdown("")
     # ── TAB: Chinita-meter ──────────────────────────────────
@@ -1895,8 +1923,9 @@ def render_dashboard(df):
                 _frac_chi = 1.0  # día pasado, sin horario configurado, o fuera de fecha → jornada completa
             # ── Personal: solo turnos cuyo slot YA ha ocurrido (si es hoy en curso) ──
             _coste_personal_hoy = 0
-            for _tr in _turnos_chi:
-                if int(_tr["dia_semana"]) == _dow_hoy:
+            # Versión de turnos vigente en la FECHA mostrada (no siempre la actual)
+            for _tr in turnos_vigentes_fecha(_turnos_chi, _hoy_chi):
+                if True:
                     _slot_ok = True
                     if _es_hoy_real:
                         try:
@@ -2291,9 +2320,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     coste_personal_total = 0
                     for fd in dias_con_ventas:
                         dow_d = pd.Timestamp(fd).weekday()
-                        for tr in turnos_data_d:
-                            if int(tr["dia_semana"]) != dow_d:
-                                continue
+                        for tr in turnos_vigentes_fecha(turnos_data_d, str(fd)[:10]):
                             h = int(tr["slot"].split(":")[0])
                             c = emp_coste_d.get(tr["empleado_id"], 10) * 0.5
                             coste_personal_hora_total[h] = coste_personal_hora_total.get(h, 0) + c
@@ -2310,9 +2337,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             # Repartir el coste fijo del día entre las horas con staff de ese día concreto
                             dow_d = pd.Timestamp(fd).weekday()
                             horas_staff_dia = set()
-                            for tr in turnos_data_d:
-                                if int(tr["dia_semana"]) == dow_d:
-                                    horas_staff_dia.add(int(tr["slot"].split(":")[0]))
+                            for tr in turnos_vigentes_fecha(turnos_data_d, str(fd)[:10]):
+                                horas_staff_dia.add(int(tr["slot"].split(":")[0]))
                             if horas_staff_dia:
                                 cf_por_hora_dia = cf_dia / len(horas_staff_dia)
                                 for h in horas_staff_dia:
@@ -2429,9 +2455,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             if total_cf_mes_d > 0:
                                 dow_data[dow_d]["cf"] += total_cf_mes_d / pd.Timestamp(fd).days_in_month
                             # Coste personal de ese día por franja
-                            for tr in turnos_data_d:
-                                if int(tr["dia_semana"]) != dow_d:
-                                    continue
+                            for tr in turnos_vigentes_fecha(turnos_data_d, str(fd)[:10]):
                                 h = int(tr["slot"].split(":")[0])
                                 c = emp_coste_d.get(tr["empleado_id"], 10) * 0.5
                                 if 9 <= h <= 17:
@@ -2684,7 +2708,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         if _fd > _fin_sem:
                             break
                         if df_sem[df_sem["fecha"] == _fd]["valor"].sum() > 0:
-                            _tot += _coste_dow_sem.get(_dd, 0)
+                            _tot += coste_personal_fecha(_turnos_sem, _emp_coste_sem, _fd)
                     return round(_tot, 2)
                 sem_df["coste_personal"] = sem_df["semana"].apply(_coste_personal_semana)
                 def _coste_fijo_semana(sem_str):
@@ -2768,7 +2792,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 _dv = df_mes.groupby("fecha")["valor"].sum()
                 _dias_venta_m = set(_dv[_dv > 0].index)
                 def _coste_personal_mes(mes_str):
-                    return round(sum(_coste_dow_m.get(pd.Timestamp(_f).weekday(), 0)
+                    return round(sum(coste_personal_fecha(_turnos_m, _emp_coste_m, _f)
                                      for _f in _dias_venta_m if pd.Timestamp(_f).strftime("%Y-%m") == mes_str), 2)
                 mes_df["coste_personal"] = mes_df["mes"].apply(_coste_personal_mes)
                 def _coste_fijo_mes(mes_str):
@@ -2867,136 +2891,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             height=480, margin=dict(t=50, b=100),
         )
         st.plotly_chart(fig_evo, use_container_width=True)
-    if nav == "🕐 Por franja horaria":
-        import datetime as dt_franja
-        fecha_min_data = df["fecha"].min()
-        fecha_max_data = df["fecha"].max()
-        today = hoy_madrid()
-        opciones = ["Todos los días"] + [DIAS[d] for d in DIAS_ORDER]
-        seleccion = st.selectbox("Día de la semana:", opciones, key="sel_franja")
-        fc2, fc3 = st.columns(2)
-        fecha_desde = fc2.date_input("Desde:", value=fecha_min_data, min_value=fecha_min_data, max_value=fecha_max_data, key="f_desde")
-        fecha_hasta = fc3.date_input("Hasta:", value=min(today, fecha_max_data), min_value=fecha_min_data, max_value=fecha_max_data, key="f_hasta")
-        df_f = df.copy()
-        df_f["fecha_ts"] = pd.to_datetime(df_f["fecha"])
-        df_f["dow_label"] = df_f["fecha_ts"].dt.weekday.map(DIAS)
-        df_f = df_f[(df_f["fecha"] >= fecha_desde) & (df_f["fecha"] <= fecha_hasta)]
-        if seleccion != "Todos los días":
-            df_f = df_f[df_f["dow_label"] == seleccion]
-        if df_f.empty:
-            st.warning("No hay datos para ese filtro.")
-        else:
-            n_inst = df_f["fecha"].nunique()
-            titulo_sel = seleccion if seleccion != "Todos los días" else "todos los días"
-            st.caption(f"{n_inst} instancias de {titulo_sel} con datos · {fecha_desde.strftime('%d/%m/%Y')} – {fecha_hasta.strftime('%d/%m/%Y')}")
-            dia_hora_global = df.groupby(["fecha", "hora"])["valor"].sum()
-            ymax_global = dia_hora_global.max() * 1.15
-            sb_t2 = get_supabase()
-            turnos_t2 = sb_t2.table("turnos").select("*").execute().data or []
-            empleados_t2 = sb_t2.table("empleados").select("*").execute().data or []
-            dow_filter_t2 = None
-            if seleccion != "Todos los días":
-                dow_filter_t2 = [d for d in DIAS_ORDER if DIAS[d] == seleccion][0]
-            boxplot_horario(df_f, f"Distribución de ventas por franja horaria — {titulo_sel} — ventas brutas (con IVA)",
-                ymax=ymax_global, turnos_data=turnos_t2, empleados_data=empleados_t2, dow_filter=dow_filter_t2)
-    if nav == "🌡️ Mapa de calor":
-        hm = calcular_heatmap(df)
-        pivot = hm.pivot(index="dow", columns="hora", values="avg").reindex(DIAS_ORDER)
-        pivot.index = [DIAS[d] for d in DIAS_ORDER]
-        pivot.columns = [f"{h}:00" for h in pivot.columns]
-        fig3 = px.imshow(
-            pivot, color_continuous_scale=[[0, "#E1F5EE"], [0.5, "#1D9E75"], [1, "#04342C"]],
-            aspect="auto", text_auto=".0f", labels={"color": "€ promedio (con IVA)"},
-        )
-        fig3.update_layout(
-            title="Venta media por día y franja horaria — ventas brutas (con IVA)",
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            height=350, margin=dict(t=50, b=20), xaxis_title="Hora", yaxis_title="",
-        )
-        fig3.update_traces(textfont_size=11)
-        st.plotly_chart(fig3, use_container_width=True)
-    if nav == "📈 Por semana":
-        semana_dow, semana_labels = calcular_por_semana(df)
-        semanas_sorted = sorted(semana_labels.keys())
-        labels_sorted = [semana_labels[s] for s in semanas_sorted]
-        st.markdown("**Selecciona las semanas a mostrar:**")
-        cols = st.columns(min(len(semanas_sorted), 4))
-        seleccionadas = []
-        for i, (s, lbl) in enumerate(zip(semanas_sorted, labels_sorted)):
-            col = cols[i % len(cols)]
-            color_sem = WEEK_COLORS[i % len(WEEK_COLORS)]
-            c_icon, c_check = col.columns([1, 6])
-            c_icon.markdown(f'<div style="width:18px;height:18px;background:{color_sem};border-radius:3px;margin-top:6px;"></div>', unsafe_allow_html=True)
-            if c_check.checkbox(lbl, value=True, key=f"semana_{s}"):
-                seleccionadas.append(s)
-        if not seleccionadas:
-            st.warning("Selecciona al menos una semana.")
-        else:
-            fig4 = go.Figure()
-            for i, s in enumerate(semanas_sorted):
-                if s not in seleccionadas:
-                    continue
-                color = WEEK_COLORS[i % len(WEEK_COLORS)]
-                datos = semana_dow[semana_dow["semana"] == s].set_index("dow")
-                vals = [round(datos.loc[d, "valor"], 2) if d in datos.index else None for d in DIAS_ORDER]
-                fig4.add_trace(go.Scatter(
-                    x=[DIAS[d] for d in DIAS_ORDER], y=vals, mode="lines+markers",
-                    name=semana_labels[s], line=dict(color=color, width=2),
-                    marker=dict(size=7, color=color), connectgaps=False,
-                ))
-            fig4.update_layout(
-                title="Ventas por día de semana — comparativa semanal — ventas brutas (con IVA)",
-                yaxis_title="€ brutas (con IVA)", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False, range=[0, 1200]),
-                xaxis=dict(showgrid=False),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left", x=0),
-                height=480, margin=dict(t=50, b=120),
-            )
-            st.plotly_chart(fig4, use_container_width=True)
-            df2 = df.copy()
-            df2["fecha_ts"] = pd.to_datetime(df2["fecha"])
-            df2["lunes"] = df2["fecha_ts"] - pd.to_timedelta(df2["fecha_ts"].dt.weekday, unit="D")
-            df2["semana"] = df2["lunes"].dt.strftime("%Y-%m-%d")
-            avg_semana = df2.groupby("semana").agg(total=("valor","sum"), franjas=("valor","count")).reset_index()
-            avg_semana["avg_franja"] = (avg_semana["total"] / avg_semana["franjas"]).round(2)
-            avg_semana = avg_semana[avg_semana["semana"].isin(semanas_sorted)]
-            avg_semana["label"] = avg_semana["semana"].map(semana_labels)
-            avg_semana = avg_semana.sort_values("semana")
-            fig5 = go.Figure(go.Scatter(
-                x=avg_semana["label"], y=avg_semana["avg_franja"],
-                mode="lines+markers+text", line=dict(color="#5DCAA5", width=2),
-                marker=dict(size=8, color="#5DCAA5"),
-                text=[f"€{v:.2f}" for v in avg_semana["avg_franja"]],
-                textposition="top center", textfont=dict(size=11),
-            ))
-            fig5.update_layout(
-                title="Evolución del promedio de ventas por franja horaria trabajada — ventas brutas (con IVA)",
-                yaxis_title="€ promedio/franja (con IVA)", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                xaxis=dict(showgrid=False, tickangle=-30),
-                showlegend=False, height=350, margin=dict(t=50, b=80),
-            )
-            st.plotly_chart(fig5, use_container_width=True)
-            total_semana = df2.groupby("semana")["valor"].sum().reset_index()
-            total_semana = total_semana[total_semana["semana"].isin(semanas_sorted)]
-            total_semana["label"] = total_semana["semana"].map(semana_labels)
-            total_semana = total_semana.sort_values("semana")
-            bar_colors = [WEEK_COLORS[semanas_sorted.index(s) % len(WEEK_COLORS)] for s in total_semana["semana"]]
-            fig6 = go.Figure(go.Bar(
-                x=total_semana["label"], y=total_semana["valor"].round(2),
-                marker_color=bar_colors, marker_line_width=0,
-                text=[f"€{v:.2f}" for v in total_semana["valor"]], textposition="outside",
-            ))
-            fig6.update_layout(
-                title="Total de ventas por semana — ventas brutas (con IVA)",
-                yaxis_title="€ total (con IVA)", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-                xaxis=dict(showgrid=False, tickangle=-30),
-                showlegend=False, height=380, margin=dict(t=50, b=80),
-            )
-            st.plotly_chart(fig6, use_container_width=True)
-
-    # ── TAB: Delivery (Glovo / Uber Eats) ──────────────────────
     if nav == "🛵 Delivery":
         sb0 = get_supabase()
         st.markdown("#### 🛵 Ventas de delivery (Glovo / Uber Eats)")
@@ -3500,7 +3394,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.session_state["vf_sel"] = _p["id"]
                     st.rerun()
 
-    if nav == "👥 Turnos":
+    _nav_pers = None
+    if nav == "👥 Personal":
+        _nav_pers = st.radio("Vista de personal", ["👥 Turnos", "📋 Checklists"],
+                             horizontal=True, key="nav_personal", label_visibility="collapsed")
+        st.markdown("")
+    if _nav_pers == "👥 Turnos":
         @st.fragment
         def _frag_seccion_1():
             import datetime as dt_mod
@@ -3569,6 +3468,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             emp_ids = [e["id"] for e in empleados]
             emp_nombres = {e["id"]: e["nombre"] for e in empleados}
             emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
+            _hoy_iso_t = hoy_madrid().isoformat()
             with st.expander("📋 Copiar turnos de un día a otro"):
                 cc1, cc2, cc3 = st.columns([2, 3, 1])
                 dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
@@ -3580,23 +3480,28 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     else:
                         dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
                         turnos_res_copy = sb.table("turnos").select("*").execute()
-                        turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in (turnos_res_copy.data or []) if int(tr["dia_semana"]) == dow_origen]
+                        turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in _turnos_de_dow_en(turnos_res_copy.data or [], dow_origen, _hoy_iso_t)]
                         if not turnos_origen:
                             st.warning(f"El día {dia_origen} no tiene turnos configurados.")
                         else:
                             for dia_dest_label in dias_destino_sel:
                                 dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
-                                sb.table("turnos").delete().eq("dia_semana", dow_dest).execute()
+                                # Versión nueva del día destino EN VIGOR DESDE HOY (el histórico no se toca)
+                                sb.table("turnos").delete().eq("dia_semana", dow_dest).eq("vigente_desde", _hoy_iso_t).execute()
                                 sb.table("turnos").insert([
-                                    {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot}
+                                    {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot, "vigente_desde": _hoy_iso_t}
                                     for eid, slot in turnos_origen
                                 ]).execute()
                             st.success(f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
                             st.rerun()
             turnos_res = sb.table("turnos").select("*").execute()
+            _turnos_todos = turnos_res.data or []
+            # El grid muestra la versión VIGENTE HOY de cada día; las versiones
+            # históricas se conservan para las gráficas de rentabilidad
             turnos_set = set()
-            for tr in (turnos_res.data or []):
-                turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
+            for _dow_t in range(7):
+                for tr in _turnos_de_dow_en(_turnos_todos, _dow_t, _hoy_iso_t):
+                    turnos_set.add((tr["empleado_id"], tr["dia_semana"], tr["slot"]))
             dias_tabs = st.tabs([DIAS[d] for d in DIAS_ORDER])
             # Recolectar los edits de cada día para guardar todo de golpe al final
             ediciones_por_dow = {}
@@ -3638,27 +3543,59 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             # ── Botón único de guardar TODOS los turnos ──
             st.divider()
             st.markdown("#### Guardar cambios en turnos")
-            st.caption("Cambia los turnos en cualquier día de la semana. Cuando termines, pulsa el botón para guardar todos los cambios de una vez.")
+            st.caption("Cambia los turnos en cualquier día y pulsa el botón. Solo se versionan los días que CAMBIAN: "
+                       "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad.")
+            _cv1, _cv2 = st.columns([1, 2])
+            fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
+            corregir_pasado = _cv2.checkbox(
+                "✏️ Corregir la versión actual (reescribe también el pasado que usaba esta versión)",
+                value=False, key="turnos_corregir",
+                help="Para arreglar un ERROR de configuración (turnos que siempre estuvieron mal). "
+                     "Sin marcar, el cambio solo afecta desde la fecha elegida en adelante."
+            )
             col_save_t, _ = st.columns([2, 4])
             if col_save_t.button("💾 Guardar TODOS los turnos", key="save_all_turnos", type="primary", use_container_width=True):
                 total_insertados = 0
+                dias_versionados = []
                 for dow, edited in ediciones_por_dow.items():
-                    sb.table("turnos").delete().eq("dia_semana", dow).execute()
-                    to_insert = []
+                    nuevo_set = set()
                     for _, row in edited.iterrows():
                         slot = row["Hora"]
                         for eid in emp_ids:
                             col_name = emp_nombres.get(eid, f"Emp {eid}")
                             if row.get(col_name, False):
-                                to_insert.append({"empleado_id": eid, "dia_semana": dow, "slot": slot})
+                                nuevo_set.add((eid, slot))
+                    actual = _turnos_de_dow_en(_turnos_todos, dow, _hoy_iso_t)
+                    actual_set = {(t["empleado_id"], t["slot"]) for t in actual}
+                    if nuevo_set == actual_set:
+                        continue  # este día no cambió → no crear versión nueva
+                    if not nuevo_set and not corregir_pasado:
+                        st.warning(f"⚠️ {DIAS[dow]}: para dejar un día SIN turnos marca «Corregir la versión actual» — "
+                                   "el versionado no puede representar un día vaciado solo a futuro.")
+                        continue
+                    if corregir_pasado and actual:
+                        _vig_ins = str(actual[0].get("vigente_desde") or "2000-01-01")[:10]
+                    else:
+                        _vig_ins = fecha_vigor.isoformat()
+                    sb.table("turnos").delete().eq("dia_semana", dow).eq("vigente_desde", _vig_ins).execute()
+                    to_insert = [{"empleado_id": eid, "dia_semana": dow, "slot": slot, "vigente_desde": _vig_ins}
+                                 for eid, slot in sorted(nuevo_set, key=lambda x: (str(x[1]), x[0]))]
                     if to_insert:
                         sb.table("turnos").insert(to_insert).execute()
                         total_insertados += len(to_insert)
-                st.success(f"✅ {total_insertados} slots guardados en total (toda la semana)")
-                st.rerun()
+                    dias_versionados.append(DIAS[dow])
+                if dias_versionados:
+                    _sufijo = " (versión actual corregida)" if corregir_pasado else f" — en vigor desde {fecha_vigor.strftime('%d/%m/%Y')}"
+                    st.success(f"✅ Guardado: {', '.join(dias_versionados)} · {total_insertados} slots{_sufijo}")
+                    st.rerun()
+                else:
+                    st.info("No había cambios que guardar.")
             st.divider()
             st.markdown("### Resumen semanal")
-            turnos_all = sb.table("turnos").select("*").execute().data or []
+            _turnos_all_raw = sb.table("turnos").select("*").execute().data or []
+            turnos_all = []
+            for _dw in range(7):
+                turnos_all.extend(_turnos_de_dow_en(_turnos_all_raw, _dw, _hoy_iso_t))
             resumen_rows = []
             for emp in empleados:
                 eid = emp["id"]
@@ -3678,7 +3615,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             st.metric("💰 Coste total semanal staff", f"€{total_sem:.2f}", f"€{total_sem * 4.33:.2f} /mes est.")
         _frag_seccion_1()
     # ── TAB 6: Checklists (admin) ────────────────────────────
-    if nav == "📋 Checklists":
+    if _nav_pers == "📋 Checklists":
         @st.fragment
         def _frag_seccion_2():
             sb6 = get_supabase()
@@ -4915,13 +4852,20 @@ if df.empty:
         if _res_pend > 0:
             _avisos.append(f"🍽️ {_res_pend} reserva{'s' if _res_pend != 1 else ''} pendiente{'s' if _res_pend != 1 else ''}")
         _aviso_slot.error("🔴 " + " · ".join(_avisos))
-    _nav = st.radio("Sección", ["👥 Turnos", "📋 Checklists", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS"],
+    _SECC_SD = ["👥 Personal", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS"]
+    if st.session_state.get("nav_sin_datos") not in _SECC_SD:
+        st.session_state["nav_sin_datos"] = _SECC_SD[0]
+    _nav = st.radio("Sección", _SECC_SD,
                     horizontal=True, key="nav_sin_datos", label_visibility="collapsed")
+    _nav_pers2 = None
+    if _nav == "👥 Personal":
+        _nav_pers2 = st.radio("Vista de personal", ["👥 Turnos", "📋 Checklists"],
+                              horizontal=True, key="nav_personal_sd", label_visibility="collapsed")
     # Reutilizar el mismo código de las pestañas del dashboard
     # Para ello creamos un df vacío con las columnas necesarias
     import pandas as _pd2
     _df_empty = _pd2.DataFrame(columns=["fecha","hora","dow","valor","ntrans","items"])
-    if _nav == "👥 Turnos":
+    if _nav_pers2 == "👥 Turnos":
         import datetime as _dt_mod
         sb = _sb0
         emp_res = sb.table("empleados").select("*").order("id").execute()
@@ -4954,7 +4898,7 @@ if df.empty:
                 if nuevo_emp_nombre.strip():
                     sb.table("empleados").insert({"nombre": nuevo_emp_nombre.strip(), "coste_hora": nuevo_emp_coste}).execute()
                     st.success(f"✅ {nuevo_emp_nombre} añadido"); st.rerun()
-    if _nav == "📋 Checklists":
+    if _nav_pers2 == "📋 Checklists":
         sb6 = _sb0
         st.markdown("### Procesos")
         proc_res = sb6.table("procesos").select("*").order("orden").execute()
