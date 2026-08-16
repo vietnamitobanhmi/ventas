@@ -3477,6 +3477,12 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             emp_nombres = {e["id"]: e["nombre"] for e in empleados}
             emp_coste = {e["id"]: e["coste_hora"] for e in empleados}
             _hoy_iso_t = hoy_madrid().isoformat()
+            # El key de los grids lleva versión: tras guardar/copiar/borrar se incrementa
+            # para que el editor se reconstruya con datos FRESCOS y no arrastre estado viejo
+            # (la misma lección que el editor de Delivery).
+            _grid_ver = st.session_state.get("turnos_grid_ver", 0)
+            for _tmsg_tipo, _tmsg_txt in st.session_state.pop("turnos_msgs", []):
+                getattr(st, _tmsg_tipo)(_tmsg_txt)
             with st.expander("📋 Copiar turnos de un día a otro"):
                 cc1, cc2, cc3 = st.columns([2, 3, 1])
                 dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
@@ -3500,7 +3506,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot, "vigente_desde": _hoy_iso_t}
                                     for eid, slot in turnos_origen
                                 ]).execute()
-                            st.success(f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)}")
+                            st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
+                            st.session_state["turnos_msgs"] = [("success",
+                                f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)} "
+                                f"(versión nueva en vigor desde hoy; el histórico de esos días no cambia)")]
                             st.rerun()
             turnos_res = sb.table("turnos").select("*").execute()
             _turnos_todos = turnos_res.data or []
@@ -3527,7 +3536,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     df_grid = df_grid.reset_index()
                     edited = st.data_editor(
                         df_grid,
-                        key=f"grid_{dow}",
+                        key=f"grid_{dow}_v{_grid_ver}",
                         hide_index=True,
                         use_container_width=True,
                         column_config={"Hora": st.column_config.TextColumn("Hora", disabled=True)},
@@ -3553,7 +3562,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             st.markdown("#### Guardar cambios en turnos")
             st.caption("Cambia los turnos en cualquier día y pulsa el botón. Solo se versionan los días que CAMBIAN: "
                        "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad. "
-                       "· ⚙️ turnos-build v2.2")
+                       "· ⚙️ turnos-build v2.3")
             _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
             fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
             fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
@@ -3613,7 +3622,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         _sufijo = f" — en vigor del {fecha_vigor.strftime('%d/%m/%Y')} al {fecha_fin_v.strftime('%d/%m/%Y')} (después vuelven los turnos anteriores)"
                     else:
                         _sufijo = f" — en vigor desde {fecha_vigor.strftime('%d/%m/%Y')}, sin fecha de fin"
-                    st.success(f"✅ Guardado: {', '.join(dias_versionados)} · {total_insertados} slots{_sufijo}")
+                    st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
+                    st.session_state["turnos_msgs"] = [("success", f"✅ Guardado: {', '.join(dias_versionados)} · {total_insertados} slots{_sufijo}")]
                     st.rerun()
                 else:
                     st.info("No había cambios que guardar.")
@@ -3668,7 +3678,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         _idx_v = _opciones_v.index(_sel_v)
                         (_dw_b, _vd_b, _vh_b), _ = _keys_orden[_idx_v]
                         sb.table("turnos").delete().eq("dia_semana", _dw_b).eq("vigente_desde", _vd_b).execute()
-                        st.success(f"Versión borrada: {_sel_v}")
+                        st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
+                        st.session_state["turnos_msgs"] = [("success", f"🗑️ Versión borrada: {_sel_v} — vuelve a regir la anterior en su periodo")]
                         st.rerun()
             st.divider()
             st.markdown("### Resumen semanal")
