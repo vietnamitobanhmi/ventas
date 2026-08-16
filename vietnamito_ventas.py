@@ -1889,128 +1889,74 @@ def render_dashboard(df):
         }
         def _chi_url(nombre):
             return f"{SUPABASE_URL}/storage/v1/object/public/assets/{nombre}.png"
-        # ¿Hay ventas HOY?
-        _df_hoy = df[df["fecha"] == _hoy_chi].copy() if not df.empty else df.iloc[0:0].copy()
+        # ── Cálculo delegado a la Edge Function chinita-margen ──────────
+        # La MISMA función que usa el cmeter público de la tablet: una sola
+        # fuente de verdad. Cualquier cambio de fórmula se hace en la función
+        # (Supabase → Edge Functions → chinita-margen) y ambos lo heredan.
+        try:
+            _cm_pwd = st.secrets["cmeter"]["password"]
+        except Exception:
+            _cm_pwd = None
         _margen_hoy = None
-        if not _df_hoy.empty:
-            # Coste fijo mensual configurado
-            _cf_chi = sb_chi.table("costes_fijos").select("importe_sin_iva").eq("activo", True).execute().data or []
-            _total_cf_mes_chi = sum(float(c["importe_sin_iva"]) for c in _cf_chi)
-            # Turnos y empleados para el coste de personal del día de la semana de HOY
-            _turnos_chi = sb_chi.table("turnos").select("*").execute().data or []
-            _emps_chi = sb_chi.table("empleados").select("*").execute().data or []
-            _emp_coste_chi = {e["id"]: e["coste_hora"] for e in _emps_chi}
-            _dow_hoy = _hoy_chi.weekday()
-            # ── Hora actual (Madrid) y fracción de jornada operativa transcurrida ──
-            from datetime import datetime as _dtchi
-            from zoneinfo import ZoneInfo as _ZIchi
-            _ahora_chi = _dtchi.now(_ZIchi("Europe/Madrid"))
-            _min_ahora_chi = _ahora_chi.hour * 60 + _ahora_chi.minute
-            # Solo prorratear si HOY es el día que se muestra (si miras un día pasado, jornada completa)
-            _es_hoy_real = (_ahora_chi.date() == _hoy_chi)
-            _dias_keys_chi = ["lunes","martes","miercoles","jueves","viernes","sabado","domingo"]
-            _cfg_hor_chi = sb_chi.table("config").select("valor").eq("clave", f"horario_{_dias_keys_chi[_dow_hoy]}").execute().data
-            _horario_str_chi = (_cfg_hor_chi[0]["valor"] if _cfg_hor_chi else "") or ""
-            import re as _rechi
-            _rangos_chi = []
-            for _mh in _rechi.finditer(r"(\d{1,2})[:.]?(\d{0,2})\s*[-–—]\s*(\d{1,2})[:.]?(\d{0,2})", _horario_str_chi):
-                _ini_r = int(_mh.group(1))*60 + int(_mh.group(2) or 0)
-                _fin_r = int(_mh.group(3))*60 + int(_mh.group(4) or 0)
-                if _fin_r > _ini_r:
-                    _rangos_chi.append((_ini_r, _fin_r))
-            _min_totales_chi = sum(_f - _i for _i, _f in _rangos_chi)
-            if _es_hoy_real and _rangos_chi and _min_totales_chi > 0:
-                _min_transc_chi = 0
-                for _i, _f in _rangos_chi:
-                    if _min_ahora_chi >= _f:
-                        _min_transc_chi += (_f - _i)
-                    elif _min_ahora_chi > _i:
-                        _min_transc_chi += (_min_ahora_chi - _i)
-                _frac_chi = min(1.0, max(0.0, _min_transc_chi / _min_totales_chi))
-            else:
-                _frac_chi = 1.0  # día pasado, sin horario configurado, o fuera de fecha → jornada completa
-            # ── Personal: solo turnos cuyo slot YA ha ocurrido (si es hoy en curso) ──
-            _coste_personal_hoy = 0
-            # Versión de turnos vigente en la FECHA mostrada (no siempre la actual)
-            for _tr in turnos_vigentes_fecha(_turnos_chi, _hoy_chi):
-                if True:
-                    _slot_ok = True
-                    if _es_hoy_real:
-                        try:
-                            _h_slot = int(str(_tr["slot"]).split(":")[0])
-                            _m_slot = int(str(_tr["slot"]).split(":")[1]) if ":" in str(_tr["slot"]) else 0
-                            _slot_ok = (_h_slot * 60 + _m_slot) <= _min_ahora_chi
-                        except Exception:
-                            _slot_ok = True
-                    if _slot_ok:
-                        _coste_personal_hoy += _emp_coste_chi.get(_tr["empleado_id"], 10) * 0.5
-            # Coste fijo del día = importe mensual ÷ días del mes, PRORRATEADO por fracción operativa
-            _coste_fijo_dia_completo = (_total_cf_mes_chi / pd.Timestamp(_hoy_chi).days_in_month) if _total_cf_mes_chi > 0 else 0
-            _coste_fijo_hoy = _coste_fijo_dia_completo * _frac_chi
-            # Ventas netas de hoy = brutas ÷ 1,10 × 0,75
-            _ventas_brutas_hoy = _df_hoy["valor"].sum()
-            _ventas_netas_hoy = _ventas_brutas_hoy / 1.10 * 0.75
-            _margen_hoy = _ventas_netas_hoy - _coste_personal_hoy - _coste_fijo_hoy
-            # ── Sumar margen neto de delivery de HOY (Glovo ×0,30 · Uber ×0,40) ──
-            _dlv_neto_hoy = 0
-            _dlv_diag = ""
-            try:
-                _dlv_hoy = sb_chi.table("ventas_delivery").select("glovo_bruto,uber_bruto,fecha").eq("fecha", str(_hoy_chi)).execute().data or []
-                _dlv_neto_hoy = sum(float(d.get("glovo_bruto", 0) or 0) * 0.30 + float(d.get("uber_bruto", 0) or 0) * 0.40 for d in _dlv_hoy)
-                _dlv_diag = f"delivery hoy ({_hoy_chi}): {len(_dlv_hoy)} fila(s), neto €{_dlv_neto_hoy:.2f}"
-            except Exception as _e_dlv_chi:
-                _dlv_diag = f"ERROR leyendo delivery: {_e_dlv_chi}"
-            _margen_hoy += _dlv_neto_hoy
-        # ── ¿Están frescos los datos? ──
-        # Miramos cuándo se insertó la última fila en ventas (última subida de CSV,
-        # sync de Stripe o ingreso manual). Si hace 2h+ que no entra nada, el margen
-        # mostrado puede estar desactualizado y la Chinita no puede opinar con criterio.
-        # OJO: no miramos la última VENTA (podría no haber ninguna legítimamente),
-        # sino la última SUBIDA de datos.
+        _coste_personal_hoy = 0.0
+        _coste_fijo_hoy = 0.0
+        _ventas_netas_hoy = 0.0
+        _ventas_brutas_hoy = 0.0
+        _dlv_neto_hoy = 0.0
+        _datos_obsoletos = False
         _horas_sin_datos = None
         _ultima_subida_txt = "nunca"
-        try:
-            _ult = sb_chi.table("ventas").select("created_at").order("created_at", desc=True).limit(1).execute().data or []
-            if _ult and _ult[0].get("created_at"):
-                _t_ult = pd.Timestamp(_ult[0]["created_at"])
-                if _t_ult.tzinfo is None:
-                    _t_ult = _t_ult.tz_localize("UTC")
-                _ahora_utc = pd.Timestamp.now(tz="UTC")
-                _horas_sin_datos = (_ahora_utc - _t_ult).total_seconds() / 3600.0
-                _ultima_subida_txt = _t_ult.tz_convert(TZ_MADRID).strftime("%d/%m %H:%M")
-        except Exception:
-            _horas_sin_datos = None
-        # Solo aplica si se está mirando el día de HOY: un día pasado ya está cerrado
-        # y sus datos no van a cambiar — no tiene sentido que la Chinita "dude".
-        _datos_obsoletos = (_horas_sin_datos is not None and _horas_sin_datos >= 2
-                            and _hoy_chi == hoy_madrid())
-
-        # Elegir imagen según el margen real acumulado (costes prorrateados por la jornada)
-        if _datos_obsoletos:
-            # Sin datos frescos no se puede saber si estar contenta o enfadada
-            _estado_chi = "unknown"
-        elif _margen_hoy is None:
-            _estado_chi = "unknown"
-        elif _margen_hoy <= -200:
-            _estado_chi = "disaster"
-        elif _margen_hoy <= -100:
-            _estado_chi = "terrible"
-        elif _margen_hoy < 0:
-            _estado_chi = "bad"
-        elif _margen_hoy <= 40:
-            _estado_chi = "worried"
-        elif _margen_hoy <= 90:
-            _estado_chi = "neutral"
-        elif _margen_hoy <= 150:
-            _estado_chi = "ok"
-        elif _margen_hoy <= 250:
-            _estado_chi = "happy"
-        elif _margen_hoy <= 350:
-            _estado_chi = "great"
-        elif _margen_hoy <= 500:
-            _estado_chi = "amazing"
+        _estado_chi = "unknown"
+        _dlv_diag = ""
+        _cm_build = ""
+        _cm_err = None
+        if not _cm_pwd:
+            _cm_err = ("Falta la contraseña del cmeter en los secrets de Streamlit.\n\n"
+                       "Manage app → Settings → Secrets, y añade:\n\n"
+                       "```\n[cmeter]\npassword = \"la_del_cmeter\"\n```")
         else:
-            _estado_chi = "rich"
+            try:
+                _cm_resp = _rq.post(
+                    f"{SUPABASE_URL}/functions/v1/chinita-margen",
+                    json={"password": _cm_pwd, "fecha": str(_hoy_chi)},
+                    timeout=20,
+                )
+                _cm = _cm_resp.json()
+                if not _cm.get("ok"):
+                    _cm_err = f"La función respondió: {_cm.get('error') or _cm_resp.status_code}"
+                else:
+                    if _cm.get("hayVentas") and _cm.get("margen") is not None:
+                        _margen_hoy = float(_cm["margen"])
+                    _coste_personal_hoy = float(_cm.get("personal") or 0)
+                    _coste_fijo_hoy = float(_cm.get("fijo") or 0)
+                    _ventas_netas_hoy = float(_cm.get("ventasNetas") or 0)
+                    _ventas_brutas_hoy = float(_cm.get("brutas") or 0)
+                    _dlv_neto_hoy = float(_cm.get("deliveryNeto") or 0)
+                    _datos_obsoletos = bool(_cm.get("datosObsoletos"))
+                    _horas_sin_datos = _cm.get("horasSinDatos")
+                    _estado_chi = _cm.get("estado") or "unknown"
+                    _cm_build = _cm.get("build") or ""
+                    if _cm.get("ultimaSubida"):
+                        try:
+                            _t_ult = pd.Timestamp(_cm["ultimaSubida"])
+                            if _t_ult.tzinfo is None:
+                                _t_ult = _t_ult.tz_localize("UTC")
+                            _ultima_subida_txt = _t_ult.tz_convert(TZ_MADRID).strftime("%d/%m %H:%M")
+                        except Exception:
+                            pass
+                    if _dlv_neto_hoy > 0:
+                        _dlv_diag = (f"delivery {_hoy_chi}: neto €{_dlv_neto_hoy:.2f} "
+                                     f"(Glovo €{float(_cm.get('glovoBruto') or 0):.2f} · "
+                                     f"Uber €{float(_cm.get('uberBruto') or 0):.2f} brutos)")
+            except Exception as _e_cm:
+                _cm_err = f"No se pudo llamar a la función: {_e_cm}"
+        if _cm_err:
+            st.error("🐱 El Chinita-meter se calcula ahora en el servidor "
+                     "(Edge Function **chinita-margen**, la misma del cmeter) "
+                     "y no ha podido responder.\n\n" + _cm_err)
+            st.stop()
+        # El estado (carita) ya viene calculado por la función, con los mismos
+        # tramos de siempre; si los datos están obsoletos devuelve "unknown".
         # Título + imagen centrada
         _dias_es_chi = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
         st.markdown(f"<h3 style='text-align:center;margin:0 0 4px;'>🐱 Chinita-meter</h3>"
@@ -2175,6 +2121,8 @@ _(aún SIN restar personal ni fijo)_
 **El margen{" (local + delivery)" if _dlv_neto_hoy > 0 else ""} es:** €{_margen_hoy:,.2f}
 - Si la barra de ventas **pasa la línea morada**, ganas (margen positivo).
 - Si **no llega**, pierdes (te faltan €{abs(min(0,_margen_hoy)):,.2f} para el break-even).""")
+        if _cm_build:
+            st.caption(f"⚙️ cálculo en servidor: chinita-margen · {_cm_build}")
     # ── TAB 0: Rentabilidad ─────────────────────────────────
     if nav == "💰 Rentabilidad":
         import datetime as dt_rent
