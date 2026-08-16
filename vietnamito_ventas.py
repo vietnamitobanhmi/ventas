@@ -1833,7 +1833,7 @@ def render_dashboard(df):
     # ni cambios estructurales. Además solo se renderiza la sección activa (más rápido).
     _SECCIONES = [
         "🐱 Chinita-meter",
-        "💰 Rentabilidad", "📅 Por día de semana", "🛵 Delivery", "🧾 Pruebas VeriFactu",
+        "💰 Rentabilidad", "🛵 Delivery", "🧾 Pruebas VeriFactu",
         "👥 Personal", "🛍️ Pedidos", "🍽️ Reservas", "🌐 Web", "📢 KDS",
     ]
     # Secciones retiradas o agrupadas: si la sesión guarda una vieja, volver a la primera
@@ -2531,9 +2531,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                     _v_m = _df_d[(_df_d["hora"] >= 9) & (_df_d["hora"] <= 17)]["valor"].sum()
                                     _v_t = _df_d[(_df_d["hora"] >= 18) & (_df_d["hora"] <= 23)]["valor"].sum()
                                     _cp_m = _cp_t = 0
-                                    for _tr in turnos_data_d:
-                                        if int(_tr["dia_semana"]) != _dow_click:
-                                            continue
+                                    for _tr in turnos_vigentes_fecha(turnos_data_d, str(_fd)[:10]):
                                         _h = int(_tr["slot"].split(":")[0])
                                         _c = emp_coste_d.get(_tr["empleado_id"], 10) * 0.5
                                         if 9 <= _h <= 17:
@@ -2595,6 +2593,81 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                                 st.plotly_chart(_fig_inst, use_container_width=True)
                         else:
                             st.caption("💡 Haz clic en una barra de arriba para desglosar ese día de la semana en cada fecha concreta del periodo.")
+                        # ─── GRÁFICA 2: INGRESOS VS GASTOS POR DÍA DE LA SEMANA ───
+                        st.divider()
+                        st.markdown("##### Contribución por día de la semana — ingresos vs gastos")
+                        st.caption("Mismo periodo que la gráfica de arriba. Columna izquierda: **ventas netas** del día "
+                                   "(sin IVA ni coste de producto, verde) con el **delivery neto** apilado encima (azul). "
+                                   "Columna derecha (lila): **coste de personal** del día. "
+                                   "La línea morada es el **fijo a cubrir** (prorrateado × días) y el rombo naranja la "
+                                   "**contribución neta** del día (ingresos − personal); el número al lado es la "
+                                   "ganancia real (contribución − fijo): verde si gana, rojo si falta.")
+                        _netas_dow2 = [0.0] * 7
+                        _personal_dow2 = [0.0] * 7
+                        for fd in dias_con_ventas:
+                            _dw2 = pd.Timestamp(fd).weekday()
+                            _netas_dow2[_dw2] += float(df_periodo_copy[df_periodo_copy["fecha"] == fd]["valor"].sum()) / 1.10 * 0.75
+                            for tr in turnos_vigentes_fecha(turnos_data_d, str(fd)[:10]):
+                                _personal_dow2[_dw2] += emp_coste_d.get(tr["empleado_id"], 10) * 0.5
+                        _netas_dow2 = [round(v, 2) for v in _netas_dow2]
+                        _personal_dow2 = [round(v, 2) for v in _personal_dow2]
+                        _dlv_dow2 = margen_delivery_dow  # margen neto de delivery por dow (ya calculado)
+                        _contrib_dow2 = [round(_netas_dow2[d] + _dlv_dow2[d] - _personal_dow2[d], 2) for d in range(7)]
+                        _gan_dow2 = [round(_contrib_dow2[d] - cf_dow[d], 2) for d in range(7)]
+                        _txt_gan2, _col_gan2 = [], []
+                        for d in range(7):
+                            if dow_data[d]["n_dias"] > 0:
+                                _txt_gan2.append(f"  {'+' if _gan_dow2[d] >= 0 else '−'}€{abs(_gan_dow2[d]):.0f}")
+                                _col_gan2.append("#2E7D32" if _gan_dow2[d] >= 0 else "#C62828")
+                            else:
+                                _txt_gan2.append("")
+                                _col_gan2.append("#2E7D32")
+                        fig_dow2 = go.Figure()
+                        fig_dow2.add_trace(go.Bar(
+                            x=labels_dow, y=_netas_dow2, name="Ventas netas (sin IVA, sin coste producto)",
+                            offsetgroup="ing", marker_color="rgba(93,202,165,0.85)", marker_line_width=0,
+                            text=[f"€{v:,.0f}" if v > 0 else "" for v in _netas_dow2],
+                            textposition="inside", insidetextanchor="middle",
+                            textfont=dict(size=11, color="#0b3d2e"),
+                            hovertemplate="Ventas netas: €%{y:.2f}<extra></extra>",
+                        ))
+                        fig_dow2.add_trace(go.Bar(
+                            x=labels_dow, y=_dlv_dow2, base=_netas_dow2, name="Delivery (margen neto)",
+                            offsetgroup="ing", marker_color="rgba(56,138,221,0.85)", marker_line_width=0,
+                            text=[f"+€{v:,.0f} 🛵" if v > 0 else "" for v in _dlv_dow2], textposition="outside",
+                            hovertemplate="Delivery neto: €%{y:.2f}<extra></extra>",
+                        ))
+                        fig_dow2.add_trace(go.Bar(
+                            x=labels_dow, y=_personal_dow2, name="Coste personal",
+                            offsetgroup="per", marker_color="rgba(181,126,220,0.85)", marker_line_width=0,
+                            text=[f"€{v:,.0f}" if v > 0 else "" for v in _personal_dow2], textposition="outside",
+                            hovertemplate="Coste personal: €%{y:.2f}<extra></extra>",
+                        ))
+                        fig_dow2.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.5)")
+                        fig_dow2.add_trace(go.Scatter(
+                            x=labels_dow, y=_contrib_dow2, name="Contribución neta del día",
+                            mode="markers+text", marker=dict(size=10, symbol="diamond", color="#F4A261",
+                                                             line=dict(width=1, color="#B96A34")),
+                            text=_txt_gan2, textposition="middle right",
+                            textfont=dict(size=11, color=_col_gan2),
+                            hovertemplate="Contribución neta (ingresos − personal): €%{y:.2f}<extra></extra>",
+                        ))
+                        fig_dow2.add_trace(go.Scatter(
+                            x=labels_dow, y=cf_dow, name="🏛️ Fijo a cubrir (prorrateado × días)",
+                            mode="lines+markers", line=dict(color="#8B5CF6", width=2, dash="dash"),
+                            marker=dict(size=5),
+                            hovertemplate="Fijo a cubrir: €%{y:.2f}<extra></extra>",
+                        ))
+                        fig_dow2.update_layout(
+                            title=f"Contribución por día de la semana — ingresos vs gastos — {titulo_periodo}",
+                            yaxis_title="€", barmode="group",
+                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
+                            xaxis=dict(showgrid=False),
+                            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="left", x=0),
+                            height=460, margin=dict(t=50, b=80),
+                        )
+                        st.plotly_chart(fig_dow2, use_container_width=True)
                         with st.expander("Ver tabla por día de la semana"):
                             tabla_dow_rows = []
                             for dow in range(7):
@@ -2793,60 +2866,6 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 fig_mes.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.4)")
                 fig_mes.update_layout(title="Ventas netas vs costes por mes — línea morada: break-even mensual", yaxis_title="€", barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False), xaxis=dict(showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0), height=420, margin=dict(t=50, b=80))
                 st.plotly_chart(fig_mes, use_container_width=True)
-    if nav == "📅 Por día de semana":
-        avg_dow = calcular_promedios_dia(df)
-        labels = [DIAS[d] for d in DIAS_ORDER]
-        values = [round(avg_dow.get(d, 0), 2) for d in DIAS_ORDER]
-        fig = go.Figure(go.Bar(
-            x=labels, y=values, marker_color=COLORS, marker_line_width=0,
-            text=[f"€{v:.2f}" for v in values], textposition="outside",
-        ))
-        fig.update_layout(
-            title="Venta media por día de la semana — ventas brutas (con IVA)", yaxis_title="€ promedio (con IVA)",
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-            xaxis=dict(showgrid=False), showlegend=False, height=400, margin=dict(t=50, b=20),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        with st.expander("Ver datos"):
-            st.dataframe(pd.DataFrame({"Día": labels, "Promedio (€)": [f"€{v:.2f}" for v in values]}), hide_index=True, use_container_width=True)
-        st.divider()
-        st.markdown("**Evolución semanal por día**")
-        st.caption("Cada línea es un día de la semana. Cada punto es el total de ventas de ese día en cada semana.")
-        df_evo = df.copy()
-        df_evo["fecha_ts"] = pd.to_datetime(df_evo["fecha"])
-        df_evo["lunes"] = df_evo["fecha_ts"] - pd.to_timedelta(df_evo["fecha_ts"].dt.weekday, unit="D")
-        df_evo["semana"] = df_evo["lunes"].dt.strftime("%Y-%m-%d")
-        df_evo["dow"] = df_evo["fecha_ts"].dt.weekday
-        dia_sem = df_evo.groupby(["semana","fecha","dow"])["valor"].sum().reset_index()
-        semana_labels_evo = {}
-        for s in sorted(dia_sem["semana"].unique()):
-            lunes = pd.Timestamp(s)
-            semana_labels_evo[s] = lunes.strftime("%d/%m")
-        fig_evo = go.Figure()
-        for dow_idx in DIAS_ORDER:
-            d = dia_sem[dia_sem["dow"] == dow_idx].sort_values("semana")
-            if d.empty:
-                continue
-            fig_evo.add_trace(go.Scatter(
-                x=d["semana"].map(semana_labels_evo),
-                y=d["valor"].round(2),
-                mode="lines+markers",
-                name=DIAS[dow_idx],
-                line=dict(color=COLORS[dow_idx % len(COLORS)], width=2),
-                marker=dict(size=7, color=COLORS[dow_idx % len(COLORS)]),
-                connectgaps=False,
-            ))
-        fig_evo.update_layout(
-            title="Evolución de ventas por día de la semana — ventas brutas (con IVA)",
-            yaxis_title="€ brutas (con IVA)", xaxis_title="Semana (lunes)",
-            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zeroline=False),
-            xaxis=dict(showgrid=False, tickangle=-30),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="left", x=0),
-            height=480, margin=dict(t=50, b=100),
-        )
-        st.plotly_chart(fig_evo, use_container_width=True)
     if nav == "🛵 Delivery":
         sb0 = get_supabase()
         st.markdown("#### 🛵 Ventas de delivery (Glovo / Uber Eats)")
