@@ -3552,7 +3552,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             st.divider()
             st.markdown("#### Guardar cambios en turnos")
             st.caption("Cambia los turnos en cualquier día y pulsa el botón. Solo se versionan los días que CAMBIAN: "
-                       "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad.")
+                       "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad. "
+                       "· ⚙️ turnos-build v2.2")
             _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
             fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
             fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
@@ -3584,6 +3585,8 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     actual_set = {(t["empleado_id"], t["slot"]) for t in actual}
                     if nuevo_set == actual_set:
                         continue  # este día no cambió → no crear versión nueva
+                    _anadidos = nuevo_set - actual_set
+                    _quitados = actual_set - nuevo_set
                     if not nuevo_set and not corregir_pasado:
                         st.warning(f"⚠️ {DIAS[dow]}: para dejar un día SIN turnos marca «Corregir la versión actual» — "
                                    "el versionado no puede representar un día vaciado solo a futuro.")
@@ -3602,7 +3605,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     if to_insert:
                         sb.table("turnos").insert(to_insert).execute()
                         total_insertados += len(to_insert)
-                    dias_versionados.append(DIAS[dow])
+                    dias_versionados.append(f"{DIAS[dow]} (+{len(_anadidos)} slots / −{len(_quitados)})")
                 if dias_versionados:
                     if corregir_pasado:
                         _sufijo = " (versión actual corregida)"
@@ -3614,22 +3617,59 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.rerun()
                 else:
                     st.info("No había cambios que guardar.")
-            with st.expander("📜 Versiones de turnos guardadas (histórico)"):
-                st.caption("Para cada fecha rige la versión con inicio más reciente que la cubra. "
-                           "Una versión acotada tapa a la anterior solo durante su periodo.")
+            with st.expander("📜 Versiones de turnos — calendario de bloques"):
+                st.caption("Cada barra es una versión: rige la de inicio más reciente que cubra cada fecha. "
+                           "Una versión acotada tapa a la anterior solo durante su periodo. La línea naranja es HOY.")
                 _vers_map = {}
                 for _t in _turnos_todos:
                     _kd = (int(_t["dia_semana"]),
                            str(_t.get("vigente_desde") or "2000-01-01")[:10],
                            (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
                     _vers_map[_kd] = _vers_map.get(_kd, 0) + 1
-                _vers_rows = [{"Día": DIAS[_dw], "Desde": ("(siempre)" if _vd == "2000-01-01" else _vd),
-                               "Hasta": (_vh or "indefinido"), "Slots": _ns}
-                              for (_dw, _vd, _vh), _ns in sorted(_vers_map.items())]
-                if _vers_rows:
-                    st.dataframe(pd.DataFrame(_vers_rows), hide_index=True, use_container_width=True)
-                else:
+                if not _vers_map:
                     st.info("Sin turnos guardados todavía.")
+                else:
+                    import datetime as _dt_g
+                    _hoy_g = hoy_madrid()
+                    _ini_vis = _hoy_g - _dt_g.timedelta(days=60)
+                    _fin_vis = _hoy_g + _dt_g.timedelta(days=45)
+                    _keys_orden = sorted(_vers_map.items())
+                    _fig_v = go.Figure()
+                    for (_dw, _vd, _vh), _ns in _keys_orden:
+                        _x0 = _ini_vis if _vd == "2000-01-01" else max(_dt_g.date.fromisoformat(_vd), _ini_vis)
+                        _x1 = _dt_g.date.fromisoformat(_vh) if _vh else _fin_vis
+                        if _x1 < _ini_vis:
+                            continue  # versión terminada hace mucho: fuera de la ventana visible
+                        _lbl_desde = "siempre" if _vd == "2000-01-01" else _vd
+                        _fig_v.add_trace(go.Bar(
+                            x=[((_x1 - _x0).days + 1) * 86400000], base=[_x0.isoformat()],
+                            y=[DIAS[_dw]], orientation="h", opacity=0.75, marker_line_width=1,
+                            hovertemplate=f"{DIAS[_dw]} · desde {_lbl_desde} · hasta {(_vh or 'indefinido')}<br>{_ns} slots<extra></extra>",
+                            showlegend=False,
+                        ))
+                    _fig_v.add_vline(x=_hoy_g.isoformat(), line_dash="dash", line_color="#F4A261")
+                    _fig_v.update_layout(
+                        barmode="overlay", height=280, margin=dict(t=16, b=10),
+                        xaxis=dict(type="date", range=[_ini_vis.isoformat(), _fin_vis.isoformat()], showgrid=True),
+                        yaxis=dict(categoryorder="array", categoryarray=[DIAS[d] for d in reversed(DIAS_ORDER)]),
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_fig_v, use_container_width=True)
+                    _vers_rows = [{"Día": DIAS[_dw], "Desde": ("(siempre)" if _vd == "2000-01-01" else _vd),
+                                   "Hasta": (_vh or "indefinido"), "Slots": _ns}
+                                  for (_dw, _vd, _vh), _ns in _keys_orden]
+                    st.dataframe(pd.DataFrame(_vers_rows), hide_index=True, use_container_width=True)
+                    st.markdown("**🗑️ Borrar una versión** (vuelve a regir la anterior en su periodo):")
+                    _opciones_v = [f"{DIAS[_dw]} · desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_ns} slots"
+                                   for (_dw, _vd, _vh), _ns in _keys_orden]
+                    _bv1, _bv2 = st.columns([3, 1])
+                    _sel_v = _bv1.selectbox("Versión:", ["—"] + _opciones_v, key="ver_borrar_sel", label_visibility="collapsed")
+                    if _bv2.button("🗑️ Borrar", key="ver_borrar_btn", disabled=(_sel_v == "—")):
+                        _idx_v = _opciones_v.index(_sel_v)
+                        (_dw_b, _vd_b, _vh_b), _ = _keys_orden[_idx_v]
+                        sb.table("turnos").delete().eq("dia_semana", _dw_b).eq("vigente_desde", _vd_b).execute()
+                        st.success(f"Versión borrada: {_sel_v}")
+                        st.rerun()
             st.divider()
             st.markdown("### Resumen semanal")
             _turnos_all_raw = sb.table("turnos").select("*").execute().data or []
