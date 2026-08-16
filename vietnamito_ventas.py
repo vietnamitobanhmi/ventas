@@ -3484,33 +3484,45 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             for _tmsg_tipo, _tmsg_txt in st.session_state.pop("turnos_msgs", []):
                 getattr(st, _tmsg_tipo)(_tmsg_txt)
             with st.expander("📋 Copiar turnos de un día a otro"):
-                cc1, cc2, cc3 = st.columns([2, 3, 1])
+                st.caption("Elige el BLOQUE (versión) del día origen y se copia a los destinos "
+                           "con SU MISMA vigencia (desde/hasta). Si un destino ya tiene un bloque "
+                           "con esa fecha de inicio, se reemplaza; sus otros bloques no se tocan.")
+                _turnos_pre_copy = sb.table("turnos").select("*").execute().data or []
+                cc1, cc2 = st.columns([2, 3])
                 dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
-                dias_destino_sel = cc2.multiselect("Copiar a:", [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen], key="copy_to")
-                cc3.markdown("<br>", unsafe_allow_html=True)
-                if cc3.button("📋 Copiar", key="do_copy", type="primary"):
-                    if not dias_destino_sel:
-                        st.warning("Selecciona al menos un día destino.")
+                dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
+                _vers_o = {}
+                for _t in _turnos_pre_copy:
+                    if int(_t["dia_semana"]) != dow_origen:
+                        continue
+                    _kv = (str(_t.get("vigente_desde") or "2000-01-01")[:10],
+                           (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
+                    _vers_o[_kv] = _vers_o.get(_kv, 0) + 1
+                _vers_keys = sorted(_vers_o.items(), reverse=True)
+                _lbls_copy = [f"desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_n} slots"
+                              for (_vd, _vh), _n in _vers_keys]
+                _sel_bloque = cc2.selectbox("Bloque a copiar:", _lbls_copy, key="copy_bloque") if _lbls_copy else None
+                dias_destino_sel = st.multiselect("Copiar a:", [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen], key="copy_to")
+                if st.button("📋 Copiar", key="do_copy", type="primary"):
+                    if not dias_destino_sel or _sel_bloque is None:
+                        st.warning("Selecciona un bloque y al menos un día destino.")
                     else:
-                        dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
-                        turnos_res_copy = sb.table("turnos").select("*").execute()
-                        turnos_origen = [(tr["empleado_id"], tr["slot"]) for tr in _turnos_de_dow_en(turnos_res_copy.data or [], dow_origen, _hoy_iso_t)]
-                        if not turnos_origen:
-                            st.warning(f"El día {dia_origen} no tiene turnos configurados.")
-                        else:
-                            for dia_dest_label in dias_destino_sel:
-                                dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
-                                # Versión nueva del día destino EN VIGOR DESDE HOY (el histórico no se toca)
-                                sb.table("turnos").delete().eq("dia_semana", dow_dest).eq("vigente_desde", _hoy_iso_t).execute()
-                                sb.table("turnos").insert([
-                                    {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot, "vigente_desde": _hoy_iso_t}
-                                    for eid, slot in turnos_origen
-                                ]).execute()
-                            st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
-                            st.session_state["turnos_msgs"] = [("success",
-                                f"✅ {len(turnos_origen)} slots del {dia_origen} copiados a: {', '.join(dias_destino_sel)} "
-                                f"(versión nueva en vigor desde hoy; el histórico de esos días no cambia)")]
-                            st.rerun()
+                        (_vd_o, _vh_o), _ = _vers_keys[_lbls_copy.index(_sel_bloque)]
+                        turnos_origen = [(t["empleado_id"], t["slot"]) for t in _turnos_pre_copy
+                                         if int(t["dia_semana"]) == dow_origen
+                                         and str(t.get("vigente_desde") or "2000-01-01")[:10] == _vd_o]
+                        for dia_dest_label in dias_destino_sel:
+                            dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
+                            sb.table("turnos").delete().eq("dia_semana", dow_dest).eq("vigente_desde", _vd_o).execute()
+                            sb.table("turnos").insert([
+                                {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot,
+                                 "vigente_desde": _vd_o, "vigente_hasta": _vh_o}
+                                for eid, slot in turnos_origen
+                            ]).execute()
+                        st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
+                        st.session_state["turnos_msgs"] = [("success",
+                            f"✅ Bloque «{_sel_bloque}» del {dia_origen} copiado a: {', '.join(dias_destino_sel)} (misma vigencia)")]
+                        st.rerun()
             turnos_res = sb.table("turnos").select("*").execute()
             _turnos_todos = turnos_res.data or []
             # El grid muestra la versión VIGENTE HOY de cada día; las versiones
@@ -3562,7 +3574,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             st.markdown("#### Guardar cambios en turnos")
             st.caption("Cambia los turnos en cualquier día y pulsa el botón. Solo se versionan los días que CAMBIAN: "
                        "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad. "
-                       "· ⚙️ turnos-build v2.3")
+                       "· ⚙️ turnos-build v2.4")
             _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
             fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
             fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
