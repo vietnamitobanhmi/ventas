@@ -3483,45 +3483,45 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             _grid_ver = st.session_state.get("turnos_grid_ver", 0)
             for _tmsg_tipo, _tmsg_txt in st.session_state.pop("turnos_msgs", []):
                 getattr(st, _tmsg_tipo)(_tmsg_txt)
-            with st.expander("📋 Copiar turnos de un día a otro"):
-                st.caption("Elige el BLOQUE (versión) del día origen y se copia a los destinos "
-                           "con SU MISMA vigencia (desde/hasta). Si un destino ya tiene un bloque "
-                           "con esa fecha de inicio, se reemplaza; sus otros bloques no se tocan.")
-                _turnos_pre_copy = sb.table("turnos").select("*").execute().data or []
-                cc1, cc2 = st.columns([2, 3])
+            # ── BLOQUE DE TRABAJO: la vigencia con la que se guardará TODO lo de abajo ──
+            st.markdown("#### 📦 Bloque de trabajo")
+            st.caption("Todo lo que edites o copies abajo se guardará con esta vigencia al pulsar 💾 Guardar. · ⚙️ turnos-build v3.0")
+            _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
+            fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
+            fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
+                                           help="Vacío: rige hasta que guardes una versión posterior. "
+                                                "Con fecha de fin (incluida), al terminar VUELVEN SOLOS los turnos de antes.")
+            corregir_pasado = _cv2.checkbox(
+                "✏️ Corregir la versión actual (reescribe también el pasado que usaba esta versión)",
+                value=False, key="turnos_corregir",
+                help="Para arreglar un ERROR de configuración. Sin marcar, el cambio solo rige en el periodo del bloque."
+            )
+            with st.expander("📋 Copiar un día a otros días (dentro del editor)"):
+                st.caption("Copia lo que hay AHORA MISMO en el grid del día origen a los grids de los días destino. "
+                           "NO guarda nada: revisa el resultado en las pestañas y pulsa 💾 Guardar para que "
+                           "cada día cambiado se guarde con la vigencia del bloque de trabajo.")
+                cc1, cc2, cc3 = st.columns([2, 3, 1])
                 dia_origen = cc1.selectbox("Copiar de:", [DIAS[d] for d in DIAS_ORDER], key="copy_from")
-                dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
-                _vers_o = {}
-                for _t in _turnos_pre_copy:
-                    if int(_t["dia_semana"]) != dow_origen:
-                        continue
-                    _kv = (str(_t.get("vigente_desde") or "2000-01-01")[:10],
-                           (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
-                    _vers_o[_kv] = _vers_o.get(_kv, 0) + 1
-                _vers_keys = sorted(_vers_o.items(), reverse=True)
-                _lbls_copy = [f"desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_n} slots"
-                              for (_vd, _vh), _n in _vers_keys]
-                _sel_bloque = cc2.selectbox("Bloque a copiar:", _lbls_copy, key="copy_bloque") if _lbls_copy else None
-                dias_destino_sel = st.multiselect("Copiar a:", [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen], key="copy_to")
-                if st.button("📋 Copiar", key="do_copy", type="primary"):
-                    if not dias_destino_sel or _sel_bloque is None:
-                        st.warning("Selecciona un bloque y al menos un día destino.")
+                dias_destino_sel = cc2.multiselect("Copiar a:", [DIAS[d] for d in DIAS_ORDER if DIAS[d] != dia_origen], key="copy_to")
+                cc3.markdown("<br>", unsafe_allow_html=True)
+                if cc3.button("📋 Copiar", key="do_copy", type="primary"):
+                    dow_origen = [d for d in DIAS_ORDER if DIAS[d] == dia_origen][0]
+                    _sets_vistos = st.session_state.get("turnos_sets_vistos", {})
+                    _sel_set = _sets_vistos.get(dow_origen)
+                    if not dias_destino_sel:
+                        st.warning("Selecciona al menos un día destino.")
+                    elif _sel_set is None:
+                        st.warning("Abre primero las pestañas de los días (más abajo) y vuelve a intentarlo.")
                     else:
-                        (_vd_o, _vh_o), _ = _vers_keys[_lbls_copy.index(_sel_bloque)]
-                        turnos_origen = [(t["empleado_id"], t["slot"]) for t in _turnos_pre_copy
-                                         if int(t["dia_semana"]) == dow_origen
-                                         and str(t.get("vigente_desde") or "2000-01-01")[:10] == _vd_o]
+                        _copias = st.session_state.get("turnos_copias", {})
                         for dia_dest_label in dias_destino_sel:
                             dow_dest = [d for d in DIAS_ORDER if DIAS[d] == dia_dest_label][0]
-                            sb.table("turnos").delete().eq("dia_semana", dow_dest).eq("vigente_desde", _vd_o).execute()
-                            sb.table("turnos").insert([
-                                {"empleado_id": eid, "dia_semana": dow_dest, "slot": slot,
-                                 "vigente_desde": _vd_o, "vigente_hasta": _vh_o}
-                                for eid, slot in turnos_origen
-                            ]).execute()
+                            _copias[dow_dest] = set(_sel_set)
+                        st.session_state["turnos_copias"] = _copias
                         st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
-                        st.session_state["turnos_msgs"] = [("success",
-                            f"✅ Bloque «{_sel_bloque}» del {dia_origen} copiado a: {', '.join(dias_destino_sel)} (misma vigencia)")]
+                        st.session_state["turnos_msgs"] = [("info",
+                            f"📋 {dia_origen} copiado a los grids de: {', '.join(dias_destino_sel)}. "
+                            "Revisa las pestañas y pulsa 💾 Guardar para consolidarlo en el bloque de trabajo.")]
                         st.rerun()
             turnos_res = sb.table("turnos").select("*").execute()
             _turnos_todos = turnos_res.data or []
@@ -3537,11 +3537,15 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
             horas_por_dow = {}
             for di, dow in enumerate(DIAS_ORDER):
                 with dias_tabs[di]:
+                    _override_d = st.session_state.get("turnos_copias", {}).get(dow)
                     data = {}
                     for slot in slots:
                         row = {}
                         for eid in emp_ids:
-                            row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, dow, slot) in turnos_set
+                            if _override_d is not None:
+                                row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, slot) in _override_d
+                            else:
+                                row[emp_nombres.get(eid, f"Emp {eid}")] = (eid, dow, slot) in turnos_set
                         data[slot] = row
                     df_grid = pd.DataFrame(data).T
                     df_grid.index.name = "Hora"
@@ -3569,24 +3573,21 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                             h = horas_dia.get(eid, 0)
                             coste = h * emp_coste.get(eid, 10)
                             res_cols[ei].metric(emp_nombres.get(eid, f"Emp {eid}"), f"{h:.1f}h", f"€{coste:.2f}")
+            # Memorizar el estado VISTO de cada grid (semilla + ediciones): la copia lo usa
+            _sets_vistos_now = {}
+            for dow, edited in ediciones_por_dow.items():
+                _sv = set()
+                for _, row in edited.iterrows():
+                    for eid in emp_ids:
+                        if row.get(emp_nombres.get(eid, f"Emp {eid}"), False):
+                            _sv.add((eid, row["Hora"]))
+                _sets_vistos_now[dow] = _sv
+            st.session_state["turnos_sets_vistos"] = _sets_vistos_now
             # ── Botón único de guardar TODOS los turnos ──
             st.divider()
             st.markdown("#### Guardar cambios en turnos")
-            st.caption("Cambia los turnos en cualquier día y pulsa el botón. Solo se versionan los días que CAMBIAN: "
-                       "los días anteriores a la fecha de entrada en vigor conservan sus turnos antiguos en las gráficas de rentabilidad. "
-                       "· ⚙️ turnos-build v2.4")
-            _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
-            fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
-            fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
-                                           help="Déjalo vacío para que rija hasta que guardes una versión posterior. "
-                                                "Con fecha de fin (incluida), al terminar VUELVEN SOLOS los turnos de antes — "
-                                                "ideal para vacaciones o semanas especiales.")
-            corregir_pasado = _cv2.checkbox(
-                "✏️ Corregir la versión actual (reescribe también el pasado que usaba esta versión)",
-                value=False, key="turnos_corregir",
-                help="Para arreglar un ERROR de configuración (turnos que siempre estuvieron mal). "
-                     "Sin marcar, el cambio solo afecta desde la fecha elegida en adelante."
-            )
+            st.caption("Solo se versionan los días que CAMBIAN respecto a su versión vigente, con la vigencia "
+                       "del 📦 bloque de trabajo de arriba. El histórico de las gráficas no se toca.")
             col_save_t, _ = st.columns([2, 4])
             if col_save_t.button("💾 Guardar TODOS los turnos", key="save_all_turnos", type="primary", use_container_width=True):
                 if fecha_fin_v and fecha_fin_v < fecha_vigor:
@@ -3634,6 +3635,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         _sufijo = f" — en vigor del {fecha_vigor.strftime('%d/%m/%Y')} al {fecha_fin_v.strftime('%d/%m/%Y')} (después vuelven los turnos anteriores)"
                     else:
                         _sufijo = f" — en vigor desde {fecha_vigor.strftime('%d/%m/%Y')}, sin fecha de fin"
+                    st.session_state.pop("turnos_copias", None)
                     st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
                     st.session_state["turnos_msgs"] = [("success", f"✅ Guardado: {', '.join(dias_versionados)} · {total_insertados} slots{_sufijo}")]
                     st.rerun()
@@ -3643,11 +3645,26 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 st.caption("Cada barra es una versión: rige la de inicio más reciente que cubra cada fecha. "
                            "Una versión acotada tapa a la anterior solo durante su periodo. La línea naranja es HOY.")
                 _vers_map = {}
+                _vers_creado = {}
                 for _t in _turnos_todos:
                     _kd = (int(_t["dia_semana"]),
                            str(_t.get("vigente_desde") or "2000-01-01")[:10],
                            (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
                     _vers_map[_kd] = _vers_map.get(_kd, 0) + 1
+                    _cr = str(_t.get("creado_at") or "")
+                    if _cr and (_kd not in _vers_creado or _cr < _vers_creado[_kd]):
+                        _vers_creado[_kd] = _cr
+
+                def _fmt_creado(_kd):
+                    _cr = _vers_creado.get(_kd)
+                    if not _cr:
+                        return "—"
+                    try:
+                        import datetime as _dt_fc
+                        from zoneinfo import ZoneInfo as _ZI_fc
+                        return _dt_fc.datetime.fromisoformat(_cr.replace("Z", "+00:00")).astimezone(_ZI_fc("Europe/Madrid")).strftime("%d/%m/%Y %H:%M")
+                    except Exception:
+                        return _cr[:16]
                 if not _vers_map:
                     st.info("Sin turnos guardados todavía.")
                 else:
@@ -3678,9 +3695,36 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     )
                     st.plotly_chart(_fig_v, use_container_width=True)
                     _vers_rows = [{"Día": DIAS[_dw], "Desde": ("(siempre)" if _vd == "2000-01-01" else _vd),
-                                   "Hasta": (_vh or "indefinido"), "Slots": _ns}
+                                   "Hasta": (_vh or "indefinido"), "Slots": _ns,
+                                   "Guardado": _fmt_creado((_dw, _vd, _vh))}
                                   for (_dw, _vd, _vh), _ns in _keys_orden]
                     st.dataframe(pd.DataFrame(_vers_rows), hide_index=True, use_container_width=True)
+                    st.markdown("**🔍 Ver el contenido de un bloque:**")
+                    _opciones_c = [f"{DIAS[_dw]} · desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_ns} slots"
+                                   for (_dw, _vd, _vh), _ns in _keys_orden]
+                    _sel_c = st.selectbox("Bloque a inspeccionar:", ["—"] + _opciones_c, key="ver_contenido_sel", label_visibility="collapsed")
+                    if _sel_c != "—":
+                        _idx_c = _opciones_c.index(_sel_c)
+                        (_dw_c, _vd_c, _vh_c), _ = _keys_orden[_idx_c]
+                        _filas_c = [t for t in _turnos_todos
+                                    if int(t["dia_semana"]) == _dw_c
+                                    and str(t.get("vigente_desde") or "2000-01-01")[:10] == _vd_c]
+                        _cr_txt = _fmt_creado((_dw_c, _vd_c, _vh_c))
+                        st.caption(f"💾 Guardado: {_cr_txt}" + (" (aproximado si el bloque es anterior a la migración de creado_at)" if _cr_txt != "—" else " — sin registro (bloque antiguo)"))
+                        _slots_c = sorted({t["slot"] for t in _filas_c})
+                        _emps_c = sorted({t["empleado_id"] for t in _filas_c})
+                        _tabla_c = []
+                        for _s in _slots_c:
+                            _fila_c = {"Hora": _s}
+                            for _e in _emps_c:
+                                _fila_c[emp_nombres.get(_e, f"Emp {_e}")] = "✓" if any(
+                                    t["empleado_id"] == _e and t["slot"] == _s for t in _filas_c) else ""
+                            _tabla_c.append(_fila_c)
+                        st.dataframe(pd.DataFrame(_tabla_c), hide_index=True, use_container_width=True,
+                                     height=min(420, len(_slots_c) * 35 + 40))
+                        st.caption("👥 " + " · ".join(
+                            f"{emp_nombres.get(_e, f'Emp {_e}')}: {sum(1 for t in _filas_c if t['empleado_id'] == _e) * 0.5:.1f}h"
+                            for _e in _emps_c))
                     st.markdown("**🗑️ Borrar una versión** (vuelve a regir la anterior en su periodo):")
                     _opciones_v = [f"{DIAS[_dw]} · desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_ns} slots"
                                    for (_dw, _vd, _vh), _ns in _keys_orden]
