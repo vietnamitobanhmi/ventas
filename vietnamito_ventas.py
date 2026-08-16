@@ -3485,7 +3485,7 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 getattr(st, _tmsg_tipo)(_tmsg_txt)
             # ── BLOQUE DE TRABAJO: la vigencia con la que se guardará TODO lo de abajo ──
             st.markdown("#### 📦 Bloque de trabajo")
-            st.caption("Todo lo que edites o copies abajo se guardará con esta vigencia al pulsar 💾 Guardar. · ⚙️ turnos-build v3.0")
+            st.caption("Todo lo que edites o copies abajo se guardará con esta vigencia al pulsar 💾 Guardar. · ⚙️ turnos-build v3.1")
             _cv1, _cv1b, _cv2 = st.columns([1, 1, 2])
             fecha_vigor = _cv1.date_input("Entran en vigor el:", value=hoy_madrid(), key="turnos_vigor")
             fecha_fin_v = _cv1b.date_input("Hasta (vacío = indefinido):", value=None, key="turnos_vigor_fin",
@@ -3641,9 +3641,10 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                     st.rerun()
                 else:
                     st.info("No había cambios que guardar.")
-            with st.expander("📜 Versiones de turnos — calendario de bloques"):
-                st.caption("Cada barra es una versión: rige la de inicio más reciente que cubra cada fecha. "
-                           "Una versión acotada tapa a la anterior solo durante su periodo. La línea naranja es HOY.")
+            _hist_open = st.session_state.get("turnos_hist_open", False)
+            with st.expander("📜 Versiones de turnos guardadas", expanded=_hist_open):
+                st.caption("Para cada fecha rige la versión con inicio más reciente que la cubra. "
+                           "Una versión acotada tapa a la anterior solo durante su periodo.")
                 _vers_map = {}
                 _vers_creado = {}
                 for _t in _turnos_todos:
@@ -3665,78 +3666,67 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                         return _dt_fc.datetime.fromisoformat(_cr.replace("Z", "+00:00")).astimezone(_ZI_fc("Europe/Madrid")).strftime("%d/%m/%Y %H:%M")
                     except Exception:
                         return _cr[:16]
+
                 if not _vers_map:
                     st.info("Sin turnos guardados todavía.")
                 else:
-                    import datetime as _dt_g
-                    _hoy_g = hoy_madrid()
-                    _ini_vis = _hoy_g - _dt_g.timedelta(days=60)
-                    _fin_vis = _hoy_g + _dt_g.timedelta(days=45)
                     _keys_orden = sorted(_vers_map.items())
-                    _fig_v = go.Figure()
-                    for (_dw, _vd, _vh), _ns in _keys_orden:
-                        _x0 = _ini_vis if _vd == "2000-01-01" else max(_dt_g.date.fromisoformat(_vd), _ini_vis)
-                        _x1 = _dt_g.date.fromisoformat(_vh) if _vh else _fin_vis
-                        if _x1 < _ini_vis:
-                            continue  # versión terminada hace mucho: fuera de la ventana visible
-                        _lbl_desde = "siempre" if _vd == "2000-01-01" else _vd
-                        _fig_v.add_trace(go.Bar(
-                            x=[((_x1 - _x0).days + 1) * 86400000], base=[_x0.isoformat()],
-                            y=[DIAS[_dw]], orientation="h", opacity=0.75, marker_line_width=1,
-                            hovertemplate=f"{DIAS[_dw]} · desde {_lbl_desde} · hasta {(_vh or 'indefinido')}<br>{_ns} slots<extra></extra>",
-                            showlegend=False,
-                        ))
-                    _fig_v.add_vline(x=_hoy_g.isoformat(), line_dash="dash", line_color="#F4A261")
-                    _fig_v.update_layout(
-                        barmode="overlay", height=280, margin=dict(t=16, b=10),
-                        xaxis=dict(type="date", range=[_ini_vis.isoformat(), _fin_vis.isoformat()], showgrid=True),
-                        yaxis=dict(categoryorder="array", categoryarray=[DIAS[d] for d in reversed(DIAS_ORDER)]),
-                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(_fig_v, use_container_width=True)
-                    _vers_rows = [{"Día": DIAS[_dw], "Desde": ("(siempre)" if _vd == "2000-01-01" else _vd),
-                                   "Hasta": (_vh or "indefinido"), "Slots": _ns,
-                                   "Guardado": _fmt_creado((_dw, _vd, _vh))}
-                                  for (_dw, _vd, _vh), _ns in _keys_orden]
-                    st.dataframe(pd.DataFrame(_vers_rows), hide_index=True, use_container_width=True)
-                    st.markdown("**🔍 Ver el contenido de un bloque:**")
-                    _opciones_c = [f"{DIAS[_dw]} · desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_ns} slots"
-                                   for (_dw, _vd, _vh), _ns in _keys_orden]
-                    _sel_c = st.selectbox("Bloque a inspeccionar:", ["—"] + _opciones_c, key="ver_contenido_sel", label_visibility="collapsed")
-                    if _sel_c != "—":
-                        _idx_c = _opciones_c.index(_sel_c)
-                        (_dw_c, _vd_c, _vh_c), _ = _keys_orden[_idx_c]
-                        _filas_c = [t for t in _turnos_todos
-                                    if int(t["dia_semana"]) == _dw_c
-                                    and str(t.get("vigente_desde") or "2000-01-01")[:10] == _vd_c]
-                        _cr_txt = _fmt_creado((_dw_c, _vd_c, _vh_c))
-                        st.caption(f"💾 Guardado: {_cr_txt}" + (" (aproximado si el bloque es anterior a la migración de creado_at)" if _cr_txt != "—" else " — sin registro (bloque antiguo)"))
-                        _slots_c = sorted({t["slot"] for t in _filas_c})
-                        _emps_c = sorted({t["empleado_id"] for t in _filas_c})
-                        _tabla_c = []
-                        for _s in _slots_c:
-                            _fila_c = {"Hora": _s}
-                            for _e in _emps_c:
-                                _fila_c[emp_nombres.get(_e, f"Emp {_e}")] = "✓" if any(
-                                    t["empleado_id"] == _e and t["slot"] == _s for t in _filas_c) else ""
-                            _tabla_c.append(_fila_c)
-                        st.dataframe(pd.DataFrame(_tabla_c), hide_index=True, use_container_width=True,
-                                     height=min(420, len(_slots_c) * 35 + 40))
-                        st.caption("👥 " + " · ".join(
-                            f"{emp_nombres.get(_e, f'Emp {_e}')}: {sum(1 for t in _filas_c if t['empleado_id'] == _e) * 0.5:.1f}h"
-                            for _e in _emps_c))
-                    st.markdown("**🗑️ Borrar una versión** (vuelve a regir la anterior en su periodo):")
-                    _opciones_v = [f"{DIAS[_dw]} · desde {('siempre' if _vd == '2000-01-01' else _vd)} · hasta {(_vh or 'indefinido')} · {_ns} slots"
-                                   for (_dw, _vd, _vh), _ns in _keys_orden]
-                    _bv1, _bv2 = st.columns([3, 1])
-                    _sel_v = _bv1.selectbox("Versión:", ["—"] + _opciones_v, key="ver_borrar_sel", label_visibility="collapsed")
-                    if _bv2.button("🗑️ Borrar", key="ver_borrar_btn", disabled=(_sel_v == "—")):
-                        _idx_v = _opciones_v.index(_sel_v)
-                        (_dw_b, _vd_b, _vh_b), _ = _keys_orden[_idx_v]
-                        sb.table("turnos").delete().eq("dia_semana", _dw_b).eq("vigente_desde", _vd_b).execute()
-                        st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
-                        st.session_state["turnos_msgs"] = [("success", f"🗑️ Versión borrada: {_sel_v} — vuelve a regir la anterior en su periodo")]
-                        st.rerun()
+                    _sel_key = st.session_state.get("turnos_ver_bloque")
+                    _pend_del = st.session_state.get("turnos_pend_borrar")
+                    for _idxv, ((_dw, _vd, _vh), _ns) in enumerate(_keys_orden):
+                        _kd_v = (_dw, _vd, _vh)
+                        _lbl_v = (f"**{DIAS[_dw]}** · desde {('siempre' if _vd == '2000-01-01' else _vd)} · "
+                                  f"hasta {(_vh or 'indefinido')} · {_ns} slots · 💾 {_fmt_creado(_kd_v)}")
+                        _cv_a, _cv_b, _cv_c = st.columns([6, 1, 1])
+                        _cv_a.markdown(("🔎 " if _sel_key == list(_kd_v) or _sel_key == _kd_v else "") + _lbl_v)
+                        if _cv_b.button("👁️ Ver", key=f"vv_{_idxv}"):
+                            st.session_state["turnos_ver_bloque"] = _kd_v
+                            st.session_state["turnos_hist_open"] = True
+                            st.rerun()
+                        if _pend_del == _kd_v or _pend_del == list(_kd_v):
+                            if _cv_c.button("⚠️ ¿Seguro?", key=f"vd_{_idxv}", type="primary"):
+                                sb.table("turnos").delete().eq("dia_semana", _dw).eq("vigente_desde", _vd).execute()
+                                st.session_state.pop("turnos_pend_borrar", None)
+                                st.session_state.pop("turnos_ver_bloque", None)
+                                st.session_state["turnos_hist_open"] = True
+                                st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
+                                st.session_state["turnos_msgs"] = [("success", f"🗑️ Versión borrada: {DIAS[_dw]} desde {_vd} — vuelve a regir la anterior en su periodo")]
+                                st.rerun()
+                        else:
+                            if _cv_c.button("🗑️", key=f"vd_{_idxv}"):
+                                st.session_state["turnos_pend_borrar"] = _kd_v
+                                st.session_state["turnos_hist_open"] = True
+                                st.rerun()
+
+                    # ── Contenido del bloque seleccionado, inline ──
+                    if _sel_key:
+                        _sel_t = tuple(_sel_key)
+                        if _sel_t in dict(_keys_orden):
+                            _dw_c, _vd_c, _vh_c = _sel_t
+                            st.divider()
+                            _ch1, _ch2 = st.columns([6, 1])
+                            _ch1.markdown(f"##### 🔎 {DIAS[_dw_c]} — desde {('siempre' if _vd_c == '2000-01-01' else _vd_c)} hasta {(_vh_c or 'indefinido')}")
+                            if _ch2.button("✕ Cerrar", key="vv_cerrar"):
+                                st.session_state.pop("turnos_ver_bloque", None)
+                                st.session_state["turnos_hist_open"] = True
+                                st.rerun()
+                            _filas_c = [t for t in _turnos_todos
+                                        if int(t["dia_semana"]) == _dw_c
+                                        and str(t.get("vigente_desde") or "2000-01-01")[:10] == _vd_c]
+                            _slots_c = sorted({t["slot"] for t in _filas_c})
+                            _emps_c = sorted({t["empleado_id"] for t in _filas_c})
+                            _tabla_c = []
+                            for _s in _slots_c:
+                                _fila_c = {"Hora": _s}
+                                for _e in _emps_c:
+                                    _fila_c[emp_nombres.get(_e, f"Emp {_e}")] = "✓" if any(
+                                        t["empleado_id"] == _e and t["slot"] == _s for t in _filas_c) else ""
+                                _tabla_c.append(_fila_c)
+                            st.dataframe(pd.DataFrame(_tabla_c), hide_index=True, use_container_width=True,
+                                         height=min(420, len(_slots_c) * 35 + 40))
+                            st.caption("👥 " + " · ".join(
+                                f"{emp_nombres.get(_e, f'Emp {_e}')}: {sum(1 for t in _filas_c if t['empleado_id'] == _e) * 0.5:.1f}h"
+                                for _e in _emps_c))
             st.divider()
             st.markdown("### Resumen semanal")
             _turnos_all_raw = sb.table("turnos").select("*").execute().data or []
