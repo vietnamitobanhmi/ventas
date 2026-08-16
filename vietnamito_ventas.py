@@ -3609,91 +3609,168 @@ Es lo que queda después de pagar a Hacienda, el producto, el personal y los gas
                 else:
                     st.info("No había cambios que guardar.")
             _hist_open = st.session_state.get("turnos_hist_open", False)
-            with st.expander("📜 Versiones de turnos guardadas", expanded=_hist_open):
-                st.caption("Para cada fecha rige la versión con inicio más reciente que la cubra. "
-                           "Una versión acotada tapa a la anterior solo durante su periodo.")
-                _vers_map = {}
-                _vers_creado = {}
-                for _t in _turnos_todos:
-                    _kd = (int(_t["dia_semana"]),
-                           str(_t.get("vigente_desde") or "2000-01-01")[:10],
-                           (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
-                    _vers_map[_kd] = _vers_map.get(_kd, 0) + 1
-                    _cr = str(_t.get("creado_at") or "")
-                    if _cr and (_kd not in _vers_creado or _cr < _vers_creado[_kd]):
-                        _vers_creado[_kd] = _cr
-
-                def _fmt_creado(_kd):
-                    _cr = _vers_creado.get(_kd)
-                    if not _cr:
-                        return "—"
-                    try:
-                        import datetime as _dt_fc
-                        from zoneinfo import ZoneInfo as _ZI_fc
-                        return _dt_fc.datetime.fromisoformat(_cr.replace("Z", "+00:00")).astimezone(_ZI_fc("Europe/Madrid")).strftime("%d/%m/%Y %H:%M")
-                    except Exception:
-                        return _cr[:16]
-
-                if not _vers_map:
+            with st.expander("📜 Turnos por periodo de fechas", expanded=_hist_open):
+                st.caption("Cada fila es un **rango de fechas del calendario** con una configuración de turnos "
+                           "estable — lo que RIGE en ese rango, ya resueltas todas las versiones. "
+                           "Haz clic en un periodo para ver su configuración exacta.")
+                if not _turnos_todos:
                     st.info("Sin turnos guardados todavía.")
                 else:
-                    _keys_orden = sorted(_vers_map.items())
-                    _sel_key = st.session_state.get("turnos_ver_bloque")
-                    _pend_del = st.session_state.get("turnos_pend_borrar")
-                    for _idxv, ((_dw, _vd, _vh), _ns) in enumerate(_keys_orden):
-                        _kd_v = (_dw, _vd, _vh)
-                        _lbl_v = (f"**{DIAS[_dw]}** · desde {('siempre' if _vd == '2000-01-01' else _vd)} · "
-                                  f"hasta {(_vh or 'indefinido')} · {_ns} slots · 💾 {_fmt_creado(_kd_v)}")
-                        _cv_a, _cv_b, _cv_c = st.columns([6, 1, 1])
-                        _cv_a.markdown(("🔎 " if _sel_key == list(_kd_v) or _sel_key == _kd_v else "") + _lbl_v)
-                        if _cv_b.button("👁️ Ver", key=f"vv_{_idxv}"):
-                            st.session_state["turnos_ver_bloque"] = _kd_v
+                    import datetime as _dt_per
+                    # ── 1) Fronteras: cada vigente_desde y cada vigente_hasta+1 de cualquier fila ──
+                    _fronteras = set()
+                    for _t in _turnos_todos:
+                        _fronteras.add(str(_t.get("vigente_desde") or "2000-01-01")[:10])
+                        _vh_t = _t.get("vigente_hasta")
+                        if _vh_t:
+                            _fronteras.add((_dt_per.date.fromisoformat(str(_vh_t)[:10])
+                                            + _dt_per.timedelta(days=1)).isoformat())
+                    _fronteras = sorted(_fronteras)
+                    # ── 2) Configuración VIGENTE en cada tramo (constante entre fronteras) ──
+                    def _config_en(_iso_ref):
+                        _cfg = set()
+                        for _dw7 in range(7):
+                            for _t in _turnos_de_dow_en(_turnos_todos, _dw7, _iso_ref):
+                                _cfg.add((_dw7, _t["empleado_id"], str(_t["slot"])))
+                        return frozenset(_cfg)
+                    _tramos = []
+                    for _ib, _bi in enumerate(_fronteras):
+                        _fin_b = None
+                        if _ib + 1 < len(_fronteras):
+                            _fin_b = (_dt_per.date.fromisoformat(_fronteras[_ib + 1])
+                                      - _dt_per.timedelta(days=1)).isoformat()
+                        _tramos.append([_bi, _fin_b, _config_en(_bi)])
+                    # ── 3) Fusionar tramos consecutivos con configuración IDÉNTICA ──
+                    # (si solo coincide el nº de slots pero cambió alguno, quedan separados)
+                    _periodos = []
+                    for _d_p, _h_p, _c_p in _tramos:
+                        if _periodos and _periodos[-1][2] == _c_p:
+                            _periodos[-1][1] = _h_p
+                        else:
+                            _periodos.append([_d_p, _h_p, _c_p])
+                    # ── 4) Lista de periodos (clic directo en el periodo) ──
+                    _hoy_iso_per = str(hoy_madrid())
+                    _sel_per = st.session_state.get("turnos_ver_periodo")
+                    if _sel_per is not None:
+                        _sel_per = tuple(_sel_per)
+
+                    def _fmt_fper(_iso, _abre=False):
+                        if _iso is None:
+                            return "indefinido"
+                        if _abre and _iso == "2000-01-01":
+                            return "siempre"
+                        return _dt_per.date.fromisoformat(_iso).strftime("%d/%m/%Y")
+
+                    for _ip, (_d_p, _h_p, _c_p) in enumerate(_periodos):
+                        _rige_hoy = (_d_p <= _hoy_iso_per and (_h_p is None or _hoy_iso_per <= _h_p))
+                        _lbl_p = (f"📦 {_fmt_fper(_d_p, True)} → {_fmt_fper(_h_p)} · "
+                                  f"{len(_c_p)} slots/semana"
+                                  + (" · 🟢 RIGE HOY" if _rige_hoy else ""))
+                        _es_sel = (_sel_per == (_d_p, _h_p))
+                        if st.button(("🔎 " if _es_sel else "") + _lbl_p, key=f"per_{_ip}",
+                                     use_container_width=True,
+                                     type=("primary" if _es_sel else "secondary")):
+                            st.session_state["turnos_ver_periodo"] = (_d_p, _h_p)
                             st.session_state["turnos_hist_open"] = True
                             st.rerun()
-                        if _pend_del == _kd_v or _pend_del == list(_kd_v):
-                            if _cv_c.button("⚠️ ¿Seguro?", key=f"vd_{_idxv}", type="primary"):
-                                sb.table("turnos").delete().eq("dia_semana", _dw).eq("vigente_desde", _vd).execute()
-                                st.session_state.pop("turnos_pend_borrar", None)
-                                st.session_state.pop("turnos_ver_bloque", None)
-                                st.session_state["turnos_hist_open"] = True
-                                st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
-                                st.session_state["turnos_msgs"] = [("success", f"🗑️ Versión borrada: {DIAS[_dw]} desde {_vd} — vuelve a regir la anterior en su periodo")]
-                                st.rerun()
-                        else:
-                            if _cv_c.button("🗑️", key=f"vd_{_idxv}"):
-                                st.session_state["turnos_pend_borrar"] = _kd_v
-                                st.session_state["turnos_hist_open"] = True
-                                st.rerun()
 
-                    # ── Contenido del bloque seleccionado, inline ──
-                    if _sel_key:
-                        _sel_t = tuple(_sel_key)
-                        if _sel_t in dict(_keys_orden):
-                            _dw_c, _vd_c, _vh_c = _sel_t
-                            st.divider()
-                            _ch1, _ch2 = st.columns([6, 1])
-                            _ch1.markdown(f"##### 🔎 {DIAS[_dw_c]} — desde {('siempre' if _vd_c == '2000-01-01' else _vd_c)} hasta {(_vh_c or 'indefinido')}")
-                            if _ch2.button("✕ Cerrar", key="vv_cerrar"):
-                                st.session_state.pop("turnos_ver_bloque", None)
-                                st.session_state["turnos_hist_open"] = True
-                                st.rerun()
-                            _filas_c = [t for t in _turnos_todos
-                                        if int(t["dia_semana"]) == _dw_c
-                                        and str(t.get("vigente_desde") or "2000-01-01")[:10] == _vd_c]
-                            _slots_c = sorted({t["slot"] for t in _filas_c})
-                            _emps_c = sorted({t["empleado_id"] for t in _filas_c})
-                            _tabla_c = []
-                            for _s in _slots_c:
-                                _fila_c = {"Hora": _s}
-                                for _e in _emps_c:
-                                    _fila_c[emp_nombres.get(_e, f"Emp {_e}")] = "✓" if any(
-                                        t["empleado_id"] == _e and t["slot"] == _s for t in _filas_c) else ""
-                                _tabla_c.append(_fila_c)
-                            st.dataframe(pd.DataFrame(_tabla_c), hide_index=True, use_container_width=True,
-                                         height=min(420, len(_slots_c) * 35 + 40))
-                            st.caption("👥 " + " · ".join(
-                                f"{emp_nombres.get(_e, f'Emp {_e}')}: {sum(1 for t in _filas_c if t['empleado_id'] == _e) * 0.5:.1f}h"
-                                for _e in _emps_c))
+                    # ── 5) Configuración exacta del periodo seleccionado ──
+                    _match_per = [p for p in _periodos if _sel_per == (p[0], p[1])]
+                    if _match_per:
+                        _d_p, _h_p, _c_p = _match_per[0]
+                        st.divider()
+                        _ph1, _ph2 = st.columns([6, 1])
+                        _ph1.markdown(f"##### 🔎 Del {_fmt_fper(_d_p, True)} al {_fmt_fper(_h_p)} — {len(_c_p)} slots/semana")
+                        if _ph2.button("✕ Cerrar", key="per_cerrar"):
+                            st.session_state.pop("turnos_ver_periodo", None)
+                            st.session_state["turnos_hist_open"] = True
+                            st.rerun()
+                        # Última modificación que dio forma a este periodo
+                        _cr_max = ""
+                        for _dw7 in range(7):
+                            for _t in _turnos_de_dow_en(_turnos_todos, _dw7, _d_p):
+                                _cr_t = str(_t.get("creado_at") or "")
+                                if _cr_t > _cr_max:
+                                    _cr_max = _cr_t
+                        if _cr_max:
+                            try:
+                                from zoneinfo import ZoneInfo as _ZI_pm
+                                _cr_txt = (_dt_per.datetime.fromisoformat(_cr_max.replace("Z", "+00:00"))
+                                           .astimezone(_ZI_pm("Europe/Madrid")).strftime("%d/%m/%Y %H:%M"))
+                                st.caption(f"💾 Último cambio que da forma a este periodo: {_cr_txt}")
+                            except Exception:
+                                pass
+                        _tabs_dias = st.tabs([DIAS[_dw] for _dw in range(7)])
+                        for _dw7, _tab_d in enumerate(_tabs_dias):
+                            with _tab_d:
+                                _filas_d = [(s, e) for (dw, e, s) in _c_p if dw == _dw7]
+                                if not _filas_d:
+                                    st.caption("Sin turnos este día.")
+                                    continue
+                                _slots_d = sorted({s for s, e in _filas_d})
+                                _emps_d = sorted({e for s, e in _filas_d}, key=lambda x: str(emp_nombres.get(x, x)))
+                                _tabla_d = []
+                                for _s in _slots_d:
+                                    _fila_d = {"Hora": _s}
+                                    for _e in _emps_d:
+                                        _fila_d[emp_nombres.get(_e, f"Emp {_e}")] = "✓" if (_s, _e) in _filas_d else ""
+                                    _tabla_d.append(_fila_d)
+                                st.dataframe(pd.DataFrame(_tabla_d), hide_index=True, use_container_width=True,
+                                             height=min(420, len(_slots_d) * 35 + 40))
+                                st.caption("👥 " + " · ".join(
+                                    f"{emp_nombres.get(_e, f'Emp {_e}')}: {sum(1 for _s2, _e2 in _filas_d if _e2 == _e) * 0.5:.1f}h"
+                                    for _e in _emps_d))
+
+                    # ── 6) Avanzado: versiones en bruto (para borrar bloques guardados) ──
+                    if st.toggle("🔧 Versiones en bruto (avanzado — permite borrar bloques)",
+                                 key="turnos_raw_toggle"):
+                        st.caption("Cada fila es un bloque GUARDADO tal cual está en la base de datos "
+                                   "(por día de la semana). Borrar uno hace que en su periodo vuelva "
+                                   "a regir la versión anterior.")
+                        _vers_map = {}
+                        _vers_creado = {}
+                        for _t in _turnos_todos:
+                            _kd = (int(_t["dia_semana"]),
+                                   str(_t.get("vigente_desde") or "2000-01-01")[:10],
+                                   (str(_t.get("vigente_hasta"))[:10] if _t.get("vigente_hasta") else None))
+                            _vers_map[_kd] = _vers_map.get(_kd, 0) + 1
+                            _cr = str(_t.get("creado_at") or "")
+                            if _cr and (_kd not in _vers_creado or _cr < _vers_creado[_kd]):
+                                _vers_creado[_kd] = _cr
+
+                        def _fmt_creado(_kd):
+                            _cr = _vers_creado.get(_kd)
+                            if not _cr:
+                                return "—"
+                            try:
+                                from zoneinfo import ZoneInfo as _ZI_fc
+                                return (_dt_per.datetime.fromisoformat(_cr.replace("Z", "+00:00"))
+                                        .astimezone(_ZI_fc("Europe/Madrid")).strftime("%d/%m/%Y %H:%M"))
+                            except Exception:
+                                return _cr[:16]
+
+                        _keys_orden = sorted(_vers_map.items())
+                        _pend_del = st.session_state.get("turnos_pend_borrar")
+                        for _idxv, ((_dw, _vd, _vh), _ns) in enumerate(_keys_orden):
+                            _kd_v = (_dw, _vd, _vh)
+                            _lbl_v = (f"**{DIAS[_dw]}** · desde {('siempre' if _vd == '2000-01-01' else _vd)} · "
+                                      f"hasta {(_vh or 'indefinido')} · {_ns} slots · 💾 {_fmt_creado(_kd_v)}")
+                            _cv_a, _cv_c = st.columns([7, 1])
+                            _cv_a.markdown(_lbl_v)
+                            if _pend_del == _kd_v or _pend_del == list(_kd_v):
+                                if _cv_c.button("⚠️ ¿Seguro?", key=f"vd_{_idxv}", type="primary"):
+                                    sb.table("turnos").delete().eq("dia_semana", _dw).eq("vigente_desde", _vd).execute()
+                                    st.session_state.pop("turnos_pend_borrar", None)
+                                    st.session_state.pop("turnos_ver_periodo", None)
+                                    st.session_state["turnos_hist_open"] = True
+                                    st.session_state["turnos_grid_ver"] = st.session_state.get("turnos_grid_ver", 0) + 1
+                                    st.session_state["turnos_msgs"] = [("success", f"🗑️ Versión borrada: {DIAS[_dw]} desde {_vd} — vuelve a regir la anterior en su periodo")]
+                                    st.rerun()
+                            else:
+                                if _cv_c.button("🗑️", key=f"vd_{_idxv}"):
+                                    st.session_state["turnos_pend_borrar"] = _kd_v
+                                    st.session_state["turnos_hist_open"] = True
+                                    st.rerun()
             st.divider()
             st.markdown("### Resumen semanal")
             _turnos_all_raw = sb.table("turnos").select("*").execute().data or []
